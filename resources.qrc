@@ -1,0 +1,13 @@
+<RCC>
+    <qresource prefix="/images">
+        <file>1.jpg</file>
+        <file>2.jpg</file>
+        <file>3.jpg</file>
+        <file>4.jpg</file>
+        <file>5.jpg</file>
+        <file>bg.png</file>
+    </qresource>
+    <qresource prefix="/fonts">
+        <file>Fonts/static/RobotoCondensed-BoldItalic.ttf</file>
+    </qresource>
+</RCC>

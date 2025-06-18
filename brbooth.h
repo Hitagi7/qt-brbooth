@@ -17,6 +17,9 @@ public:
     BRBooth(QWidget *parent = nullptr);
     ~BRBooth();
 
+private slots:
+    void on_pushButton_clicked();
+
 private:
     Ui::BRBooth *ui;
 };
