@@ -24,6 +24,8 @@ private slots:
     void showLandingPage();
     void showForegroundPage();
 
+    void on_staticButton_clicked();
+
 private:
     Ui::BRBooth *ui;
     Foreground *foregroundPage;
