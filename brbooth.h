@@ -2,6 +2,7 @@
 #define BRBOOTH_H
 
 #include <QMainWindow>
+#include "foreground.h"
 
 QT_BEGIN_NAMESPACE
 namespace Ui {
@@ -20,7 +21,12 @@ public:
 private slots:
     void on_pushButton_clicked();
 
+    void showLandingPage();
+    void showForegroundPage();
+
 private:
     Ui::BRBooth *ui;
+    Foreground *foregroundPage;
+    int foregroundPageIndex;
 };
 #endif // BRBOOTH_H

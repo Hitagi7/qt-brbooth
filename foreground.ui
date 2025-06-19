@@ -21,7 +21,7 @@
   </property>
   <property name="styleSheet">
    <string notr="true">#Foreground {
-    border-image: url(:/images/bg.png) 0 0 0 0 stretch;
+    border-image: url(:/images/pics/bg.png) 0 0 0 0 stretch;
 }</string>
   </property>
   <widget class="QWidget" name="horizontalLayoutWidget">

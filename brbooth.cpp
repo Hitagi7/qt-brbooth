@@ -5,9 +5,15 @@
 BRBooth::BRBooth(QWidget *parent)
     : QMainWindow(parent)
     , ui(new Ui::BRBooth)
+    , foregroundPage(nullptr)
+    , foregroundPageIndex(-1)
 {
     ui->setupUi(this);
-    this->setStyleSheet("QDialog { background-image: url(:/images/bg.png); }");
+    this->setStyleSheet("QDialog { background-image: url(:/images/pics/bg.png); }");
+    foregroundPage = new Foreground(this);
+    foregroundPageIndex = ui->stackedWidget->addWidget(foregroundPage);
+    ui->stackedWidget->setCurrentIndex(0);
+    connect(foregroundPage, &Foreground::backtoLandingPage, this, &BRBooth::showLandingPage);
 }
 
 BRBooth::~BRBooth()
@@ -17,11 +23,16 @@ BRBooth::~BRBooth()
 
 void BRBooth::on_pushButton_clicked()
 {
-    this->hide();
+    showForegroundPage();
+}
 
-    Foreground foregroundDialog(this);
-    foregroundDialog.exec();
+void BRBooth::showLandingPage()
+{
+    ui->stackedWidget->setCurrentIndex(0);
+}
 
-    this->show();
+void BRBooth::showForegroundPage()
+{
+    ui->stackedWidget->setCurrentIndex(foregroundPageIndex);
 }
 

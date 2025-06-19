@@ -14,46 +14,45 @@
    <string>BRBooth</string>
   </property>
   <widget class="QWidget" name="centralwidget">
-<<<<<<< HEAD
-   <widget class="QPushButton" name="pushButton">
+   <widget class="QStackedWidget" name="stackedWidget">
     <property name="geometry">
      <rect>
-      <x>320</x>
-      <y>200</y>
-      <width>121</width>
-      <height>51</height>
+      <x>0</x>
+      <y>0</y>
+      <width>801</width>
+      <height>601</height>
      </rect>
     </property>
-    <property name="text">
-     <string>Static</string>
-=======
-   <widget class="QLabel" name="label">
-    <property name="geometry">
-     <rect>
-      <x>280</x>
-      <y>250</y>
-      <width>181</width>
-      <height>16</height>
-     </rect>
+    <property name="currentIndex">
+     <number>1</number>
     </property>
-    <property name="text">
-     <string>Test Commit</string>
->>>>>>> 65c6f85dca46405f12e3c2c84829222709be0a56
-    </property>
+    <widget class="QWidget" name="landingpage">
+     <widget class="QPushButton" name="pushButton">
+      <property name="geometry">
+       <rect>
+        <x>350</x>
+        <y>150</y>
+        <width>121</width>
+        <height>51</height>
+       </rect>
+      </property>
+      <property name="text">
+       <string>Static</string>
+      </property>
+     </widget>
+    </widget>
+    <widget class="Foreground" name="forepage"/>
    </widget>
   </widget>
-  <widget class="QMenuBar" name="menubar">
-   <property name="geometry">
-    <rect>
-     <x>0</x>
-     <y>0</y>
-     <width>800</width>
-     <height>21</height>
-    </rect>
-   </property>
-  </widget>
-  <widget class="QStatusBar" name="statusbar"/>
  </widget>
+ <customwidgets>
+  <customwidget>
+   <class>Foreground</class>
+   <extends>QWidget</extends>
+   <header>foreground.h</header>
+   <container>1</container>
+  </customwidget>
+ </customwidgets>
  <resources/>
  <connections/>
 </ui>
