@@ -1,6 +1,6 @@
-#include "brbooth.h"
-#include <QFontDatabase>
 #include <QApplication>
+#include <QFontDatabase>
+#include "brbooth.h"
 
 int main(int argc, char *argv[])
 {

@@ -17,4 +17,3 @@ void Foreground::on_back_clicked()
 {
     emit backtoLandingPage();
 }
-

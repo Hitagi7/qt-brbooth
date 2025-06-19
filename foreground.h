@@ -4,9 +4,11 @@
 #include <QWidget>
 
 QT_BEGIN_NAMESPACE
-namespace Ui{
-class Foreground;
+
+namespace Ui {
+    class Foreground;
 }
+
 QT_END_NAMESPACE
 
 class Foreground : public QWidget

@@ -1,6 +1,6 @@
 #include "brbooth.h"
-#include "ui_brbooth.h"
 #include "foreground.h"
+#include "ui_brbooth.h"
 
 BRBooth::BRBooth(QWidget *parent)
     : QMainWindow(parent)
@@ -35,4 +35,3 @@ void BRBooth::showForegroundPage()
 {
     ui->stackedWidget->setCurrentIndex(foregroundPageIndex);
 }
-
