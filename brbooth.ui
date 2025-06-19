@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>1384</width>
-    <height>668</height>
+    <height>868</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -18,7 +18,7 @@
     <item>
      <widget class="QStackedWidget" name="stackedWidget">
       <property name="currentIndex">
-       <number>0</number>
+       <number>1</number>
       </property>
       <widget class="QWidget" name="landingpage">
        <property name="styleSheet">
@@ -253,7 +253,7 @@ line-height: normal;
         </item>
        </layout>
       </widget>
-      <widget class="Foreground" name="foreground"/>
+      <widget class="Foreground" name="forepage"/>
      </widget>
     </item>
    </layout>
