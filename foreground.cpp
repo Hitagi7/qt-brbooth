@@ -6,6 +6,7 @@ Foreground::Foreground(QWidget *parent)
     , ui(new Ui::Foreground)
 {
     ui->setupUi(this);
+    connect(ui->back, &QPushButton::clicked, this, &Foreground::on_back_clicked);
 }
 
 Foreground::~Foreground()

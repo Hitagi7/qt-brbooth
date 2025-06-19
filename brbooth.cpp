@@ -5,14 +5,18 @@
 BRBooth::BRBooth(QWidget *parent)
     : QMainWindow(parent)
     , ui(new Ui::BRBooth)
-    , foregroundPage(nullptr)
-    , foregroundPageIndex(-1)
 {
     ui->setupUi(this);
-    this->setStyleSheet("QDialog { background-image: url(:/images/pics/bg.png); }");
-    foregroundPage = new Foreground(this);
-    foregroundPageIndex = ui->stackedWidget->addWidget(foregroundPage);
-    ui->stackedWidget->setCurrentIndex(0);
+    this->setStyleSheet("QMainWindow#BRBooth {"
+                        "   background-image: url(:/images/pics/bg.png);"
+                        "   background-repeat: no-repeat;"
+                        "   background-size: cover;"
+                        "   background-position: center;"
+                        "}");
+    foregroundPage = ui->forepage;
+    foregroundPageIndex = ui->stackedWidget->indexOf(foregroundPage);
+    landingPageIndex = ui->stackedWidget->indexOf(ui->landingpage);
+    ui->stackedWidget->setCurrentIndex(landingPageIndex);
     connect(foregroundPage, &Foreground::backtoLandingPage, this, &BRBooth::showLandingPage);
 }
 
@@ -21,17 +25,22 @@ BRBooth::~BRBooth()
     delete ui;
 }
 
-void BRBooth::on_pushButton_clicked()
-{
-    showForegroundPage();
-}
-
 void BRBooth::showLandingPage()
 {
-    ui->stackedWidget->setCurrentIndex(0);
+    ui->stackedWidget->setCurrentIndex(landingPageIndex);
 }
 
 void BRBooth::showForegroundPage()
 {
     ui->stackedWidget->setCurrentIndex(foregroundPageIndex);
 }
+<<<<<<< HEAD
+=======
+
+
+void BRBooth::on_staticButton_clicked()
+{
+    showForegroundPage();
+}
+
+>>>>>>> 1f970e447ea7a954e2cdea709473dbe95bb9dc69
