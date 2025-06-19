@@ -10,6 +10,11 @@
         <file>pics/4.png</file>
         <file>pics/5.png</file>
         <file>pics/6.png</file>
+        <file>pics/dynamic2.png</file>
+        <file>pics/dynamic1.png</file>
+        <file>pics/dynamic3.png</file>
+        <file>pics/dynamic4.png</file>
+        <file>pics/dynamic5.png</file>
     </qresource>
     <qresource prefix="/fonts">
         <file>Fonts/static/RobotoCondensed-BoldItalic.ttf</file>

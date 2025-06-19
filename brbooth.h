@@ -9,6 +9,7 @@ QT_BEGIN_NAMESPACE
 namespace Ui {
 class BRBooth;
 }
+
 QT_END_NAMESPACE
 
 class BRBooth : public QMainWindow
@@ -21,10 +22,9 @@ public:
 
 private slots:
     void on_pushButton_clicked();
-
     void showLandingPage();
     void showForegroundPage();
-
+    void showdynamicPage();
     void on_staticButton_clicked();
     void on_dynamicButton_clicked();
 
@@ -33,5 +33,7 @@ private:
     Foreground *foregroundPage;
     int foregroundPageIndex;
     int landingPageIndex;
+    dynamic *dynamicPage;
+    int dynamicPageIndex;
 };
 #endif // BRBOOTH_H

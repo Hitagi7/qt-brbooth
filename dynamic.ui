@@ -2,183 +2,540 @@
 <ui version="4.0">
  <class>dynamic</class>
  <widget class="QWidget" name="dynamic">
+  <property name="enabled">
+   <bool>true</bool>
+  </property>
   <property name="geometry">
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>1363</width>
-    <height>715</height>
+    <width>1328</width>
+    <height>938</height>
    </rect>
   </property>
   <property name="windowTitle">
    <string>Form</string>
   </property>
-  <widget class="QLabel" name="usc_logo">
-   <property name="geometry">
-    <rect>
-     <x>0</x>
-     <y>0</y>
-     <width>1357</width>
-     <height>83</height>
-    </rect>
-   </property>
-   <property name="minimumSize">
-    <size>
-     <width>0</width>
-     <height>83</height>
-    </size>
-   </property>
-   <property name="maximumSize">
-    <size>
-     <width>16777215</width>
-     <height>83</height>
-    </size>
-   </property>
-   <property name="text">
-    <string/>
-   </property>
-   <property name="pixmap">
-    <pixmap resource="resources.qrc">:/images/pics/usc_logo.png</pixmap>
-   </property>
-  </widget>
-  <widget class="QLabel" name="title">
-   <property name="enabled">
-    <bool>true</bool>
-   </property>
-   <property name="geometry">
-    <rect>
-     <x>310</x>
-     <y>80</y>
-     <width>750</width>
-     <height>123</height>
-    </rect>
-   </property>
-   <property name="minimumSize">
-    <size>
-     <width>750</width>
-     <height>123</height>
-    </size>
-   </property>
-   <property name="maximumSize">
-    <size>
-     <width>750</width>
-     <height>123</height>
-    </size>
-   </property>
-   <property name="styleSheet">
-    <string notr="true">#title {
-   color: #FFF;
-   text-align: center;
-   font-family: &quot;Roboto Condensed&quot;;
-   font-style: italic;
-   font-weight: 700;
-   font-size: 55px;
-	background-color: #0BC200;
-	border-radius: 9px;
+  <property name="autoFillBackground">
+   <bool>false</bool>
+  </property>
+  <property name="styleSheet">
+   <string notr="true">#dynamic {
+    border-image: url(:/images/pics/bg.png) 0 0 0 0 stretch;
+}</string>
+  </property>
+  <layout class="QVBoxLayout" name="mainVerticalLayout"> <item>
+    <layout class="QVBoxLayout" name="headerLayout">
+     <property name="bottomMargin">
+      <number>0</number>
+     </property>
+     <item>
+      <widget class="QLabel" name="title">
+       <property name="minimumSize">
+        <size>
+         <width>0</width>
+         <height>83</height>
+        </size>
+       </property>
+       <property name="maximumSize">
+        <size>
+         <width>16777215</width>
+         <height>83</height>
+        </size>
+       </property>
+       <property name="text">
+        <string/>
+       </property>
+       <property name="pixmap">
+        <pixmap resource="resources.qrc">:/images/pics/usc_logo.png</pixmap>
+       </property>
+      </widget>
+     </item>
+     <item alignment="Qt::AlignmentFlag::AlignHCenter|Qt::AlignmentFlag::AlignVCenter">
+      <widget class="QFrame" name="fglabel">
+       <property name="sizePolicy">
+        <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
+         <horstretch>0</horstretch>
+         <verstretch>0</verstretch>
+        </sizepolicy>
+       </property>
+       <property name="minimumSize">
+        <size>
+         <width>780</width>
+         <height>111</height>
+        </size>
+       </property>
+       <property name="maximumSize">
+        <size>
+         <width>780</width>
+         <height>111</height>
+        </size>
+       </property>
+       <property name="styleSheet">
+        <string notr="true">#fglabel {
+    background-color: #0BC200;
+    border-radius: 9px;
     border-bottom: 2px solid #020202;
 }</string>
-   </property>
-   <property name="text">
-    <string>Select Dynamic Template</string>
-   </property>
-   <property name="alignment">
-    <set>Qt::AlignmentFlag::AlignCenter</set>
-   </property>
-   <property name="margin">
-    <number>0</number>
-   </property>
-  </widget>
-  <widget class="QPushButton" name="backbutton">
-   <property name="geometry">
-    <rect>
-     <x>40</x>
-     <y>620</y>
-     <width>175</width>
-     <height>50</height>
-    </rect>
-   </property>
-   <property name="maximumSize">
-    <size>
-     <width>175</width>
-     <height>75</height>
-    </size>
-   </property>
-   <property name="cursor">
-    <cursorShape>PointingHandCursor</cursorShape>
-   </property>
-   <property name="mouseTracking">
-    <bool>true</bool>
-   </property>
-   <property name="styleSheet">
-    <string notr="true">#backbutton {
-border-radius: 5px;
-border-bottom: 2px solid #020202;
-background: #0BC200;
-width: 350px;
-height: 101px;
-
-color: #FFF;
-text-align: center;
-font-family: &quot;Roboto Condensed&quot;;
-font-size: 34px;
-font-style: italic;
-font-weight: 550;
-line-height: normal;
-}
-
-/* Hover effect for the button */
-#backbutton::hover {
-            background: #0EDD00; /* Slightly lighter green on hover */
-        }</string>
-   </property>
-   <property name="text">
-    <string>Back</string>
-   </property>
-  </widget>
-  <widget class="QPushButton" name="confirmbutton">
-   <property name="geometry">
-    <rect>
-     <x>1150</x>
-     <y>620</y>
-     <width>175</width>
-     <height>50</height>
-    </rect>
-   </property>
-   <property name="maximumSize">
-    <size>
-     <width>175</width>
-     <height>75</height>
-    </size>
-   </property>
-   <property name="cursor">
-    <cursorShape>PointingHandCursor</cursorShape>
-   </property>
-   <property name="styleSheet">
-    <string notr="true">#confirmbutton {
-border-radius: 9px;
-border-bottom: 3px solid #020202;
-background: #0BC200;
-width: 350px;
-height: 101px;
-
-color: #FFF;
-text-align: center;
-font-family: &quot;Roboto Condensed&quot;;
-font-size: 34px;
-font-style: italic;
-font-weight: 550;
-line-height: normal;
-}
-
-/* Hover effect for the button */
-#confirmbutton::hover {
-            background: #414141; 
-        }</string>
-   </property>
-   <property name="text">
-    <string>Confirm</string>
-   </property>
-  </widget>
+       </property>
+       <property name="frameShape">
+        <enum>QFrame::Shape::StyledPanel</enum>
+       </property>
+       <property name="frameShadow">
+        <enum>QFrame::Shadow::Raised</enum>
+       </property>
+       <layout class="QVBoxLayout" name="verticalLayout_3">
+        <item>
+         <widget class="QLabel" name="fgtext">
+          <property name="enabled">
+           <bool>false</bool>
+          </property>
+          <property name="minimumSize">
+           <size>
+            <width>762</width>
+            <height>90</height>
+           </size>
+          </property>
+          <property name="maximumSize">
+           <size>
+            <width>762</width>
+            <height>90</height>
+           </size>
+          </property>
+          <property name="styleSheet">
+           <string notr="true">#fgtext {
+    color: #FFF;
+    text-align: center;
+    font-family: &quot;Roboto Condensed&quot;;
+    font-style: italic;
+    font-weight: 700;
+    font-size: 50px;
+}</string>
+          </property>
+          <property name="frameShape">
+           <enum>QFrame::Shape::NoFrame</enum>
+          </property>
+          <property name="text">
+           <string>Select Dynamic Template</string>
+          </property>
+          <property name="alignment">
+           <set>Qt::AlignmentFlag::AlignCenter</set>
+          </property>
+          <property name="margin">
+           <number>4</number>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </widget>
+     </item>
+    </layout>
+   </item>
+   <item>
+    <spacer name="verticalSpacer_top">
+     <property name="orientation">
+      <enum>Qt::Vertical</enum>
+     </property>
+     <property name="sizeHint" stdset="0">
+      <size>
+       <width>20</width>
+       <height>40</height>
+      </size>
+     </property>
+    </spacer>
+   </item>
+   <item>
+    <layout class="QHBoxLayout" name="topImagesHorizontalLayout"> <item>
+      <spacer name="horizontalSpacer_left1">
+       <property name="orientation">
+        <enum>Qt::Horizontal</enum>
+       </property>
+       <property name="sizeHint" stdset="0">
+        <size>
+         <width>40</width>
+         <height>20</height>
+        </size>
+       </property>
+      </spacer>
+     </item>
+     <item>
+      <layout class="QGridLayout" name="gridLayout_top_images"> <item row="0" column="0">
+        <widget class="QPushButton" name="image1">
+         <property name="minimumSize">
+          <size>
+           <width>425</width>
+           <height>305</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>425</width>
+           <height>305</height>
+          </size>
+         </property>
+         <property name="autoFillBackground">
+          <bool>false</bool>
+         </property>
+         <property name="styleSheet">
+          <string notr="true">#image1{
+    border: none;
+    background-image: url(:/images/pics/dynamic1.png);
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: contain;
+    background-color: transparent;
+    width: 241px;
+    height: 141px;
+}</string>
+         </property>
+         <property name="text">
+          <string/>
+         </property>
+        </widget>
+       </item>
+       <item row="0" column="1">
+        <spacer name="horizontalSpacer_between1_2">
+         <property name="orientation">
+          <enum>Qt::Horizontal</enum>
+         </property>
+         <property name="sizeType">
+          <enum>QSizePolicy::Expanding</enum>
+         </property>
+         <property name="sizeHint" stdset="0">
+          <size>
+           <width>40</width>
+           <height>20</height>
+          </size>
+         </property>
+        </spacer>
+       </item>
+       <item row="0" column="2">
+        <widget class="QPushButton" name="image2">
+         <property name="minimumSize">
+          <size>
+           <width>425</width>
+           <height>305</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>425</width>
+           <height>305</height>
+          </size>
+         </property>
+         <property name="styleSheet">
+          <string notr="true">#image2{
+    border: none;
+    background-image: url(:/images/pics/dynamic2.png);
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: contain;
+    background-color: transparent;
+    width: 241px;
+    height: 141px;
+}</string>
+         </property>
+         <property name="text">
+          <string/>
+         </property>
+        </widget>
+       </item>
+       <item row="0" column="3">
+        <spacer name="horizontalSpacer_between2_3">
+         <property name="orientation">
+          <enum>Qt::Horizontal</enum>
+         </property>
+         <property name="sizeType">
+          <enum>QSizePolicy::Policy::Expanding</enum>
+         </property>
+         <property name="sizeHint" stdset="0">
+          <size>
+           <width>40</width>
+           <height>20</height>
+          </size>
+         </property>
+        </spacer>
+       </item>
+       <item row="0" column="4">
+        <widget class="QPushButton" name="image3">
+         <property name="minimumSize">
+          <size>
+           <width>425</width>
+           <height>305</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>425</width>
+           <height>305</height>
+          </size>
+         </property>
+         <property name="styleSheet">
+          <string notr="true">#image3{
+    border: none;
+    background-image: url(:/images/pics/dynamic3.png);
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: contain;
+    background-color: transparent;
+    width: 241px;
+    height: 141px;
+}</string>
+         </property>
+         <property name="text">
+          <string/>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </item>
+     <item>
+      <spacer name="horizontalSpacer_right1">
+       <property name="orientation">
+        <enum>Qt::Horizontal</enum>
+       </property>
+       <property name="sizeHint" stdset="0">
+        <size>
+         <width>40</width>
+         <height>20</height>
+        </size>
+       </property>
+      </spacer>
+     </item>
+    </layout>
+   </item>
+   <item>
+    <spacer name="verticalSpacer_middle">
+     <property name="orientation">
+      <enum>Qt::Vertical</enum>
+     </property>
+     <property name="sizeHint" stdset="0">
+      <size>
+       <width>20</width>
+       <height>40</height>
+      </size>
+     </property>
+    </spacer>
+   </item>
+   <item>
+    <layout class="QHBoxLayout" name="bottomImagesHorizontalLayout"> <item>
+      <spacer name="horizontalSpacer_left2">
+       <property name="orientation">
+        <enum>Qt::Horizontal</enum>
+       </property>
+       <property name="sizeHint" stdset="0">
+        <size>
+         <width>40</width>
+         <height>20</height>
+        </size>
+       </property>
+      </spacer>
+     </item>
+     <item>
+      <layout class="QGridLayout" name="gridLayout_bottom_images"> <item row="0" column="0">
+        <widget class="QPushButton" name="image4">
+         <property name="minimumSize">
+          <size>
+           <width>425</width>
+           <height>305</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>425</width>
+           <height>305</height>
+          </size>
+         </property>
+         <property name="styleSheet">
+          <string notr="true">#image4{
+    border: none;
+    background-image: url(:/images/pics/dynamic4.png);
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: contain;
+    background-color: transparent;
+    width: 241px;
+    height: 141px;
+}</string>
+         </property>
+         <property name="text">
+          <string/>
+         </property>
+        </widget>
+       </item>
+       <item row="0" column="1">
+        <spacer name="horizontalSpacer_between4_5">
+         <property name="orientation">
+          <enum>Qt::Horizontal</enum>
+         </property>
+         <property name="sizeType">
+          <enum>QSizePolicy::Expanding</enum>
+         </property>
+         <property name="sizeHint" stdset="0">
+          <size>
+           <width>40</width>
+           <height>20</height>
+          </size>
+         </property>
+        </spacer>
+       </item>
+       <item row="0" column="2">
+        <widget class="QPushButton" name="image5">
+         <property name="minimumSize">
+          <size>
+           <width>425</width>
+           <height>305</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>425</width>
+           <height>305</height>
+          </size>
+         </property>
+         <property name="styleSheet">
+          <string notr="true">#image5{
+    border: none;
+    background-image: url(:/images/pics/dynamic5.png);
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: contain;
+    background-color: transparent;
+    width: 241px;
+    height: 141px;
+}</string>
+         </property>
+         <property name="text">
+          <string/>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </item>
+     <item>
+      <spacer name="horizontalSpacer_right2">
+       <property name="orientation">
+        <enum>Qt::Horizontal</enum>
+       </property>
+       <property name="sizeHint" stdset="0">
+        <size>
+         <width>40</width>
+         <height>20</height>
+        </size>
+       </property>
+      </spacer>
+     </item>
+    </layout>
+   </item>
+   <item>
+    <spacer name="verticalSpacer_bottom">
+     <property name="orientation">
+      <enum>Qt::Vertical</enum>
+     </property>
+     <property name="sizeHint" stdset="0">
+      <size>
+       <width>20</width>
+       <height>40</height>
+      </size>
+     </property>
+    </spacer>
+   </item>
+   <item>
+    <layout class="QHBoxLayout" name="navButtonsLayout"> <property name="sizeConstraint">
+      <enum>QLayout::SizeConstraint::SetDefaultConstraint</enum>
+     </property>
+     <item>
+      <widget class="QPushButton" name="back">
+       <property name="enabled">
+        <bool>true</bool>
+       </property>
+       <property name="minimumSize">
+        <size>
+         <width>248</width>
+         <height>68</height>
+        </size>
+       </property>
+       <property name="maximumSize">
+        <size>
+         <width>248</width>
+         <height>68</height>
+        </size>
+       </property>
+       <property name="styleSheet">
+        <string notr="true">#back{
+    border-radius: 9px;
+    border-bottom: 2px solid #020202;
+    background: #0BC200;
+    color: #FFF;
+    text-align: center;
+    font-family: &quot;Roboto Condensed&quot;;
+    font-style: italic;
+    font-weight: 500;
+    font-size: 30px;
+}</string>
+       </property>
+       <property name="text">
+        <string>Back</string>
+       </property>
+       <property name="checkable">
+        <bool>false</bool>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <spacer name="horizontalSpacer">
+       <property name="orientation">
+        <enum>Qt::Horizontal</enum>
+       </property>
+       <property name="sizeType">
+        <enum>QSizePolicy::Policy::Expanding</enum>
+       </property>
+       <property name="sizeHint" stdset="0">
+        <size>
+         <width>40</width>
+         <height>20</height>
+        </size>
+       </property>
+      </spacer>
+     </item>
+     <item>
+      <widget class="QPushButton" name="confirm">
+       <property name="enabled">
+        <bool>true</bool>
+       </property>
+       <property name="minimumSize">
+        <size>
+         <width>248</width>
+         <height>68</height>
+        </size>
+       </property>
+       <property name="maximumSize">
+        <size>
+         <width>248</width>
+         <height>68</height>
+        </size>
+       </property>
+       <property name="styleSheet">
+        <string notr="true">#confirm{
+    border-radius: 9px;
+    border-bottom: 2px solid #020202;
+    background: #414141;
+    color: #000;
+    text-align: center;
+    font-family: &quot;Roboto Condensed&quot;;
+    font-style: italic;
+    font-weight: 500;
+    font-size: 30px;
+}</string>
+       </property>
+       <property name="text">
+        <string>Confirm</string>
+       </property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+  </layout>
  </widget>
  <resources>
   <include location="resources.qrc"/>

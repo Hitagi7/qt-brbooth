@@ -3,13 +3,11 @@
 
 #include <QWidget>
 
-
 QT_BEGIN_NAMESPACE
 
 namespace Ui {
-class dynamic;
+    class dynamic;
 }
-
 
 QT_END_NAMESPACE
 
