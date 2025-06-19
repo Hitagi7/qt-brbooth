@@ -10,6 +10,7 @@ CONFIG += c++17
 
 SOURCES += \
     background.cpp \
+    dynamic.cpp \
     foreground.cpp \
     main.cpp \
     brbooth.cpp
@@ -17,11 +18,13 @@ SOURCES += \
 HEADERS += \
     background.h \
     brbooth.h \
+    dynamic.h \
     foreground.h
 
 FORMS += \
     background.ui \
     brbooth.ui \
+    dynamic.ui \
     foreground.ui
 
 # Default rules for deployment.

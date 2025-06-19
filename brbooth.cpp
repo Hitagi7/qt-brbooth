@@ -34,13 +34,9 @@ void BRBooth::showForegroundPage()
 {
     ui->stackedWidget->setCurrentIndex(foregroundPageIndex);
 }
-<<<<<<< HEAD
-=======
-
 
 void BRBooth::on_staticButton_clicked()
 {
     showForegroundPage();
 }
 
->>>>>>> 1f970e447ea7a954e2cdea709473dbe95bb9dc69

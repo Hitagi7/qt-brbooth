@@ -1,0 +1,187 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>dynamic</class>
+ <widget class="QWidget" name="dynamic">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>1363</width>
+    <height>715</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>Form</string>
+  </property>
+  <widget class="QLabel" name="usc_logo">
+   <property name="geometry">
+    <rect>
+     <x>0</x>
+     <y>0</y>
+     <width>1357</width>
+     <height>83</height>
+    </rect>
+   </property>
+   <property name="minimumSize">
+    <size>
+     <width>0</width>
+     <height>83</height>
+    </size>
+   </property>
+   <property name="maximumSize">
+    <size>
+     <width>16777215</width>
+     <height>83</height>
+    </size>
+   </property>
+   <property name="text">
+    <string/>
+   </property>
+   <property name="pixmap">
+    <pixmap resource="resources.qrc">:/images/pics/usc_logo.png</pixmap>
+   </property>
+  </widget>
+  <widget class="QLabel" name="title">
+   <property name="enabled">
+    <bool>true</bool>
+   </property>
+   <property name="geometry">
+    <rect>
+     <x>310</x>
+     <y>80</y>
+     <width>750</width>
+     <height>123</height>
+    </rect>
+   </property>
+   <property name="minimumSize">
+    <size>
+     <width>750</width>
+     <height>123</height>
+    </size>
+   </property>
+   <property name="maximumSize">
+    <size>
+     <width>750</width>
+     <height>123</height>
+    </size>
+   </property>
+   <property name="styleSheet">
+    <string notr="true">#title {
+   color: #FFF;
+   text-align: center;
+   font-family: &quot;Roboto Condensed&quot;;
+   font-style: italic;
+   font-weight: 700;
+   font-size: 55px;
+	background-color: #0BC200;
+	border-radius: 9px;
+    border-bottom: 2px solid #020202;
+}</string>
+   </property>
+   <property name="text">
+    <string>Select Dynamic Template</string>
+   </property>
+   <property name="alignment">
+    <set>Qt::AlignmentFlag::AlignCenter</set>
+   </property>
+   <property name="margin">
+    <number>0</number>
+   </property>
+  </widget>
+  <widget class="QPushButton" name="backbutton">
+   <property name="geometry">
+    <rect>
+     <x>40</x>
+     <y>620</y>
+     <width>175</width>
+     <height>50</height>
+    </rect>
+   </property>
+   <property name="maximumSize">
+    <size>
+     <width>175</width>
+     <height>75</height>
+    </size>
+   </property>
+   <property name="cursor">
+    <cursorShape>PointingHandCursor</cursorShape>
+   </property>
+   <property name="mouseTracking">
+    <bool>true</bool>
+   </property>
+   <property name="styleSheet">
+    <string notr="true">#backbutton {
+border-radius: 5px;
+border-bottom: 2px solid #020202;
+background: #0BC200;
+width: 350px;
+height: 101px;
+
+color: #FFF;
+text-align: center;
+font-family: &quot;Roboto Condensed&quot;;
+font-size: 34px;
+font-style: italic;
+font-weight: 550;
+line-height: normal;
+}
+
+/* Hover effect for the button */
+#backbutton::hover {
+            background: #0EDD00; /* Slightly lighter green on hover */
+        }</string>
+   </property>
+   <property name="text">
+    <string>Back</string>
+   </property>
+  </widget>
+  <widget class="QPushButton" name="confirmbutton">
+   <property name="geometry">
+    <rect>
+     <x>1150</x>
+     <y>620</y>
+     <width>175</width>
+     <height>50</height>
+    </rect>
+   </property>
+   <property name="maximumSize">
+    <size>
+     <width>175</width>
+     <height>75</height>
+    </size>
+   </property>
+   <property name="cursor">
+    <cursorShape>PointingHandCursor</cursorShape>
+   </property>
+   <property name="styleSheet">
+    <string notr="true">#confirmbutton {
+border-radius: 9px;
+border-bottom: 3px solid #020202;
+background: #0BC200;
+width: 350px;
+height: 101px;
+
+color: #FFF;
+text-align: center;
+font-family: &quot;Roboto Condensed&quot;;
+font-size: 34px;
+font-style: italic;
+font-weight: 550;
+line-height: normal;
+}
+
+/* Hover effect for the button */
+#confirmbutton::hover {
+            background: #414141; 
+        }</string>
+   </property>
+   <property name="text">
+    <string>Confirm</string>
+   </property>
+  </widget>
+ </widget>
+ <resources>
+  <include location="resources.qrc"/>
+ </resources>
+ <connections/>
+</ui>
