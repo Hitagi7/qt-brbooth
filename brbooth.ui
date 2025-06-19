@@ -22,12 +22,7 @@
       </property>
       <widget class="QWidget" name="landingpage">
        <property name="styleSheet">
-        <string notr="true">#landingpage {
-    background-image: url(:/images/pics/bg.png); 
-    background-repeat: no-repeat;
-    background-position: center;
-	background-size: contain;
-}</string>
+        <string notr="true"/>
        </property>
        <layout class="QVBoxLayout" name="verticalLayout_3">
         <item>

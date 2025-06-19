@@ -28,5 +28,6 @@ private:
     Ui::BRBooth *ui;
     Foreground *foregroundPage;
     int foregroundPageIndex;
+    int landingPageIndex;
 };
 #endif // BRBOOTH_H
