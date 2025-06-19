@@ -253,7 +253,7 @@ line-height: normal;
         </item>
        </layout>
       </widget>
-      <widget class="Foreground" name="forepage"/>
+      <widget class="Foreground" name="foreground"/>
      </widget>
     </item>
    </layout>
