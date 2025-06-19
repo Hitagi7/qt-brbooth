@@ -1,14 +1,15 @@
 <RCC>
     <qresource prefix="/images">
-        <file>pics/1.jpg</file>
-        <file>pics/2.jpg</file>
-        <file>pics/3.jpg</file>
-        <file>pics/4.jpg</file>
-        <file>pics/5.jpg</file>
         <file>pics/bg.png</file>
         <file>pics/usc_logo.png</file>
         <file>pics/ballerina.png</file>
         <file>pics/mickey.png</file>
+        <file>pics/1.png</file>
+        <file>pics/2.png</file>
+        <file>pics/3.png</file>
+        <file>pics/4.png</file>
+        <file>pics/5.png</file>
+        <file>pics/6.png</file>
     </qresource>
     <qresource prefix="/fonts">
         <file>Fonts/static/RobotoCondensed-BoldItalic.ttf</file>
