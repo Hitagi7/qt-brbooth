@@ -25,11 +25,6 @@ BRBooth::~BRBooth()
     delete ui;
 }
 
-void BRBooth::on_pushButton_clicked()
-{
-    showForegroundPage();
-}
-
 void BRBooth::showLandingPage()
 {
     ui->stackedWidget->setCurrentIndex(landingPageIndex);
@@ -38,5 +33,11 @@ void BRBooth::showLandingPage()
 void BRBooth::showForegroundPage()
 {
     ui->stackedWidget->setCurrentIndex(foregroundPageIndex);
+}
+
+
+void BRBooth::on_staticButton_clicked()
+{
+    showForegroundPage();
 }
 
