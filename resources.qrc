@@ -6,6 +6,9 @@
         <file>pics/4.jpg</file>
         <file>pics/5.jpg</file>
         <file>pics/bg.png</file>
+        <file>pics/usc_logo.png</file>
+        <file>pics/ballerina.png</file>
+        <file>pics/mickey.png</file>
     </qresource>
     <qresource prefix="/fonts">
         <file>Fonts/static/RobotoCondensed-BoldItalic.ttf</file>

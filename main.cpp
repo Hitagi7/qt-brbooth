@@ -15,5 +15,4 @@ int main(int argc, char *argv[])
     BRBooth w;
     w.showMaximized();
     return a.exec();
-    //test
 }
