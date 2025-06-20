@@ -4,6 +4,7 @@
 #include <QMainWindow>
 #include "foreground.h"
 #include "dynamic.h"
+#include "background.h"
 
 QT_BEGIN_NAMESPACE
 namespace Ui {
@@ -24,6 +25,7 @@ private slots:
     void showLandingPage();
     void showForegroundPage();
     void showdynamicPage();
+    void showBackgroundPage();
     void on_staticButton_clicked();
     void on_dynamicButton_clicked();
 
@@ -34,5 +36,7 @@ private:
     int landingPageIndex;
     Dynamic *dynamicPage;
     int dynamicPageIndex;
+    Background *backgroundPage;
+    int backgroundPageIndex;
 };
 #endif // BRBOOTH_H

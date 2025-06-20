@@ -1,6 +1,6 @@
 #include "dynamic.h"
 #include "ui_dynamic.h"
-#include <QStyle> // Required for style()->polish()
+#include <QStyle>
 
 Dynamic::Dynamic(QWidget *parent)
     : QWidget(parent)
@@ -9,9 +9,8 @@ Dynamic::Dynamic(QWidget *parent)
     ui->setupUi(this);
     connect(ui->back, &QPushButton::clicked, this, &Dynamic::on_back_clicked);
 
-    currentSelectedImageButton = nullptr; // Initialize to no selection
+    currentSelectedImageButton = nullptr;
 
-    // Connect image buttons and set focus policy
     if (ui->image1) {
         connect(ui->image1, &QPushButton::clicked, this, &Dynamic::on_image1_clicked);
         ui->image1->setFocusPolicy(Qt::NoFocus);
@@ -46,7 +45,6 @@ Dynamic::~Dynamic()
 
 void Dynamic::on_back_clicked()
 {
-    // Clear selection when navigating back
     if (currentSelectedImageButton) {
         currentSelectedImageButton->setProperty("selected", false);
         currentSelectedImageButton->style()->polish(currentSelectedImageButton);
@@ -56,23 +54,19 @@ void Dynamic::on_back_clicked()
 
 void Dynamic::setImageSelected(QPushButton *button)
 {
-    // Deselect the previously selected button, if any
     if (currentSelectedImageButton && currentSelectedImageButton != button) {
         currentSelectedImageButton->setProperty("selected", false);
         currentSelectedImageButton->style()->polish(currentSelectedImageButton);
     }
 
-    // Select the new button
     if (button) {
         button->setProperty("selected", true);
         button->style()->polish(button);
     }
 
-    // Update the currently selected button
     currentSelectedImageButton = button;
 }
 
-// Implement the individual image click handlers
 void Dynamic::on_image1_clicked()
 {
     setImageSelected(ui->image1);

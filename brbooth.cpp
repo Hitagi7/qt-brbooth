@@ -2,6 +2,7 @@
 #include "ui_brbooth.h"
 #include "foreground.h"
 #include "dynamic.h"
+#include "background.h"
 
 BRBooth::BRBooth(QWidget *parent)
     : QMainWindow(parent)
@@ -9,9 +10,9 @@ BRBooth::BRBooth(QWidget *parent)
 {
     ui->setupUi(this);
     this->setStyleSheet("QMainWindow#BRBooth {"
-                        "   background-image: url(:/images/pics/bg.jpg);"
-                        "   background-repeat: no-repeat;"
-                        "   background-position: center;"
+                        "    background-image: url(:/images/pics/bg.jpg);"
+                        "    background-repeat: no-repeat;"
+                        "    background-position: center;"
                         "}");
 
     foregroundPage = ui->forepage;
@@ -20,12 +21,29 @@ BRBooth::BRBooth(QWidget *parent)
     dynamicPage = ui->dynamicpage;
     dynamicPageIndex = ui->stackedWidget->indexOf(dynamicPage);
 
+    backgroundPage = new Background(this);
+    ui->stackedWidget->addWidget(backgroundPage);
+    backgroundPageIndex = ui->stackedWidget->indexOf(backgroundPage);
+
+
     ui->stackedWidget->setCurrentIndex(landingPageIndex);
     connect(foregroundPage, &Foreground::backtoLandingPage, this, &BRBooth::showLandingPage);
+
+    connect(foregroundPage, &Foreground::imageSelectedTwice, this, &BRBooth::showBackgroundPage);
 
     if (dynamicPage) {
         connect(dynamicPage, &Dynamic::backtoLandingPage, this, &BRBooth::showLandingPage);
     }
+
+    if (backgroundPage) {
+        connect(backgroundPage, &Background::backtoLandingPage, this, &BRBooth::showForegroundPage);
+    }
+
+    connect(ui->stackedWidget, &QStackedWidget::currentChanged, this, [this](int index){
+        if (index == foregroundPageIndex) {
+            foregroundPage->resetPage();
+        }
+    });
 }
 
 BRBooth::~BRBooth()
@@ -46,6 +64,11 @@ void BRBooth::showForegroundPage()
 void BRBooth::showdynamicPage()
 {
     ui->stackedWidget->setCurrentIndex(dynamicPageIndex);
+}
+
+void BRBooth::showBackgroundPage()
+{
+    ui->stackedWidget->setCurrentIndex(backgroundPageIndex);
 }
 
 void BRBooth::on_staticButton_clicked()

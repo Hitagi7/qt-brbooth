@@ -64,9 +64,9 @@
         </size>
        </property>
        <property name="styleSheet">
-        <string notr="true">#fglabel { 
-   background-color: #0BC200;
-	border-radius: 9px;
+        <string notr="true">#fglabel {
+    background-color: #0BC200;
+        border-radius: 9px;
     border-bottom: 2px solid #020202;
 }</string>
        </property>
@@ -96,12 +96,12 @@
           </property>
           <property name="styleSheet">
            <string notr="true">#fgtext {
-   color: #FFF;
-   text-align: center;
-   font-family: &quot;Roboto Condensed&quot;;
-   font-style: italic;
-   font-weight: 700;
-   font-size: 50px;
+    color: #FFF;
+    text-align: center;
+    font-family: &quot;Roboto Condensed&quot;;
+    font-style: italic;
+    font-weight: 700;
+    font-size: 50px;
 }</string>
           </property>
           <property name="frameShape">
@@ -157,22 +157,21 @@
        </property>
        <property name="styleSheet">
         <string notr="true">#image2{
-    border: none; 
-    background-image: url(:/images/pics/2.png); 
+    border: none;
+    background-image: url(:/images/pics/2.png);
     background-repeat: no-repeat;
     background-position: center;
-	background-color: transparent;
-	width: 241px;
-   height: 141px;
+        background-color: transparent;
+        width: 241px;
+    height: 141px;
 }
 
 #image2::hover{
-	border: 5px solid #FFC20F;
+        border: 5px solid #FFC20F;
     border-radius: 8px;
 }
 
-/* NEW: Style for the 'selected' custom property */
-#image2[selected=&quot;true&quot;] { /* Use attribute selector for your custom property */
+#image2[selected="true"] {
     border: 5px solid #0BC200;
     border-radius: 8px;
 }</string>
@@ -204,22 +203,21 @@
        </property>
        <property name="styleSheet">
         <string notr="true">#image6{
-    border: none; 
-    background-image: url(:/images/pics/6.png); 
+    border: none;
+    background-image: url(:/images/pics/6.png);
     background-repeat: no-repeat;
     background-position: center;
-	background-color: transparent;
-	width: 241px;
-   height: 141px;
+        background-color: transparent;
+        width: 241px;
+    height: 141px;
 }
 
 #image6::hover{
-	border: 5px solid #FFC20F;
+        border: 5px solid #FFC20F;
     border-radius: 8px;
 }
 
-/* NEW: Style for the 'selected' custom property */
-#image6[selected=&quot;true&quot;] { /* Use attribute selector for your custom property */
+#image6[selected="true"] {
     border: 5px solid #0BC200;
     border-radius: 8px;
 }</string>
@@ -264,22 +262,21 @@
        </property>
        <property name="styleSheet">
         <string notr="true">#image5{
-    border: none; 
-    background-image: url(:/images/pics/5.png); 
+    border: none;
+    background-image: url(:/images/pics/5.png);
     background-repeat: no-repeat;
     background-position: center;
-	background-color: transparent;
-	width: 241px;
-   height: 141px;
+        background-color: transparent;
+        width: 241px;
+    height: 141px;
 }
 
 #image5::hover{
-	border: 5px solid #FFC20F;
+        border: 5px solid #FFC20F;
     border-radius: 8px;
 }
 
-/* NEW: Style for the 'selected' custom property */
-#image5[selected=&quot;true&quot;] { /* Use attribute selector for your custom property */
+#image5[selected="true"] {
     border: 5px solid #0BC200;
     border-radius: 8px;
 }</string>
@@ -308,22 +305,21 @@
        </property>
        <property name="styleSheet">
         <string notr="true">#image4{
-    border: none; 
-    background-image: url(:/images/pics/4.png); 
+    border: none;
+    background-image: url(:/images/pics/4.png);
     background-repeat: no-repeat;
     background-position: center;
-	background-color: transparent;
-	width: 241px;
-   height: 141px;
+        background-color: transparent;
+        width: 241px;
+    height: 141px;
 }
 
 #image4::hover{
-	border: 5px solid #FFC20F;
+        border: 5px solid #FFC20F;
     border-radius: 8px;
 }
 
-/* NEW: Style for the 'selected' custom property */
-#image4[selected=&quot;true&quot;] { /* Use attribute selector for your custom property */
+#image4[selected="true"] {
     border: 5px solid #0BC200;
     border-radius: 8px;
 }</string>
@@ -365,22 +361,21 @@
        </property>
        <property name="styleSheet">
         <string notr="true">#image3{
-    border: none; 
-    background-image: url(:/images/pics/3.png); 
+    border: none;
+    background-image: url(:/images/pics/3.png);
     background-repeat: no-repeat;
     background-position: center;
-	background-color: transparent;
-	width: 241px;
-   height: 141px;
+        background-color: transparent;
+        width: 241px;
+    height: 141px;
 }
 
 #image3::hover{
-	border: 5px solid #FFC20F;
+        border: 5px solid #FFC20F;
     border-radius: 8px;
 }
 
-/* NEW: Style for the 'selected' custom property */
-#image3[selected=&quot;true&quot;] { /* Use attribute selector for your custom property */
+#image3[selected="true"] {
     border: 5px solid #0BC200;
     border-radius: 8px;
 }</string>
@@ -415,22 +410,21 @@
        </property>
        <property name="styleSheet">
         <string notr="true">#image1{
-    border: none; 
-    background-image: url(:/images/pics/1.png); 
+    border: none;
+    background-image: url(:/images/pics/1.png);
     background-repeat: no-repeat;
     background-position: center;
-	background-color: transparent;
-	width: 241px;
-   height: 141px;
+        background-color: transparent;
+        width: 241px;
+    height: 141px;
 }
 
 #image1::hover{
-	border: 5px solid #FFC20F;
+        border: 5px solid #FFC20F;
     border-radius: 8px;
 }
 
-/* NEW: Style for the 'selected' custom property */
-#image1[selected=&quot;true&quot;] { /* Use attribute selector for your custom property */
+#image1[selected="true"] {
     border: 5px solid #0BC200;
     border-radius: 8px;
 }</string>
@@ -469,20 +463,20 @@
        </property>
        <property name="styleSheet">
         <string notr="true">#back{
-	border-radius: 9px;
-	border-bottom: 2px solid #020202;
-	background: #0BC200;
-	color: #FFF;
-   text-align: center;
-   font-family: &quot;Roboto Condensed&quot;;
-   font-style: italic;
-   font-weight: 500;
-   font-size: 30px;
+        border-radius: 9px;
+        border-bottom: 2px solid #020202;
+        background: #0BC200;
+        color: #FFF;
+    text-align: center;
+    font-family: &quot;Roboto Condensed&quot;;
+    font-style: italic;
+    font-weight: 500;
+    font-size: 30px;
 }
 
 #back::hover {
-            background: #0EDD00; /* Slightly lighter green on hover */
-        }</string>
+    background: #0EDD00;
+}</string>
        </property>
        <property name="text">
         <string>Back</string>

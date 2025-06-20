@@ -2,7 +2,7 @@
 #define BACKGROUND_H
 
 #include <QWidget>
-#include "foreground.h"
+#include <QPushButton>
 
 QT_BEGIN_NAMESPACE
 
@@ -21,11 +21,21 @@ public:
 
 signals:
     void backtoLandingPage();
+
 private slots:
     void on_back_clicked();
 
+    void on_image1_clicked();
+    void on_image2_clicked();
+    void on_image3_clicked();
+    void on_image4_clicked();
+    void on_image5_clicked();
+
 private:
     Ui::Background *ui;
+    QPushButton *currentSelectedImageButton;
+
+    void setImageSelected(QPushButton *button);
 };
 
 #endif
