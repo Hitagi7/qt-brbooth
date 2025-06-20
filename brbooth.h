@@ -21,7 +21,6 @@ public:
     ~BRBooth();
 
 private slots:
-    void on_pushButton_clicked();
     void showLandingPage();
     void showForegroundPage();
     void showdynamicPage();
