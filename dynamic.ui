@@ -159,18 +159,23 @@
          </property>
          <property name="styleSheet">
           <string notr="true">#image1{
-    border: none;
-    background-image: url(:/images/pics/dynamic1.png);
+    border: none; 
+    background-image: url(:/images/pics/dynamic1.png); 
     background-repeat: no-repeat;
     background-position: center;
-    background-size: contain;
-    background-color: transparent;
-    width: 241px;
-    height: 141px;
+	background-color: transparent;
+	width: 241px;
+   height: 141px;
 }
 
 #image1::hover{
-	border: 3px solid #FFF;
+	border: 5px solid #FFC20F;
+    border-radius: 8px;
+}
+
+/* NEW: Style for the 'selected' custom property */
+#image1[selected=&quot;true&quot;] { /* Use attribute selector for your custom property */
+    border: 5px solid #0BC200;
     border-radius: 8px;
 }</string>
          </property>
@@ -211,18 +216,23 @@
          </property>
          <property name="styleSheet">
           <string notr="true">#image2{
-    border: none;
-    background-image: url(:/images/pics/dynamic2.png);
+    border: none; 
+    background-image: url(:/images/pics/dynamic2.png); 
     background-repeat: no-repeat;
     background-position: center;
-    background-size: contain;
-    background-color: transparent;
-    width: 241px;
-    height: 141px;
+	background-color: transparent;
+	width: 241px;
+   height: 141px;
 }
 
 #image2::hover{
-	border: 3px solid #FFF;
+	border: 5px solid #FFC20F;
+    border-radius: 8px;
+}
+
+/* NEW: Style for the 'selected' custom property */
+#image2[selected=&quot;true&quot;] { /* Use attribute selector for your custom property */
+    border: 5px solid #0BC200;
     border-radius: 8px;
 }</string>
          </property>
@@ -263,18 +273,23 @@
          </property>
          <property name="styleSheet">
           <string notr="true">#image3{
-    border: none;
-    background-image: url(:/images/pics/dynamic3.png);
+    border: none; 
+    background-image: url(:/images/pics/dynamic3.png); 
     background-repeat: no-repeat;
     background-position: center;
-    background-size: contain;
-    background-color: transparent;
-    width: 241px;
-    height: 141px;
+	background-color: transparent;
+	width: 241px;
+   height: 141px;
 }
 
 #image3::hover{
-	border: 3px solid #FFF;
+	border: 5px solid #FFC20F;
+    border-radius: 8px;
+}
+
+/* NEW: Style for the 'selected' custom property */
+#image3[selected=&quot;true&quot;] { /* Use attribute selector for your custom property */
+    border: 5px solid #0BC200;
     border-radius: 8px;
 }</string>
          </property>
@@ -346,18 +361,23 @@
          </property>
          <property name="styleSheet">
           <string notr="true">#image4{
-    border: none;
-    background-image: url(:/images/pics/dynamic4.png);
+    border: none; 
+    background-image: url(:/images/pics/dynamic4.png); 
     background-repeat: no-repeat;
     background-position: center;
-    background-size: contain;
-    background-color: transparent;
-    width: 241px;
-    height: 141px;
+	background-color: transparent;
+	width: 241px;
+   height: 141px;
 }
 
 #image4::hover{
-	border: 3px solid #FFF;
+	border: 5px solid #FFC20F;
+    border-radius: 8px;
+}
+
+/* NEW: Style for the 'selected' custom property */
+#image4[selected=&quot;true&quot;] { /* Use attribute selector for your custom property */
+    border: 5px solid #0BC200;
     border-radius: 8px;
 }</string>
          </property>
@@ -398,18 +418,23 @@
          </property>
          <property name="styleSheet">
           <string notr="true">#image5{
-    border: none;
-    background-image: url(:/images/pics/dynamic5.png);
+    border: none; 
+    background-image: url(:/images/pics/dynamic5.png); 
     background-repeat: no-repeat;
     background-position: center;
-    background-size: contain;
-    background-color: transparent;
-    width: 241px;
-    height: 141px;
+	background-color: transparent;
+	width: 241px;
+   height: 141px;
 }
 
 #image5::hover{
-	border: 3px solid #FFF;
+	border: 5px solid #FFC20F;
+    border-radius: 8px;
+}
+
+/* NEW: Style for the 'selected' custom property */
+#image5[selected=&quot;true&quot;] { /* Use attribute selector for your custom property */
+    border: 5px solid #0BC200;
     border-radius: 8px;
 }</string>
          </property>

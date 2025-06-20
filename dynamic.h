@@ -2,11 +2,12 @@
 #define DYNAMIC_H
 
 #include <QWidget>
+#include <QPushButton> // Include QPushButton for currentSelectedImageButton
 
 QT_BEGIN_NAMESPACE
 
 namespace Ui {
-    class Dynamic;
+class Dynamic;
 }
 
 QT_END_NAMESPACE
@@ -21,11 +22,22 @@ public:
 
 signals:
     void backtoLandingPage();
+
 private slots:
     void on_back_clicked();
 
+
+    void on_image1_clicked();
+    void on_image2_clicked();
+    void on_image3_clicked();
+    void on_image4_clicked();
+    void on_image5_clicked();
+
 private:
     Ui::Dynamic *ui;
+    QPushButton *currentSelectedImageButton;
+
+    void setImageSelected(QPushButton *button);
 };
 
 #endif // DYNAMIC_H

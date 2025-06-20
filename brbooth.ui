@@ -16,19 +16,6 @@
   <widget class="QWidget" name="centralwidget">
    <layout class="QVBoxLayout" name="verticalLayout_2">
     <item>
-     <spacer name="verticalSpacer_4">
-      <property name="orientation">
-       <enum>Qt::Orientation::Vertical</enum>
-      </property>
-      <property name="sizeHint" stdset="0">
-       <size>
-        <width>20</width>
-        <height>40</height>
-       </size>
-      </property>
-     </spacer>
-    </item>
-    <item>
      <widget class="QStackedWidget" name="stackedWidget">
       <property name="currentIndex">
        <number>0</number>
@@ -38,6 +25,28 @@
         <string notr="true"/>
        </property>
        <layout class="QVBoxLayout" name="verticalLayout_3">
+        <item>
+         <widget class="QLabel" name="usc_logo">
+          <property name="minimumSize">
+           <size>
+            <width>0</width>
+            <height>83</height>
+           </size>
+          </property>
+          <property name="maximumSize">
+           <size>
+            <width>16777215</width>
+            <height>83</height>
+           </size>
+          </property>
+          <property name="text">
+           <string/>
+          </property>
+          <property name="pixmap">
+           <pixmap resource="resources.qrc">:/images/pics/usc_logo.png</pixmap>
+          </property>
+         </widget>
+        </item>
         <item alignment="Qt::AlignmentFlag::AlignHCenter|Qt::AlignmentFlag::AlignVCenter">
          <widget class="QLabel" name="title">
           <property name="minimumSize">
@@ -54,14 +63,14 @@
           </property>
           <property name="styleSheet">
            <string notr="true">#title {
-   color: #FFF;
-   text-align: center;
-   font-family: &quot;Roboto Condensed&quot;;
-   font-style: italic;
-   font-weight: 700;
-   font-size: 55px;
-	background-color: #0BC200;
-	border-radius: 9px;
+    color: #FFF;
+    text-align: center;
+    font-family: &quot;Roboto Condensed&quot;;
+    font-style: italic;
+    font-weight: 700;
+    font-size: 55px;
+        background-color: #0BC200;
+        border-radius: 9px;
     border-bottom: 2px solid #020202;
 }</string>
           </property>
@@ -75,6 +84,19 @@
            <number>0</number>
           </property>
          </widget>
+        </item>
+        <item>
+         <spacer name="verticalSpacer_4">
+          <property name="orientation">
+           <enum>Qt::Orientation::Vertical</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>20</width>
+            <height>40</height>
+           </size>
+          </property>
+         </spacer>
         </item>
         <item>
          <layout class="QHBoxLayout" name="horizontalLayout_6">
@@ -106,18 +128,18 @@
               </property>
               <property name="styleSheet">
                <string notr="true">#staticButton {
-	background: url(:/images/pics/mickey.png);
-	background-repeat: no-repeat;
+        background: url(:/images/pics/mickey.png);
+        background-repeat: no-repeat;
     background-position: center;
-	background-size: contain;
-	background-color: transparent;
-	border-radius: 8px;
-	width: 649px;
-	height: 468px;
+        background-size: contain;
+        background-color: transparent;
+        border-radius: 8px;
+        width: 649px;
+        height: 468px;
 }
 
 #staticButton::hover{
-	border: 5px solid #FFC20F;
+        border: 5px solid #FFC20F;
     border-radius: 8px;
 }</string>
               </property>
@@ -224,18 +246,18 @@ line-height: normal;
               </property>
               <property name="styleSheet">
                <string notr="true">#dynamicButton {
-	background: url(:/images/pics/ballerina.png);
-	background-repeat: no-repeat;
+        background: url(:/images/pics/ballerina.png);
+        background-repeat: no-repeat;
     background-position: center;
-	background-size: contain;
-	background-color: transparent;
-	border-radius: 8px;
-	width: 649px;
-	height: 468px;
+        background-size: contain;
+        background-color: transparent;
+        border-radius: 8px;
+        width: 649px;
+        height: 468px;
 }
 
 #dynamicButton::hover{
-	border: 5px solid #FFC20F;
+        border: 5px solid #FFC20F;
     border-radius: 8px;
 }</string>
               </property>
@@ -312,6 +334,19 @@ line-height: normal;
            </layout>
           </item>
          </layout>
+        </item>
+        <item>
+         <spacer name="verticalSpacer_2">
+          <property name="orientation">
+           <enum>Qt::Orientation::Vertical</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>20</width>
+            <height>40</height>
+           </size>
+          </property>
+         </spacer>
         </item>
        </layout>
       </widget>
