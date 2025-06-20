@@ -93,16 +93,36 @@
               </property>
              </spacer>
             </item>
-            <item>
-             <widget class="QLabel" name="mickeyPicture">
+            <item alignment="Qt::AlignmentFlag::AlignHCenter|Qt::AlignmentFlag::AlignVCenter">
+             <widget class="QPushButton" name="staticButton">
+              <property name="maximumSize">
+               <size>
+                <width>649</width>
+                <height>468</height>
+               </size>
+              </property>
+              <property name="cursor">
+               <cursorShape>PointingHandCursor</cursorShape>
+              </property>
+              <property name="styleSheet">
+               <string notr="true">#staticButton {
+	background: url(:/images/pics/mickey.png);
+	background-repeat: no-repeat;
+    background-position: center;
+	background-size: contain;
+	background-color: transparent;
+	border-radius: 8px;
+	width: 649px;
+	height: 468px;
+}
+
+#staticButton::hover{
+	border: 5px solid #FFC20F;
+    border-radius: 8px;
+}</string>
+              </property>
               <property name="text">
                <string/>
-              </property>
-              <property name="pixmap">
-               <pixmap resource="resources.qrc">:/images/pics/mickey.png</pixmap>
-              </property>
-              <property name="alignment">
-               <set>Qt::AlignmentFlag::AlignCenter</set>
               </property>
              </widget>
             </item>
@@ -120,7 +140,13 @@
              </spacer>
             </item>
             <item alignment="Qt::AlignmentFlag::AlignHCenter|Qt::AlignmentFlag::AlignVCenter">
-             <widget class="QPushButton" name="staticButton">
+             <widget class="QLabel" name="staticLabel">
+              <property name="minimumSize">
+               <size>
+                <width>350</width>
+                <height>101</height>
+               </size>
+              </property>
               <property name="maximumSize">
                <size>
                 <width>350</width>
@@ -128,10 +154,10 @@
                </size>
               </property>
               <property name="cursor">
-               <cursorShape>PointingHandCursor</cursorShape>
+               <cursorShape>ArrowCursor</cursorShape>
               </property>
               <property name="styleSheet">
-               <string notr="true">#staticButton {
+               <string notr="true">#staticLabel {
 border-radius: 9px;
 border-bottom: 3px solid #020202;
 background: #0BC200;
@@ -145,15 +171,13 @@ font-size: 64px;
 font-style: italic;
 font-weight: 550;
 line-height: normal;
-}
-
-/* Hover effect for the button */
-#staticButton::hover {
-            background: #0EDD00; /* Slightly lighter green on hover */
-        }</string>
+}</string>
               </property>
               <property name="text">
                <string>Static</string>
+              </property>
+              <property name="alignment">
+               <set>Qt::AlignmentFlag::AlignCenter</set>
               </property>
              </widget>
             </item>
@@ -187,16 +211,36 @@ line-height: normal;
               </property>
              </spacer>
             </item>
-            <item>
-             <widget class="QLabel" name="ballerinaPicture">
+            <item alignment="Qt::AlignmentFlag::AlignHCenter|Qt::AlignmentFlag::AlignVCenter">
+             <widget class="QPushButton" name="dynamicButton">
+              <property name="maximumSize">
+               <size>
+                <width>649</width>
+                <height>468</height>
+               </size>
+              </property>
+              <property name="cursor">
+               <cursorShape>PointingHandCursor</cursorShape>
+              </property>
+              <property name="styleSheet">
+               <string notr="true">#dynamicButton {
+	background: url(:/images/pics/ballerina.png);
+	background-repeat: no-repeat;
+    background-position: center;
+	background-size: contain;
+	background-color: transparent;
+	border-radius: 8px;
+	width: 649px;
+	height: 468px;
+}
+
+#dynamicButton::hover{
+	border: 5px solid #FFC20F;
+    border-radius: 8px;
+}</string>
+              </property>
               <property name="text">
                <string/>
-              </property>
-              <property name="pixmap">
-               <pixmap resource="resources.qrc">:/images/pics/ballerina.png</pixmap>
-              </property>
-              <property name="alignment">
-               <set>Qt::AlignmentFlag::AlignCenter</set>
               </property>
              </widget>
             </item>
@@ -214,40 +258,41 @@ line-height: normal;
              </spacer>
             </item>
             <item alignment="Qt::AlignmentFlag::AlignHCenter|Qt::AlignmentFlag::AlignVCenter">
-             <widget class="QPushButton" name="dynamicButton">
+             <widget class="QLabel" name="dynamicLabel">
+              <property name="minimumSize">
+               <size>
+                <width>350</width>
+                <height>101</height>
+               </size>
+              </property>
               <property name="maximumSize">
                <size>
                 <width>350</width>
                 <height>101</height>
                </size>
               </property>
-              <property name="cursor">
-               <cursorShape>PointingHandCursor</cursorShape>
-              </property>
               <property name="styleSheet">
-               <string notr="true">#dynamicButton {
-	border-radius: 9px;
-	border-bottom: 3px solid #020202;
-	background: #0BC200;
-	width: 350px;
-	height: 101px;
+               <string notr="true">#dynamicLabel {
+border-radius: 9px;
+border-bottom: 3px solid #020202;
+background: #0BC200;
+width: 350px;
+height: 101px;
 
-	color: #FFF;
+color: #FFF;
 text-align: center;
 font-family: &quot;Roboto Condensed&quot;;
 font-size: 64px;
 font-style: italic;
 font-weight: 550;
 line-height: normal;
-}
-
-/* Hover effect for the button */
-#dynamicButton::hover {
-            background: #0EDD00; /* Slightly lighter green on hover */
-        }</string>
+}</string>
               </property>
               <property name="text">
                <string>Dynamic</string>
+              </property>
+              <property name="alignment">
+               <set>Qt::AlignmentFlag::AlignCenter</set>
               </property>
              </widget>
             </item>
