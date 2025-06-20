@@ -9,8 +9,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>1328</width>
-    <height>938</height>
+    <width>1333</width>
+    <height>944</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -189,6 +189,11 @@
     background-color: transparent;
     width: 241px;
     height: 141px;
+}
+
+#image1::hover{
+	border: 3px solid #FFF;
+    border-radius: 8px;
 }</string>
          </property>
          <property name="text">
@@ -236,6 +241,11 @@
     background-color: transparent;
     width: 241px;
     height: 141px;
+}
+
+#image2::hover{
+	border: 3px solid #FFF;
+    border-radius: 8px;
 }</string>
          </property>
          <property name="text">
@@ -283,6 +293,11 @@
     background-color: transparent;
     width: 241px;
     height: 141px;
+}
+
+#image3::hover{
+	border: 3px solid #FFF;
+    border-radius: 8px;
 }</string>
          </property>
          <property name="text">
@@ -361,6 +376,11 @@
     background-color: transparent;
     width: 241px;
     height: 141px;
+}
+
+#image4::hover{
+	border: 3px solid #FFF;
+    border-radius: 8px;
 }</string>
          </property>
          <property name="text">
@@ -408,6 +428,11 @@
     background-color: transparent;
     width: 241px;
     height: 141px;
+}
+
+#image5::hover{
+	border: 3px solid #FFF;
+    border-radius: 8px;
 }</string>
          </property>
          <property name="text">

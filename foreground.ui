@@ -161,6 +161,9 @@
          <height>305</height>
         </size>
        </property>
+       <property name="cursor">
+        <cursorShape>PointingHandCursor</cursorShape>
+       </property>
        <property name="styleSheet">
         <string notr="true">#image2{
     border: none; 
@@ -171,10 +174,24 @@
 	background-color: transparent;
 	width: 241px;
    height: 141px;
+}
+
+#image2::hover{
+	border: 3px solid #FFF;
+    border-radius: 8px;
+}
+
+/* NEW: Style for the 'selected' custom property */
+#image2[selected=&quot;true&quot;] { /* Use attribute selector for your custom property */
+    border: 3px solid yellow;
+    border-radius: 8px;
 }</string>
        </property>
        <property name="text">
         <string/>
+       </property>
+       <property name="checkable">
+        <bool>false</bool>
        </property>
       </widget>
      </item>
@@ -192,6 +209,9 @@
          <height>305</height>
         </size>
        </property>
+       <property name="cursor">
+        <cursorShape>PointingHandCursor</cursorShape>
+       </property>
        <property name="styleSheet">
         <string notr="true">#image6{
     border: none;
@@ -203,6 +223,17 @@
 	width: 241px;
     height: 131px;
 	padding: 10px;
+}
+
+#image6::hover{
+	border: 3px solid #FFF;
+    border-radius: 8px;
+}
+
+/* NEW: Style for the 'selected' custom property */
+#image6[selected=&quot;true&quot;] { /* Use attribute selector for your custom property */
+    border: 3px solid #FFD700;
+    border-radius: 8px;
 }</string>
        </property>
        <property name="text">
@@ -240,6 +271,9 @@
          <height>305</height>
         </size>
        </property>
+       <property name="cursor">
+        <cursorShape>PointingHandCursor</cursorShape>
+       </property>
        <property name="styleSheet">
         <string notr="true">#image5{
     border: none; 
@@ -250,45 +284,18 @@
 	background-color: transparent;
 	width: 241px;
    height: 141px;
-}</string>
-       </property>
-       <property name="text">
-        <string/>
-       </property>
-      </widget>
-     </item>
-     <item row="0" column="0">
-      <widget class="QPushButton" name="image1">
-       <property name="minimumSize">
-        <size>
-         <width>425</width>
-         <height>305</height>
-        </size>
-       </property>
-       <property name="maximumSize">
-        <size>
-         <width>425</width>
-         <height>305</height>
-        </size>
-       </property>
-       <property name="autoFillBackground">
-        <bool>false</bool>
-       </property>
-       <property name="styleSheet">
-        <string notr="true">#image1{
-    border: none; 
-    background-image: url(:/images/pics/1.png); 
-    background-repeat: no-repeat;
-    background-position: center;
-	background-size: contain;
-	background-color: transparent;
-	width: 241px;
-   height: 141px;
 }
 
-#image::hover {
-            background: #d3d3d3; 
-        }</string>
+#image5::hover{
+	border: 3px solid #FFF;
+    border-radius: 8px;
+}
+
+/* NEW: Style for the 'selected' custom property */
+#image5[selected=&quot;true&quot;] { /* Use attribute selector for your custom property */
+    border: 3px solid #FFD700;
+    border-radius: 8px;
+}</string>
        </property>
        <property name="text">
         <string/>
@@ -309,6 +316,9 @@
          <height>305</height>
         </size>
        </property>
+       <property name="cursor">
+        <cursorShape>PointingHandCursor</cursorShape>
+       </property>
        <property name="styleSheet">
         <string notr="true">#image4{
     border: none; 
@@ -319,6 +329,17 @@
 	background-color: transparent;
 	width: 241px;
    height: 141px;
+}
+
+#image4::hover{
+	border: 3px solid #FFF;
+    border-radius: 8px;
+}
+
+/* NEW: Style for the 'selected' custom property */
+#image4[selected=&quot;true&quot;] { /* Use attribute selector for your custom property */
+    border: 3px solid #FFD700;
+    border-radius: 8px;
 }</string>
        </property>
        <property name="text">
@@ -353,6 +374,9 @@
          <height>305</height>
         </size>
        </property>
+       <property name="cursor">
+        <cursorShape>PointingHandCursor</cursorShape>
+       </property>
        <property name="styleSheet">
         <string notr="true">#image3{
     border: none; 
@@ -363,10 +387,75 @@
 	background-color: transparent;
 	width: 241px;
    height: 141px;
+}
+
+#image3::hover{
+	border: 3px solid #FFF;
+    border-radius: 8px;
+}
+
+/* NEW: Style for the 'selected' custom property */
+#image3[selected=&quot;true&quot;] { /* Use attribute selector for your custom property */
+    border: 3px solid #FFD700;
+    border-radius: 8px;
 }</string>
        </property>
        <property name="text">
         <string/>
+       </property>
+      </widget>
+     </item>
+     <item row="0" column="0">
+      <widget class="QPushButton" name="image1">
+       <property name="minimumSize">
+        <size>
+         <width>425</width>
+         <height>305</height>
+        </size>
+       </property>
+       <property name="maximumSize">
+        <size>
+         <width>425</width>
+         <height>305</height>
+        </size>
+       </property>
+       <property name="cursor">
+        <cursorShape>PointingHandCursor</cursorShape>
+       </property>
+       <property name="mouseTracking">
+        <bool>true</bool>
+       </property>
+       <property name="autoFillBackground">
+        <bool>false</bool>
+       </property>
+       <property name="styleSheet">
+        <string notr="true">#image1{
+    border: none; 
+    background-image: url(:/images/pics/1.png); 
+    background-repeat: no-repeat;
+    background-position: center;
+	background-size: contain;
+	background-color: transparent;
+	width: 241px;
+   height: 141px;
+}
+
+#image1::hover{
+	border: 3px solid #FFF;
+    border-radius: 8px;
+}
+
+/* NEW: Style for the 'selected' custom property */
+#image1[selected=&quot;true&quot;] { /* Use attribute selector for your custom property */
+    border: 3px solid #FFD700;
+    border-radius: 8px;
+}</string>
+       </property>
+       <property name="text">
+        <string/>
+       </property>
+       <property name="checkable">
+        <bool>false</bool>
        </property>
       </widget>
      </item>

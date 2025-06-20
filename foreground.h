@@ -2,6 +2,7 @@
 #define FOREGROUND_H
 
 #include <QWidget>
+#include <QPushButton>
 
 QT_BEGIN_NAMESPACE
 
@@ -24,8 +25,23 @@ signals:
 private slots:
     void on_back_clicked();
 
+    void on_image1_clicked();
+
+    void on_image2_clicked();
+
+    void on_image3_clicked();
+
+    void on_image4_clicked();
+
+    void on_image5_clicked();
+
+    void on_image6_clicked();
+
 private:
     Ui::Foreground *ui;
+    QPushButton *currentSelectedImageButton;
+
+    void setImageSelected(QPushButton *button); // Correct declaration
 };
 
 #endif // FOREGROUND_H
