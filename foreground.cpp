@@ -37,9 +37,11 @@ Foreground::~Foreground()
 
 void Foreground::on_back_clicked()
 {
-    currentSelectedImageButton->setProperty("selected", false);
-    currentSelectedImageButton->style()->polish(currentSelectedImageButton);
-    emit backtoLandingPage();
+        if (currentSelectedImageButton) {
+            currentSelectedImageButton->setProperty("selected", false);
+            currentSelectedImageButton->style()->polish(currentSelectedImageButton);
+        }
+        emit backtoLandingPage();
 }
 
 void Foreground::setImageSelected(QPushButton *button)

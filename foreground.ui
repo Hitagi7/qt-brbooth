@@ -26,32 +26,23 @@
   </property>
   <layout class="QVBoxLayout" name="verticalLayout">
    <item>
+    <spacer name="verticalSpacer_4">
+     <property name="orientation">
+      <enum>Qt::Orientation::Vertical</enum>
+     </property>
+     <property name="sizeHint" stdset="0">
+      <size>
+       <width>20</width>
+       <height>40</height>
+      </size>
+     </property>
+    </spacer>
+   </item>
+   <item>
     <layout class="QVBoxLayout" name="verticalLayout_2">
      <property name="bottomMargin">
       <number>0</number>
      </property>
-     <item>
-      <widget class="QLabel" name="title">
-       <property name="minimumSize">
-        <size>
-         <width>0</width>
-         <height>83</height>
-        </size>
-       </property>
-       <property name="maximumSize">
-        <size>
-         <width>16777215</width>
-         <height>83</height>
-        </size>
-       </property>
-       <property name="text">
-        <string/>
-       </property>
-       <property name="pixmap">
-        <pixmap resource="resources.qrc">:/images/pics/usc_logo.png</pixmap>
-       </property>
-      </widget>
-     </item>
      <item alignment="Qt::AlignmentFlag::AlignHCenter|Qt::AlignmentFlag::AlignVCenter">
       <widget class="QFrame" name="fglabel">
        <property name="sizePolicy">
@@ -177,13 +168,13 @@
 }
 
 #image2::hover{
-	border: 3px solid #FFF;
+	border: 5px solid #FFC20F;
     border-radius: 8px;
 }
 
 /* NEW: Style for the 'selected' custom property */
 #image2[selected=&quot;true&quot;] { /* Use attribute selector for your custom property */
-    border: 3px solid yellow;
+    border: 5px solid #0BC200;
     border-radius: 8px;
 }</string>
        </property>
@@ -214,25 +205,24 @@
        </property>
        <property name="styleSheet">
         <string notr="true">#image6{
-    border: none;
-    background-image: url(:/images/pics/6.png);
+    border: none; 
+    background-image: url(:/images/pics/6.png); 
     background-repeat: no-repeat;
     background-position: center;
 	background-size: contain;
 	background-color: transparent;
 	width: 241px;
-    height: 131px;
-	padding: 10px;
+   height: 141px;
 }
 
 #image6::hover{
-	border: 3px solid #FFF;
+	border: 5px solid #FFC20F;
     border-radius: 8px;
 }
 
 /* NEW: Style for the 'selected' custom property */
 #image6[selected=&quot;true&quot;] { /* Use attribute selector for your custom property */
-    border: 3px solid #FFD700;
+    border: 5px solid #0BC200;
     border-radius: 8px;
 }</string>
        </property>
@@ -287,13 +277,13 @@
 }
 
 #image5::hover{
-	border: 3px solid #FFF;
+	border: 5px solid #FFC20F;
     border-radius: 8px;
 }
 
 /* NEW: Style for the 'selected' custom property */
 #image5[selected=&quot;true&quot;] { /* Use attribute selector for your custom property */
-    border: 3px solid #FFD700;
+    border: 5px solid #0BC200;
     border-radius: 8px;
 }</string>
        </property>
@@ -332,13 +322,13 @@
 }
 
 #image4::hover{
-	border: 3px solid #FFF;
+	border: 5px solid #FFC20F;
     border-radius: 8px;
 }
 
 /* NEW: Style for the 'selected' custom property */
 #image4[selected=&quot;true&quot;] { /* Use attribute selector for your custom property */
-    border: 3px solid #FFD700;
+    border: 5px solid #0BC200;
     border-radius: 8px;
 }</string>
        </property>
@@ -390,13 +380,13 @@
 }
 
 #image3::hover{
-	border: 3px solid #FFF;
+	border: 5px solid #FFC20F;
     border-radius: 8px;
 }
 
 /* NEW: Style for the 'selected' custom property */
 #image3[selected=&quot;true&quot;] { /* Use attribute selector for your custom property */
-    border: 3px solid #FFD700;
+    border: 5px solid #0BC200;
     border-radius: 8px;
 }</string>
        </property>
@@ -441,13 +431,13 @@
 }
 
 #image1::hover{
-	border: 3px solid #FFF;
+	border: 5px solid #FFC20F;
     border-radius: 8px;
 }
 
 /* NEW: Style for the 'selected' custom property */
 #image1[selected=&quot;true&quot;] { /* Use attribute selector for your custom property */
-    border: 3px solid #FFD700;
+    border: 5px solid #0BC200;
     border-radius: 8px;
 }</string>
        </property>
@@ -524,47 +514,10 @@
        </property>
       </spacer>
      </item>
-     <item>
-      <widget class="QPushButton" name="confirm">
-       <property name="enabled">
-        <bool>true</bool>
-       </property>
-       <property name="minimumSize">
-        <size>
-         <width>248</width>
-         <height>68</height>
-        </size>
-       </property>
-       <property name="maximumSize">
-        <size>
-         <width>248</width>
-         <height>68</height>
-        </size>
-       </property>
-       <property name="styleSheet">
-        <string notr="true">#confirm{
-	border-radius: 9px;
-	border-bottom: 2px solid #020202;
-	background: #414141;
-	color: #000;
-	text-align: center;
-	font-family: &quot;Roboto Condensed&quot;;
-	font-style: italic;
-	font-weight: 500;
-	font-size: 30px;
-}</string>
-       </property>
-       <property name="text">
-        <string>Confirm</string>
-       </property>
-      </widget>
-     </item>
     </layout>
    </item>
   </layout>
  </widget>
- <resources>
-  <include location="resources.qrc"/>
- </resources>
+ <resources/>
  <connections/>
 </ui>

@@ -9,9 +9,8 @@ BRBooth::BRBooth(QWidget *parent)
 {
     ui->setupUi(this);
     this->setStyleSheet("QMainWindow#BRBooth {"
-                        "   background-image: url(:/images/pics/bg.png);"
+                        "   background-image: url(:/images/pics/bg.jpg);"
                         "   background-repeat: no-repeat;"
-                        "   background-size: cover;"
                         "   background-position: center;"
                         "}");
 

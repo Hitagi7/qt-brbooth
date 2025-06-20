@@ -1,6 +1,5 @@
 <RCC>
     <qresource prefix="/images">
-        <file>pics/bg.png</file>
         <file>pics/usc_logo.png</file>
         <file>pics/ballerina.png</file>
         <file>pics/mickey.png</file>
@@ -15,6 +14,7 @@
         <file>pics/dynamic3.png</file>
         <file>pics/dynamic4.png</file>
         <file>pics/dynamic5.png</file>
+        <file>pics/bg.jpg</file>
     </qresource>
     <qresource prefix="/fonts">
         <file>Fonts/static/RobotoCondensed-BoldItalic.ttf</file>
