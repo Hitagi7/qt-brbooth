@@ -33,7 +33,7 @@ private:
     Foreground *foregroundPage;
     int foregroundPageIndex;
     int landingPageIndex;
-    dynamic *dynamicPage;
+    Dynamic *dynamicPage;
     int dynamicPageIndex;
 };
 #endif // BRBOOTH_H

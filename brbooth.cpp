@@ -25,7 +25,7 @@ BRBooth::BRBooth(QWidget *parent)
     connect(foregroundPage, &Foreground::backtoLandingPage, this, &BRBooth::showLandingPage);
 
     if (dynamicPage) {
-        connect(dynamicPage, &dynamic::backtoLandingPage, this, &BRBooth::showLandingPage);
+        connect(dynamicPage, &Dynamic::backtoLandingPage, this, &BRBooth::showLandingPage);
     }
 }
 

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <ui version="4.0">
- <class>dynamic</class>
- <widget class="QWidget" name="dynamic">
+ <class>Dynamic</class>
+ <widget class="QWidget" name="Dynamic">
   <property name="enabled">
    <bool>true</bool>
   </property>
@@ -24,7 +24,8 @@
     border-image: url(:/images/pics/bg.png) 0 0 0 0 stretch;
 }</string>
   </property>
-  <layout class="QVBoxLayout" name="mainVerticalLayout"> <item>
+  <layout class="QVBoxLayout" name="mainVerticalLayout">
+   <item>
     <layout class="QVBoxLayout" name="headerLayout">
      <property name="bottomMargin">
       <number>0</number>
@@ -134,7 +135,7 @@
    <item>
     <spacer name="verticalSpacer_top">
      <property name="orientation">
-      <enum>Qt::Vertical</enum>
+      <enum>Qt::Orientation::Vertical</enum>
      </property>
      <property name="sizeHint" stdset="0">
       <size>
@@ -145,10 +146,11 @@
     </spacer>
    </item>
    <item>
-    <layout class="QHBoxLayout" name="topImagesHorizontalLayout"> <item>
+    <layout class="QHBoxLayout" name="topImagesHorizontalLayout">
+     <item>
       <spacer name="horizontalSpacer_left1">
        <property name="orientation">
-        <enum>Qt::Horizontal</enum>
+        <enum>Qt::Orientation::Horizontal</enum>
        </property>
        <property name="sizeHint" stdset="0">
         <size>
@@ -159,7 +161,8 @@
       </spacer>
      </item>
      <item>
-      <layout class="QGridLayout" name="gridLayout_top_images"> <item row="0" column="0">
+      <layout class="QGridLayout" name="gridLayout_top_images">
+       <item row="0" column="0">
         <widget class="QPushButton" name="image1">
          <property name="minimumSize">
           <size>
@@ -196,10 +199,10 @@
        <item row="0" column="1">
         <spacer name="horizontalSpacer_between1_2">
          <property name="orientation">
-          <enum>Qt::Horizontal</enum>
+          <enum>Qt::Orientation::Horizontal</enum>
          </property>
          <property name="sizeType">
-          <enum>QSizePolicy::Expanding</enum>
+          <enum>QSizePolicy::Policy::Expanding</enum>
          </property>
          <property name="sizeHint" stdset="0">
           <size>
@@ -243,7 +246,7 @@
        <item row="0" column="3">
         <spacer name="horizontalSpacer_between2_3">
          <property name="orientation">
-          <enum>Qt::Horizontal</enum>
+          <enum>Qt::Orientation::Horizontal</enum>
          </property>
          <property name="sizeType">
           <enum>QSizePolicy::Policy::Expanding</enum>
@@ -292,7 +295,7 @@
      <item>
       <spacer name="horizontalSpacer_right1">
        <property name="orientation">
-        <enum>Qt::Horizontal</enum>
+        <enum>Qt::Orientation::Horizontal</enum>
        </property>
        <property name="sizeHint" stdset="0">
         <size>
@@ -307,7 +310,7 @@
    <item>
     <spacer name="verticalSpacer_middle">
      <property name="orientation">
-      <enum>Qt::Vertical</enum>
+      <enum>Qt::Orientation::Vertical</enum>
      </property>
      <property name="sizeHint" stdset="0">
       <size>
@@ -318,10 +321,11 @@
     </spacer>
    </item>
    <item>
-    <layout class="QHBoxLayout" name="bottomImagesHorizontalLayout"> <item>
+    <layout class="QHBoxLayout" name="bottomImagesHorizontalLayout">
+     <item>
       <spacer name="horizontalSpacer_left2">
        <property name="orientation">
-        <enum>Qt::Horizontal</enum>
+        <enum>Qt::Orientation::Horizontal</enum>
        </property>
        <property name="sizeHint" stdset="0">
         <size>
@@ -332,7 +336,8 @@
       </spacer>
      </item>
      <item>
-      <layout class="QGridLayout" name="gridLayout_bottom_images"> <item row="0" column="0">
+      <layout class="QGridLayout" name="gridLayout_bottom_images">
+       <item row="0" column="0">
         <widget class="QPushButton" name="image4">
          <property name="minimumSize">
           <size>
@@ -366,10 +371,10 @@
        <item row="0" column="1">
         <spacer name="horizontalSpacer_between4_5">
          <property name="orientation">
-          <enum>Qt::Horizontal</enum>
+          <enum>Qt::Orientation::Horizontal</enum>
          </property>
          <property name="sizeType">
-          <enum>QSizePolicy::Expanding</enum>
+          <enum>QSizePolicy::Policy::Expanding</enum>
          </property>
          <property name="sizeHint" stdset="0">
           <size>
@@ -415,7 +420,7 @@
      <item>
       <spacer name="horizontalSpacer_right2">
        <property name="orientation">
-        <enum>Qt::Horizontal</enum>
+        <enum>Qt::Orientation::Horizontal</enum>
        </property>
        <property name="sizeHint" stdset="0">
         <size>
@@ -430,7 +435,7 @@
    <item>
     <spacer name="verticalSpacer_bottom">
      <property name="orientation">
-      <enum>Qt::Vertical</enum>
+      <enum>Qt::Orientation::Vertical</enum>
      </property>
      <property name="sizeHint" stdset="0">
       <size>
@@ -441,7 +446,8 @@
     </spacer>
    </item>
    <item>
-    <layout class="QHBoxLayout" name="navButtonsLayout"> <property name="sizeConstraint">
+    <layout class="QHBoxLayout" name="navButtonsLayout">
+     <property name="sizeConstraint">
       <enum>QLayout::SizeConstraint::SetDefaultConstraint</enum>
      </property>
      <item>
@@ -472,7 +478,12 @@
     font-style: italic;
     font-weight: 500;
     font-size: 30px;
-}</string>
+}
+
+
+#back::hover {
+            background: #0EDD00; /* Slightly lighter green on hover */
+        }</string>
        </property>
        <property name="text">
         <string>Back</string>
@@ -485,7 +496,7 @@
      <item>
       <spacer name="horizontalSpacer">
        <property name="orientation">
-        <enum>Qt::Horizontal</enum>
+        <enum>Qt::Orientation::Horizontal</enum>
        </property>
        <property name="sizeType">
         <enum>QSizePolicy::Policy::Expanding</enum>

@@ -6,18 +6,18 @@
 QT_BEGIN_NAMESPACE
 
 namespace Ui {
-    class dynamic;
+    class Dynamic;
 }
 
 QT_END_NAMESPACE
 
-class dynamic : public QWidget
+class Dynamic : public QWidget
 {
     Q_OBJECT
 
 public:
-    explicit dynamic(QWidget *parent = nullptr);
-    ~dynamic();
+    explicit Dynamic(QWidget *parent = nullptr);
+    ~Dynamic();
 
 signals:
     void backtoLandingPage();
@@ -25,7 +25,7 @@ private slots:
     void on_back_clicked();
 
 private:
-    Ui::dynamic *ui;
+    Ui::Dynamic *ui;
 };
 
 #endif // DYNAMIC_H

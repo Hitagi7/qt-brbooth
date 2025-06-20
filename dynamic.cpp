@@ -1,20 +1,20 @@
 #include "dynamic.h"
 #include "ui_dynamic.h"
 
-dynamic::dynamic(QWidget *parent)
+Dynamic::Dynamic(QWidget *parent)
     : QWidget(parent)
-    , ui(new Ui::dynamic)
+    , ui(new Ui::Dynamic)
 {
     ui->setupUi(this);
-    connect(ui->back, &QPushButton::clicked, this, &dynamic::on_back_clicked);
+    connect(ui->back, &QPushButton::clicked, this, &Dynamic::on_back_clicked);
 }
 
-dynamic::~dynamic()
+Dynamic::~Dynamic()
 {
     delete ui;
 }
 
-void dynamic::on_back_clicked()
+void Dynamic::on_back_clicked()
 {
     emit backtoLandingPage();
 }

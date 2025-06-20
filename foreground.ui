@@ -284,7 +284,11 @@
 	background-color: transparent;
 	width: 241px;
    height: 141px;
-}</string>
+}
+
+#image::hover {
+            background: #d3d3d3; 
+        }</string>
        </property>
        <property name="text">
         <string/>
@@ -401,7 +405,11 @@
    font-style: italic;
    font-weight: 500;
    font-size: 30px;
-}</string>
+}
+
+#back::hover {
+            background: #0EDD00; /* Slightly lighter green on hover */
+        }</string>
        </property>
        <property name="text">
         <string>Back</string>
