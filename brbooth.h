@@ -5,6 +5,7 @@
 #include "foreground.h"
 #include "dynamic.h"
 #include "background.h"
+#include "capture.h"
 
 QT_BEGIN_NAMESPACE
 namespace Ui {
@@ -26,6 +27,7 @@ private slots:
     void showForegroundPage();
     void showdynamicPage();
     void showBackgroundPage();
+    void showCapturePage();
     void on_staticButton_clicked();
     void on_dynamicButton_clicked();
 
@@ -38,5 +40,7 @@ private:
     int dynamicPageIndex;
     Background *backgroundPage;
     int backgroundPageIndex;
+    Capture *capturePage;
+    int capturePageIndex;
 };
 #endif // BRBOOTH_H

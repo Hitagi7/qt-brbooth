@@ -10,6 +10,7 @@ CONFIG += c++17
 
 SOURCES += \
     background.cpp \
+    capture.cpp \
     dynamic.cpp \
     foreground.cpp \
     main.cpp \
@@ -18,12 +19,14 @@ SOURCES += \
 HEADERS += \
     background.h \
     brbooth.h \
+    capture.h \
     dynamic.h \
     foreground.h
 
 FORMS += \
     background.ui \
     brbooth.ui \
+    capture.ui \
     dynamic.ui \
     foreground.ui
 

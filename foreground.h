@@ -9,7 +9,7 @@
 QT_BEGIN_NAMESPACE
 
 namespace Ui {
-class Foreground;
+    class Foreground;
 }
 
 QT_END_NAMESPACE
