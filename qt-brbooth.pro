@@ -1,4 +1,5 @@
 QT       += core gui
+QT       += multimedia multimediawidgets
 
 greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
 
@@ -13,6 +14,7 @@ SOURCES += \
     capture.cpp \
     dynamic.cpp \
     foreground.cpp \
+    iconhover.cpp \
     main.cpp \
     brbooth.cpp
 
@@ -21,7 +23,8 @@ HEADERS += \
     brbooth.h \
     capture.h \
     dynamic.h \
-    foreground.h
+    foreground.h \
+    iconhover.h
 
 FORMS += \
     background.ui \

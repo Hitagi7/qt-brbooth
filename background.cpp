@@ -1,5 +1,6 @@
 #include "background.h"
 #include "ui_background.h"
+#include "iconhover.h"
 #include <QStyle>
 #include <QRegularExpression>
 #include <QMouseEvent>
@@ -9,6 +10,14 @@ Background::Background(QWidget *parent)
     , ui(new Ui::Background)
 {
     ui->setupUi(this);
+
+    //Setting Up Back Icon
+    ui->back->setIcon(QIcon(":/icons/Icons/normal.svg"));
+    ui->back->setIconSize(QSize(100, 100));
+
+    Iconhover *backButtonHover = new Iconhover(this); // 'this' as parent for memory management
+    ui->back->installEventFilter(backButtonHover);
+
     connect(ui->back, &QPushButton::clicked, this, &Background::on_back_clicked);
 
     debounceTimer = new QTimer(this);

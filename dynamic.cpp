@@ -1,5 +1,6 @@
 #include "dynamic.h"
 #include "ui_dynamic.h"
+#include "iconhover.h"
 #include <QStyle>
 
 Dynamic::Dynamic(QWidget *parent)
@@ -7,6 +8,12 @@ Dynamic::Dynamic(QWidget *parent)
     , ui(new Ui::Dynamic)
 {
     ui->setupUi(this);
+    ui->back->setIcon(QIcon(":/icons/Icons/normal.svg"));
+    ui->back->setIconSize(QSize(100, 100));
+
+    Iconhover *backButtonHover = new Iconhover(this); // 'this' as parent for memory management
+    ui->back->installEventFilter(backButtonHover);
+
     connect(ui->back, &QPushButton::clicked, this, &Dynamic::on_back_clicked);
 
     currentSelectedImageButton = nullptr;

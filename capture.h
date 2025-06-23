@@ -2,6 +2,7 @@
 #define CAPTURE_H
 
 #include <QWidget>
+#include <QMouseEvent> //Included for Icon Hover for Back Button
 
 namespace Ui {
 class Capture;

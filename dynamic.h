@@ -3,6 +3,7 @@
 
 #include <QWidget>
 #include <QPushButton> // Include QPushButton for currentSelectedImageButton
+#include <QMouseEvent> //Included for Icon Hover for Back Button
 
 QT_BEGIN_NAMESPACE
 

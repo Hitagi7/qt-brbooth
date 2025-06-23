@@ -20,8 +20,13 @@
         <file>pics/bg3.png</file>
         <file>pics/bg4.png</file>
         <file>pics/bg5.png</file>
+        <file>pics/capture.png</file>
     </qresource>
     <qresource prefix="/fonts">
         <file>Fonts/static/RobotoCondensed-BoldItalic.ttf</file>
+    </qresource>
+    <qresource prefix="/icons">
+        <file>Icons/hover.svg</file>
+        <file>Icons/normal.svg</file>
     </qresource>
 </RCC>

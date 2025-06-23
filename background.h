@@ -5,6 +5,8 @@
 #include <QPushButton>
 #include <QTimer>
 #include <QEvent>
+#include <QMouseEvent> //Included for Icon Hover for Back Button
+
 
 QT_BEGIN_NAMESPACE
 
