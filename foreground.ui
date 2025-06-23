@@ -171,7 +171,7 @@
     border-radius: 8px;
 }
 
-#image2[selected="true"] {
+#image2[selected=&quot;true&quot;] {
     border: 5px solid #0BC200;
     border-radius: 8px;
 }</string>
@@ -217,7 +217,7 @@
     border-radius: 8px;
 }
 
-#image6[selected="true"] {
+#image6[selected=&quot;true&quot;] {
     border: 5px solid #0BC200;
     border-radius: 8px;
 }</string>
@@ -276,7 +276,7 @@
     border-radius: 8px;
 }
 
-#image5[selected="true"] {
+#image5[selected=&quot;true&quot;] {
     border: 5px solid #0BC200;
     border-radius: 8px;
 }</string>
@@ -319,7 +319,7 @@
     border-radius: 8px;
 }
 
-#image4[selected="true"] {
+#image4[selected=&quot;true&quot;] {
     border: 5px solid #0BC200;
     border-radius: 8px;
 }</string>
@@ -375,7 +375,7 @@
     border-radius: 8px;
 }
 
-#image3[selected="true"] {
+#image3[selected=&quot;true&quot;] {
     border: 5px solid #0BC200;
     border-radius: 8px;
 }</string>
@@ -424,7 +424,7 @@
     border-radius: 8px;
 }
 
-#image1[selected="true"] {
+#image1[selected=&quot;true&quot;] {
     border: 5px solid #0BC200;
     border-radius: 8px;
 }</string>
@@ -460,6 +460,9 @@
          <width>248</width>
          <height>68</height>
         </size>
+       </property>
+       <property name="cursor">
+        <cursorShape>PointingHandCursor</cursorShape>
        </property>
        <property name="styleSheet">
         <string notr="true">#back{
