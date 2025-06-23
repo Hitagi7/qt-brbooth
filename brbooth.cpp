@@ -49,14 +49,21 @@ BRBooth::BRBooth(QWidget *parent)
 
     // Static background back button
     if (backgroundPage) {
-        connect(backgroundPage, &Background::backtoLandingPage, this, &BRBooth::showForegroundPage);
-        //connect(backgroundPage, &Background::imageSelectedTwice, this, &BRBooth::showCapturePage);
+        connect(backgroundPage, &Background::backtoForegroundPage, this, &BRBooth::showForegroundPage);
+        connect(backgroundPage, &Background::imageSelectedTwice, this, &BRBooth::showCapturePage); // Connect to capture interface
+    }
+
+    if (capturePage) {
+        connect(capturePage, &Capture::backtoBackgroundPage, this, &BRBooth::showBackgroundPage);
     }
 
     // Resets static foreground page everytime its loaded
     connect(ui->stackedWidget, &QStackedWidget::currentChanged, this, [this](int index){
         if (index == foregroundPageIndex) {
             foregroundPage->resetPage();
+        }
+        if (index == backgroundPageIndex) {
+            backgroundPage->resetPage();
         }
     });
 }

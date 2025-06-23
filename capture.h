@@ -15,6 +15,13 @@ public:
     explicit Capture(QWidget *parent = nullptr);
     ~Capture();
 
+
+signals:
+    void backtoBackgroundPage();
+
+private slots:
+    void on_back_clicked();
+
 private:
     Ui::Capture *ui;
 };

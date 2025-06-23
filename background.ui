@@ -193,7 +193,8 @@
 #image1[selected=&quot;true&quot;] { /* Use attribute selector for your custom property */
     border: 5px solid #0BC200;
     border-radius: 8px;
-}</string>
+}
+</string>
          </property>
          <property name="text">
           <string/>

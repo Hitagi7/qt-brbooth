@@ -12,3 +12,9 @@ Capture::~Capture()
 {
     delete ui;
 }
+
+void Capture::on_back_clicked()
+{
+    emit backtoBackgroundPage();
+}
+

@@ -3,6 +3,8 @@
 
 #include <QWidget>
 #include <QPushButton>
+#include <QTimer>
+#include <QEvent>
 
 QT_BEGIN_NAMESPACE
 
@@ -19,11 +21,19 @@ public:
     explicit Background (QWidget *parent = nullptr);
     ~Background ();
 
+public slots:
+    void resetPage();
+
 signals:
-    void backtoLandingPage();
+    void backtoForegroundPage();
+    void imageSelectedTwice();
+
+protected:
+    bool eventFilter(QObject *obj, QEvent *event) override;
 
 private slots:
     void on_back_clicked();
+    void resetDebounce();
 
     void on_image1_clicked();
     void on_image2_clicked();
@@ -34,8 +44,11 @@ private slots:
 private:
     Ui::Background *ui;
     QPushButton *currentSelectedImageButton;
+    QTimer *debounceTimer;
+    bool debounceActive;
 
-    void setImageSelected(QPushButton *button);
+    void applyHighlightStyle(QPushButton *button, bool highlight);
+    void processImageButtonClick(QPushButton *button);
 };
 
 #endif
