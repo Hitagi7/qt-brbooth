@@ -6,8 +6,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>1850</width>
-    <height>1082</height>
+    <width>1890</width>
+    <height>1382</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -20,12 +20,12 @@
       <enum>Qt::Orientation::Vertical</enum>
      </property>
      <property name="sizeType">
-      <enum>QSizePolicy::Policy::MinimumExpanding</enum>
+      <enum>QSizePolicy::Policy::Minimum</enum>
      </property>
      <property name="sizeHint" stdset="0">
       <size>
        <width>20</width>
-       <height>37</height>
+       <height>45</height>
       </size>
      </property>
     </spacer>
@@ -139,13 +139,13 @@
        <property name="minimumSize">
         <size>
          <width>1600</width>
-         <height>680</height>
+         <height>760</height>
         </size>
        </property>
        <property name="maximumSize">
         <size>
          <width>1350</width>
-         <height>680</height>
+         <height>760</height>
         </size>
        </property>
       </widget>
@@ -296,7 +296,7 @@ border-top-right-radius: 0px;
      <property name="sizeHint" stdset="0">
       <size>
        <width>20</width>
-       <height>40</height>
+       <height>20</height>
       </size>
      </property>
     </spacer>
@@ -396,7 +396,7 @@ line-height: normal;
       <enum>Qt::Orientation::Vertical</enum>
      </property>
      <property name="sizeType">
-      <enum>QSizePolicy::Policy::Expanding</enum>
+      <enum>QSizePolicy::Policy::MinimumExpanding</enum>
      </property>
      <property name="sizeHint" stdset="0">
       <size>
