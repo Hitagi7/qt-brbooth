@@ -28,5 +28,6 @@
     <qresource prefix="/icons">
         <file>Icons/hover.svg</file>
         <file>Icons/normal.svg</file>
+        <file>Icons/camera.svg</file>
     </qresource>
 </RCC>

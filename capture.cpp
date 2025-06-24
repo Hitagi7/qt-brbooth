@@ -2,6 +2,7 @@
 #include "ui_capture.h"
 #include "iconhover.h"
 
+
 Capture::Capture(QWidget *parent)
     : QWidget(parent)
     , ui(new Ui::Capture)

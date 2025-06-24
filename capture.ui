@@ -6,8 +6,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>1324</width>
-    <height>946</height>
+    <width>1850</width>
+    <height>1082</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -19,10 +19,13 @@
      <property name="orientation">
       <enum>Qt::Orientation::Vertical</enum>
      </property>
+     <property name="sizeType">
+      <enum>QSizePolicy::Policy::MinimumExpanding</enum>
+     </property>
      <property name="sizeHint" stdset="0">
       <size>
        <width>20</width>
-       <height>40</height>
+       <height>37</height>
       </size>
      </property>
     </spacer>
@@ -99,10 +102,13 @@
      <property name="orientation">
       <enum>Qt::Orientation::Vertical</enum>
      </property>
+     <property name="sizeType">
+      <enum>QSizePolicy::Policy::Minimum</enum>
+     </property>
      <property name="sizeHint" stdset="0">
       <size>
        <width>20</width>
-       <height>40</height>
+       <height>20</height>
       </size>
      </property>
     </spacer>
@@ -110,12 +116,47 @@
    <item>
     <layout class="QHBoxLayout" name="horizontalLayout_2">
      <property name="spacing">
-      <number>6</number>
+      <number>0</number>
      </property>
      <item>
       <spacer name="horizontalSpacer_4">
        <property name="orientation">
         <enum>Qt::Orientation::Horizontal</enum>
+       </property>
+       <property name="sizeType">
+        <enum>QSizePolicy::Policy::Minimum</enum>
+       </property>
+       <property name="sizeHint" stdset="0">
+        <size>
+         <width>130</width>
+         <height>20</height>
+        </size>
+       </property>
+      </spacer>
+     </item>
+     <item alignment="Qt::AlignmentFlag::AlignHCenter|Qt::AlignmentFlag::AlignVCenter">
+      <widget class="QWidget" name="videoFeedWidget" native="true">
+       <property name="minimumSize">
+        <size>
+         <width>1600</width>
+         <height>680</height>
+        </size>
+       </property>
+       <property name="maximumSize">
+        <size>
+         <width>1350</width>
+         <height>680</height>
+        </size>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <spacer name="horizontalSpacer_6">
+       <property name="orientation">
+        <enum>Qt::Orientation::Horizontal</enum>
+       </property>
+       <property name="sizeType">
+        <enum>QSizePolicy::Policy::Minimum</enum>
        </property>
        <property name="sizeHint" stdset="0">
         <size>
@@ -126,42 +167,10 @@
       </spacer>
      </item>
      <item>
-      <spacer name="horizontalSpacer_5">
-       <property name="orientation">
-        <enum>Qt::Orientation::Horizontal</enum>
-       </property>
-       <property name="sizeType">
-        <enum>QSizePolicy::Policy::Maximum</enum>
-       </property>
-       <property name="sizeHint" stdset="0">
-        <size>
-         <width>10</width>
-         <height>20</height>
-        </size>
-       </property>
-      </spacer>
-     </item>
-     <item>
-      <widget class="QWidget" name="videoFeedWidget" native="true">
-       <property name="minimumSize">
-        <size>
-         <width>1180</width>
-         <height>832</height>
-        </size>
-       </property>
-       <property name="maximumSize">
-        <size>
-         <width>1180</width>
-         <height>832</height>
-        </size>
-       </property>
-      </widget>
-     </item>
-     <item alignment="Qt::AlignmentFlag::AlignLeft|Qt::AlignmentFlag::AlignVCenter">
       <widget class="QSlider" name="verticalSlider">
        <property name="minimumSize">
         <size>
-         <width>100</width>
+         <width>80</width>
          <height>700</height>
         </size>
        </property>
@@ -172,33 +181,82 @@
         </size>
        </property>
        <property name="styleSheet">
-        <string notr="true">
-#verticalSlider::groove:vertical {
-    background: rgba(0, 0, 0, 0.25); 
-    width: 30px;         
-    border-radius: 15px;
-    border: none;        
+        <string notr="true">#verticalSlider::groove:vertical {
+
+background: none; /* Groove will be fully covered by sub/add pages */
+
+width: 30px;
+
+border-radius: 15px;
+
+border: none;
+
 }
+
+
 
 #verticalSlider::handle:vertical {
-    background: #0D4D26; 
-    border: 1px solid #1E90FF; 
-    width: 60px;        
-    height: 13px;      
-    border-radius: 7px; 
-    margin: 0 -15px;     
+
+background: #0D4D26;
+
+border: 1px solid #1E90FF;
+
+width: 60px;
+
+height: 13px;
+
+border-radius: 7px;
+
+margin: 0 -15px;
+
 }
 
 
-#verticalSlider::add-page:vertical {
-    background: #0BC200; 
-    border-radius: 15px;
-	width: 30px;
-}
 
+/* FILLED part – above the handle (due to invertedAppearance) */
 
 #verticalSlider::sub-page:vertical {
-    background: none;                                 
+
+background: qlineargradient(
+
+x1: 0, y1: 0, x2: 0, y2: 1,
+
+stop: 0 rgba(0, 0, 0, 0.25),
+
+stop: 1 rgba(0, 0, 0, 0.25)
+
+);
+
+border: none;
+
+border-top-left-radius: 15px;
+
+border-top-right-radius: 15px;
+
+border-bottom-left-radius: 0px;
+
+border-bottom-right-radius: 0px;
+
+}
+
+
+
+/* UNFILLED part – below the handle */
+
+#verticalSlider::add-page:vertical {
+
+background: #0BC200;
+
+border: none;
+
+border-bottom-left-radius: 15px;
+
+border-bottom-right-radius: 15px;
+
+border-top-left-radius: 0px;
+
+border-top-right-radius: 0px;
+
 }</string>
        </property>
        <property name="orientation">
@@ -210,13 +268,16 @@
       </widget>
      </item>
      <item>
-      <spacer name="horizontalSpacer_6">
+      <spacer name="horizontalSpacer_5">
        <property name="orientation">
         <enum>Qt::Orientation::Horizontal</enum>
        </property>
+       <property name="sizeType">
+        <enum>QSizePolicy::Policy::MinimumExpanding</enum>
+       </property>
        <property name="sizeHint" stdset="0">
         <size>
-         <width>40</width>
+         <width>20</width>
          <height>20</height>
         </size>
        </property>
@@ -225,9 +286,12 @@
     </layout>
    </item>
    <item>
-    <spacer name="verticalSpacer_4">
+    <spacer name="verticalSpacer_7">
      <property name="orientation">
       <enum>Qt::Orientation::Vertical</enum>
+     </property>
+     <property name="sizeType">
+      <enum>QSizePolicy::Policy::MinimumExpanding</enum>
      </property>
      <property name="sizeHint" stdset="0">
       <size>
@@ -253,7 +317,7 @@
       </spacer>
      </item>
      <item alignment="Qt::AlignmentFlag::AlignHCenter|Qt::AlignmentFlag::AlignVCenter">
-      <widget class="QPushButton" name="back_2">
+      <widget class="QPushButton" name="capture">
        <property name="enabled">
         <bool>true</bool>
        </property>
@@ -273,16 +337,38 @@
         <cursorShape>PointingHandCursor</cursorShape>
        </property>
        <property name="styleSheet">
-        <string notr="true">#back {
-    background-color: transparent; 
-    border: none; 
-    padding: 0px;
-    margin: 0px; 
+        <string notr="true">#capture {
+border-radius: 9px;
+border-bottom: 3px solid #020202;
+background: #0BC200;
+width: 350px;
+height: 101px;
+
+color: #FFF;
+text-align: center;
+font-family: &quot;Roboto Condensed&quot;;
+font-size: 64px;
+font-style: italic;
+font-weight: 550;
+line-height: normal;
 }
-</string>
+
+#capture:hover {
+ background: #089A00;
+}</string>
        </property>
        <property name="text">
-        <string>Capture</string>
+        <string/>
+       </property>
+       <property name="icon">
+        <iconset resource="resources.qrc">
+         <normaloff>:/icons/Icons/camera.svg</normaloff>:/icons/Icons/camera.svg</iconset>
+       </property>
+       <property name="iconSize">
+        <size>
+         <width>70</width>
+         <height>70</height>
+        </size>
        </property>
        <property name="checkable">
         <bool>false</bool>
@@ -309,16 +395,21 @@
      <property name="orientation">
       <enum>Qt::Orientation::Vertical</enum>
      </property>
+     <property name="sizeType">
+      <enum>QSizePolicy::Policy::Expanding</enum>
+     </property>
      <property name="sizeHint" stdset="0">
       <size>
        <width>20</width>
-       <height>40</height>
+       <height>20</height>
       </size>
      </property>
     </spacer>
    </item>
   </layout>
  </widget>
- <resources/>
+ <resources>
+  <include location="resources.qrc"/>
+ </resources>
  <connections/>
 </ui>

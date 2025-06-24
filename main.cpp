@@ -13,6 +13,6 @@ int main(int argc, char *argv[])
     }
 
     BRBooth w;
-    w.showMaximized();
+    w.showFullScreen();
     return a.exec();
 }

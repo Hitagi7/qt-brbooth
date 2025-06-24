@@ -36,6 +36,7 @@ private:
     QCamera *camera;
     QVideoWidget *videoOutput; // Displays the video
     QMediaCaptureSession *captureSession; // Connects camera to videoOutput
+
 };
 
 #endif // CAPTURE_H
