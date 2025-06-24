@@ -58,7 +58,6 @@ Capture::~Capture()
     if (camera && camera->isActive()) {
         camera->stop();
     }
-    delete captureSession;
     delete camera;
     delete videoOutput;
     delete ui;

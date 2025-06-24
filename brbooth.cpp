@@ -10,6 +10,7 @@ BRBooth::BRBooth(QWidget *parent)
     : QMainWindow(parent)
     , ui(new Ui::BRBooth)
 {
+    qDebug() << "OpenCV Version: "<< CV_VERSION;
     ui->setupUi(this);
     this->setStyleSheet("QMainWindow#BRBooth {"
                         "    background-image: url(:/images/pics/bg.jpg);"
