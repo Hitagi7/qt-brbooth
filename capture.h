@@ -4,6 +4,12 @@
 #include <QWidget>
 #include <QMouseEvent> //Included for Icon Hover for Back Button
 
+#include <QCamera>
+#include <QCameraDevice>
+#include <QMediaDevices>
+#include <QVideoWidget>           // For displaying the video feed
+#include <QMediaCaptureSession>   // To connect camera to video output
+
 namespace Ui {
 class Capture;
 }
@@ -25,6 +31,11 @@ private slots:
 
 private:
     Ui::Capture *ui;
+
+    // Declare camera-related objects
+    QCamera *camera;
+    QVideoWidget *videoOutput; // Displays the video
+    QMediaCaptureSession *captureSession; // Connects camera to videoOutput
 };
 
 #endif // CAPTURE_H

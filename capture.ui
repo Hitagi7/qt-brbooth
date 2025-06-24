@@ -6,7 +6,7 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>1305</width>
+    <width>1324</width>
     <height>946</height>
    </rect>
   </property>
@@ -125,28 +125,6 @@
        </property>
       </spacer>
      </item>
-     <item alignment="Qt::AlignmentFlag::AlignLeft">
-      <widget class="QLabel" name="label">
-       <property name="minimumSize">
-        <size>
-         <width>1180</width>
-         <height>0</height>
-        </size>
-       </property>
-       <property name="maximumSize">
-        <size>
-         <width>1180</width>
-         <height>832</height>
-        </size>
-       </property>
-       <property name="text">
-        <string/>
-       </property>
-       <property name="pixmap">
-        <pixmap resource="resources.qrc">:/images/pics/capture.png</pixmap>
-       </property>
-      </widget>
-     </item>
      <item>
       <spacer name="horizontalSpacer_5">
        <property name="orientation">
@@ -162,6 +140,22 @@
         </size>
        </property>
       </spacer>
+     </item>
+     <item>
+      <widget class="QWidget" name="videoFeedWidget" native="true">
+       <property name="minimumSize">
+        <size>
+         <width>1180</width>
+         <height>832</height>
+        </size>
+       </property>
+       <property name="maximumSize">
+        <size>
+         <width>1180</width>
+         <height>832</height>
+        </size>
+       </property>
+      </widget>
      </item>
      <item alignment="Qt::AlignmentFlag::AlignLeft|Qt::AlignmentFlag::AlignVCenter">
       <widget class="QSlider" name="verticalSlider">
@@ -325,8 +319,6 @@
    </item>
   </layout>
  </widget>
- <resources>
-  <include location="resources.qrc"/>
- </resources>
+ <resources/>
  <connections/>
 </ui>
