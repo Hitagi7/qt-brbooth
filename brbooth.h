@@ -2,10 +2,12 @@
 #define BRBOOTH_H
 
 #include <QMainWindow>
+#include "opencv2/core/core.hpp"
 #include "foreground.h"
 #include "dynamic.h"
 #include "background.h"
 #include "capture.h"
+#include "final.h"
 
 QT_BEGIN_NAMESPACE
 namespace Ui {
@@ -28,8 +30,10 @@ private slots:
     void showdynamicPage();
     void showBackgroundPage();
     void showCapturePage();
+    void showFinalOutputPage();
     void on_staticButton_clicked();
     void on_dynamicButton_clicked();
+    void on_capture_clicked();
 
 private:
     Ui::BRBooth *ui;
@@ -42,5 +46,7 @@ private:
     int backgroundPageIndex;
     Capture *capturePage;
     int capturePageIndex;
+    Final *finalOutputPage;
+    int finalOutputPageIndex;
 };
 #endif // BRBOOTH_H

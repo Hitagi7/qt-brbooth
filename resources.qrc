@@ -29,5 +29,6 @@
         <file>Icons/hover.svg</file>
         <file>Icons/normal.svg</file>
         <file>Icons/camera.svg</file>
+        <file>Icons/save.svg</file>
     </qresource>
 </RCC>

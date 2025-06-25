@@ -70,3 +70,9 @@ void Capture::on_back_clicked()
     emit backtoBackgroundPage();
 }
 
+
+void Capture::on_capture_clicked()
+{
+    emit showFinalOutputPage();
+}
+

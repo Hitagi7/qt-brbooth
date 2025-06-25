@@ -25,9 +25,12 @@ public:
 
 signals:
     void backtoBackgroundPage();
+    void showFinalOutputPage();
 
 private slots:
     void on_back_clicked();
+
+    void on_capture_clicked();
 
 private:
     Ui::Capture *ui;

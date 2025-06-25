@@ -11,6 +11,7 @@ BRBooth::BRBooth(QWidget *parent)
     , ui(new Ui::BRBooth)
 {
     ui->setupUi(this);
+    qDebug() << "OpenCV Version: " << CV_VERSION;
     this->setStyleSheet("QMainWindow#BRBooth {"
                         "    background-image: url(:/images/pics/bg.jpg);"
                         "    background-repeat: no-repeat;"
@@ -34,6 +35,11 @@ BRBooth::BRBooth(QWidget *parent)
     ui->stackedWidget->addWidget(capturePage);
     capturePageIndex = ui->stackedWidget->indexOf(capturePage);
 
+    //Add widget for final output page
+    finalOutputPage = new Final(this);
+    ui->stackedWidget->addWidget(finalOutputPage);
+    finalOutputPageIndex = ui->stackedWidget->indexOf(finalOutputPage);
+
     // Static
     // Show landing page upon pressing back button from foreground
     ui->stackedWidget->setCurrentIndex(landingPageIndex);
@@ -55,6 +61,12 @@ BRBooth::BRBooth(QWidget *parent)
 
     if (capturePage) {
         connect(capturePage, &Capture::backtoBackgroundPage, this, &BRBooth::showBackgroundPage);
+        connect(capturePage, &Capture::showFinalOutputPage, this, &BRBooth::showFinalOutputPage);
+    }
+
+    //Final Output Page
+    if(finalOutputPage){
+        connect(finalOutputPage, &Final::backToCapturePage, this, &BRBooth::showCapturePage);
     }
 
     // Resets static foreground page everytime its loaded
@@ -98,6 +110,11 @@ void BRBooth::showCapturePage()
     ui->stackedWidget->setCurrentIndex(capturePageIndex);
 }
 
+void BRBooth::showFinalOutputPage()
+{
+    ui->stackedWidget->setCurrentIndex(finalOutputPageIndex);
+}
+
 void BRBooth::on_staticButton_clicked()
 {
     showForegroundPage();
@@ -106,4 +123,9 @@ void BRBooth::on_staticButton_clicked()
 void BRBooth::on_dynamicButton_clicked()
 {
     showdynamicPage();
+}
+
+void BRBooth::on_capture_clicked()
+{
+    showFinalOutputPage();
 }
