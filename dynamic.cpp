@@ -1,6 +1,6 @@
 #include "dynamic.h"
 #include "ui_dynamic.h"
-#include "iconhover.h" // Assuming this class is correctly defined for back button hover effect
+#include "iconhover.h"
 #include <QStyle>
 #include <QRegularExpression>
 #include <QVBoxLayout> // For arranging video
@@ -69,14 +69,12 @@ void Dynamic::setupVideoPlayers()
                << "qrc:/videos/videos/video4.mp4"
                << "qrc:/videos/videos/video5.mp4";
 
-    // New: List of thumbnail paths, corresponding to videoPaths
-    // IMPORTANT: You need to create these QRC paths for your thumbnail images
     QStringList thumbnailPaths;
     thumbnailPaths << "qrc:/images/pics/dynamic1.png"
-                   << "qrc:/thumbnails/video2_thumb.jpg"
-                   << "qrc:/thumbnails/video3_thumb.jpg"
-                   << "qrc:/thumbnails/video4_thumb.jpg"
-                   << "qrc:/thumbnails/video5_thumb.jpg";
+                   << "qrc:/images/pics/dynamic2.png"
+                   << "qrc:/images/pics/dynamic3.png"
+                   << "qrc:/images/pics/dynamic4.png"
+                   << "qrc:/images/pics/dynamic5.png";
 
     for (int i = 0; i < videoPlaceholders.size(); ++i) {
         QWidget* placeholder = videoPlaceholders.at(i);
