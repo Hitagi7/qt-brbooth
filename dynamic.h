@@ -2,15 +2,16 @@
 #define DYNAMIC_H
 
 #include <QWidget>
-#include <QPushButton> // Keep QPushButton for your 'back' button
+#include <QPushButton>
 #include <QTimer>
 #include <QEvent>
-#include <QMouseEvent> // Included for Icon Hover for Back Button
+#include <QMouseEvent>
 
 #include <QMediaPlayer>
 #include <QVideoWidget>
-#include <QMap> // To store multiple video
-#include <QLabel> // New: Include QLabel for displaying thumbnails
+#include <QMap>
+#include <QLabel>
+#include <QStackedLayout> // Included as per your comments
 
 QT_BEGIN_NAMESPACE
 namespace Ui {
@@ -18,8 +19,7 @@ class Dynamic;
 }
 QT_END_NAMESPACE
 
-// Forward declaration of Iconhover if it's used
-class Iconhover;
+class Iconhover; // Forward declaration
 
 class Dynamic : public QWidget
 {
@@ -34,7 +34,7 @@ public slots:
 
 signals:
     void backtoLandingPage();
-    void videoSelectedTwice(); // Changed signal name to reflect video selection
+    void videoSelectedTwice();
 
 protected:
     bool eventFilter(QObject *obj, QEvent *event) override;
@@ -42,21 +42,24 @@ protected:
 private slots:
     void on_back_clicked();
     void resetDebounce();
-    void processVideoClick(QObject *videoWIdgetObj);
+    void processVideoClick(QObject *videoWidgetObj); // Corrected parameter name for consistency
 
 private:
     Ui::Dynamic *ui;
-    QObject *currentSelectedVideoWidget;
+
+    // Changed to QVideoWidget* for type safety as it's always used as such
+    QVideoWidget *currentSelectedVideoWidget;
     QTimer *debounceTimer;
     bool debounceActive;
 
     QMap<QString, QMediaPlayer*> videoPlayers;
     QMap<QString, QVideoWidget*> videoWidgets;
-    QMap<QString, QLabel*> thumbnailLabels; // New: To store QLabel for thumbnails
+    QMap<QString, QLabel*> thumbnailLabels;
+    QMap<QString, QStackedLayout*> videoLayouts;
 
     void applyHighlightStyle(QObject *obj, bool highlight);
     void setupVideoPlayers();
-    void showThumbnail(QObject *videoWidgetObj, bool show); // New: Helper to show/hide thumbnail
+    void showThumbnail(QObject *videoWidgetObj, bool show);
 };
 
 #endif // DYNAMIC_H
