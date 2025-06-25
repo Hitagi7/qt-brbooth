@@ -36,7 +36,7 @@
      <property name="sizeHint" stdset="0">
       <size>
        <width>20</width>
-       <height>45</height>
+       <height>65</height>
       </size>
      </property>
     </spacer>
@@ -50,26 +50,13 @@
       <enum>QLayout::SizeConstraint::SetDefaultConstraint</enum>
      </property>
      <item>
-      <spacer name="verticalSpacer_4">
-       <property name="orientation">
-        <enum>Qt::Orientation::Vertical</enum>
-       </property>
-       <property name="sizeHint" stdset="0">
-        <size>
-         <width>20</width>
-         <height>50</height>
-        </size>
-       </property>
-      </spacer>
-     </item>
-     <item alignment="Qt::AlignmentFlag::AlignTop">
       <widget class="QPushButton" name="back">
        <property name="enabled">
         <bool>true</bool>
        </property>
        <property name="minimumSize">
         <size>
-         <width>200</width>
+         <width>100</width>
          <height>80</height>
         </size>
        </property>
@@ -115,7 +102,7 @@
         <enum>Qt::Orientation::Horizontal</enum>
        </property>
        <property name="sizeType">
-        <enum>QSizePolicy::Policy::Expanding</enum>
+        <enum>QSizePolicy::Policy::Minimum</enum>
        </property>
        <property name="sizeHint" stdset="0">
         <size>
@@ -125,27 +112,7 @@
        </property>
       </spacer>
      </item>
-    </layout>
-   </item>
-   <item>
-    <spacer name="verticalSpacer_5">
-     <property name="orientation">
-      <enum>Qt::Orientation::Vertical</enum>
-     </property>
-     <property name="sizeHint" stdset="0">
-      <size>
-       <width>20</width>
-       <height>20</height>
-      </size>
-     </property>
-    </spacer>
-   </item>
-   <item>
-    <layout class="QVBoxLayout" name="verticalLayout_2">
-     <property name="bottomMargin">
-      <number>0</number>
-     </property>
-     <item alignment="Qt::AlignmentFlag::AlignHCenter">
+     <item>
       <widget class="QFrame" name="fglabel">
        <property name="sizePolicy">
         <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
@@ -223,6 +190,22 @@
        </layout>
       </widget>
      </item>
+     <item>
+      <spacer name="horizontalSpacer_2">
+       <property name="orientation">
+        <enum>Qt::Orientation::Horizontal</enum>
+       </property>
+       <property name="sizeType">
+        <enum>QSizePolicy::Policy::Minimum</enum>
+       </property>
+       <property name="sizeHint" stdset="0">
+        <size>
+         <width>350</width>
+         <height>20</height>
+        </size>
+       </property>
+      </spacer>
+     </item>
     </layout>
    </item>
    <item>
@@ -230,13 +213,23 @@
      <property name="orientation">
       <enum>Qt::Orientation::Vertical</enum>
      </property>
+     <property name="sizeType">
+      <enum>QSizePolicy::Policy::Minimum</enum>
+     </property>
      <property name="sizeHint" stdset="0">
       <size>
        <width>20</width>
-       <height>40</height>
+       <height>100</height>
       </size>
      </property>
     </spacer>
+   </item>
+   <item>
+    <layout class="QVBoxLayout" name="verticalLayout_2">
+     <property name="bottomMargin">
+      <number>0</number>
+     </property>
+    </layout>
    </item>
    <item>
     <layout class="QGridLayout" name="gridLayout_2">
@@ -331,19 +324,6 @@
         <bool>false</bool>
        </property>
       </widget>
-     </item>
-     <item row="4" column="1">
-      <spacer name="verticalSpacer">
-       <property name="orientation">
-        <enum>Qt::Orientation::Vertical</enum>
-       </property>
-       <property name="sizeHint" stdset="0">
-        <size>
-         <width>20</width>
-         <height>40</height>
-        </size>
-       </property>
-      </spacer>
      </item>
      <item row="3" column="1">
       <widget class="QPushButton" name="image5">
@@ -540,6 +520,22 @@
       </widget>
      </item>
     </layout>
+   </item>
+   <item>
+    <spacer name="verticalSpacer">
+     <property name="orientation">
+      <enum>Qt::Orientation::Vertical</enum>
+     </property>
+     <property name="sizeType">
+      <enum>QSizePolicy::Policy::MinimumExpanding</enum>
+     </property>
+     <property name="sizeHint" stdset="0">
+      <size>
+       <width>20</width>
+       <height>30</height>
+      </size>
+     </property>
+    </spacer>
    </item>
   </layout>
  </widget>
