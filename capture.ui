@@ -6,8 +6,13 @@
    <rect>
     <x>0</x>
     <y>0</y>
+<<<<<<< HEAD
     <width>1890</width>
     <height>1382</height>
+=======
+    <width>1324</width>
+    <height>1052</height>
+>>>>>>> hitagi
    </rect>
   </property>
   <property name="windowTitle">

@@ -59,7 +59,6 @@ Capture::~Capture()
     if (camera && camera->isActive()) {
         camera->stop();
     }
-    delete captureSession;
     delete camera;
     delete videoOutput;
     delete ui;
@@ -67,6 +66,6 @@ Capture::~Capture()
 
 void Capture::on_back_clicked()
 {
-    emit backtoBackgroundPage();
+    emit backtoPreviousPage();
 }
 

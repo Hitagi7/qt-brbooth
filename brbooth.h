@@ -2,6 +2,9 @@
 #define BRBOOTH_H
 
 #include <QMainWindow>
+
+#include "opencv2/core/core.hpp"
+
 #include "foreground.h"
 #include "dynamic.h"
 #include "background.h"
