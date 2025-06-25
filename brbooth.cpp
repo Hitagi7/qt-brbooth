@@ -43,6 +43,9 @@ BRBooth::BRBooth(QWidget *parent)
     // Show background page upon double clicking a template
     connect(foregroundPage, &Foreground::imageSelectedTwice, this, &BRBooth::showBackgroundPage);
 
+    // Initialize variable for previous page
+    int previousPageIndex = 0;
+
     // Dynamic back button
     if (dynamicPage) {
         connect(dynamicPage, &Dynamic::backtoLandingPage, this, &BRBooth::showLandingPage);
@@ -55,7 +58,7 @@ BRBooth::BRBooth(QWidget *parent)
     }
 
     if (capturePage) {
-        connect(capturePage, &Capture::backtoBackgroundPage, this, &BRBooth::showBackgroundPage);
+        connect(capturePage, &Capture::backtoPreviousPage, this, &BRBooth::showBackgroundPage);
     }
 
     // Resets static foreground page everytime its loaded

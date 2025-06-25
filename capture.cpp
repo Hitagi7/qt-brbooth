@@ -65,6 +65,6 @@ Capture::~Capture()
 
 void Capture::on_back_clicked()
 {
-    emit backtoBackgroundPage();
+    emit backtoPreviousPage();
 }
 
