@@ -4,6 +4,7 @@
 #include "dynamic.h"
 #include "background.h"
 #include "capture.h"
+#include "final.h"
 
 // Boilerplate
 BRBooth::BRBooth(QWidget *parent)
@@ -12,6 +13,7 @@ BRBooth::BRBooth(QWidget *parent)
 {
     qDebug() << "OpenCV Version: "<< CV_VERSION;
     ui->setupUi(this);
+    qDebug() << "OpenCV Version: " << CV_VERSION;
     this->setStyleSheet("QMainWindow#BRBooth {"
                         "    background-image: url(:/images/pics/bg.jpg);"
                         "    background-repeat: no-repeat;"
@@ -34,6 +36,11 @@ BRBooth::BRBooth(QWidget *parent)
     capturePage = new Capture(this);
     ui->stackedWidget->addWidget(capturePage);
     capturePageIndex = ui->stackedWidget->indexOf(capturePage);
+
+    //Add widget for final output page
+    finalOutputPage = new Final(this);
+    ui->stackedWidget->addWidget(finalOutputPage);
+    finalOutputPageIndex = ui->stackedWidget->indexOf(finalOutputPage);
 
     // Static
     // Show landing page upon pressing back button from foreground
@@ -73,58 +80,74 @@ BRBooth::BRBooth(QWidget *parent)
                 showDynamicPage();
             }
         });
+        connect(capturePage, &Capture::showFinalOutputPage, this, &BRBooth::showFinalOutputPage);
     }
 
-    // Resets static foreground page everytime its loaded
-    connect(ui->stackedWidget, &QStackedWidget::currentChanged, this, [this](int index){
-        if (index == foregroundPageIndex) {
-            foregroundPage->resetPage();
+        //Final Output Page
+        if(finalOutputPage){
+            connect(finalOutputPage, &Final::backToCapturePage, this, &BRBooth::showCapturePage);
         }
-        if (index == backgroundPageIndex) {
-            backgroundPage->resetPage();
-        }
-        if (index == dynamicPageIndex) {
-            dynamicPage->resetPage();
-        }
-    });
-}
 
-BRBooth::~BRBooth()
-{
-    delete ui;
-}
+        // Resets static foreground page everytime its loaded
+        connect(ui->stackedWidget, &QStackedWidget::currentChanged, this, [this](int index){
+            if (index == foregroundPageIndex) {
+                foregroundPage->resetPage();
+            }
+            if (index == backgroundPageIndex) {
+                backgroundPage->resetPage();
+            }
+            if (index == dynamicPageIndex) {
+                dynamicPage->resetPage();
+            }
+        });
+    }
 
-void BRBooth::showLandingPage()
-{
-    ui->stackedWidget->setCurrentIndex(landingPageIndex);
-}
+    BRBooth::~BRBooth()
+    {
+        delete ui;
+    }
 
-void BRBooth::showForegroundPage()
-{
-    ui->stackedWidget->setCurrentIndex(foregroundPageIndex);
-}
+    void BRBooth::showLandingPage()
+    {
+        ui->stackedWidget->setCurrentIndex(landingPageIndex);
+    }
 
-void BRBooth::showDynamicPage()
-{
-    ui->stackedWidget->setCurrentIndex(dynamicPageIndex);
-}
+    void BRBooth::showForegroundPage()
+    {
+        ui->stackedWidget->setCurrentIndex(foregroundPageIndex);
+    }
 
-void BRBooth::showBackgroundPage()
-{
-    ui->stackedWidget->setCurrentIndex(backgroundPageIndex);
-}
+    void BRBooth::showDynamicPage()
+    {
+        ui->stackedWidget->setCurrentIndex(dynamicPageIndex);
+    }
 
-void BRBooth::showCapturePage()
-{
-    ui->stackedWidget->setCurrentIndex(capturePageIndex);
-}
+    void BRBooth::showBackgroundPage()
+    {
+        ui->stackedWidget->setCurrentIndex(backgroundPageIndex);
+    }
 
-void BRBooth::on_staticButton_clicked()
-{
-    showForegroundPage();
-}
+    void BRBooth::showCapturePage()
+    {
+        ui->stackedWidget->setCurrentIndex(capturePageIndex);
+    }
 
-void BRBooth::on_dynamicButton_clicked()
-{
-    showDynamicPage();
-}
+    void BRBooth::showFinalOutputPage()
+    {
+        ui->stackedWidget->setCurrentIndex(finalOutputPageIndex);
+    }
+
+    void BRBooth::on_staticButton_clicked()
+    {
+        showForegroundPage();
+    }
+
+    void BRBooth::on_dynamicButton_clicked()
+    {
+        showDynamicPage();
+    }
+
+    void BRBooth::on_capture_clicked()
+    {
+        showFinalOutputPage();
+    }

@@ -68,3 +68,11 @@ void Capture::on_back_clicked()
 {
     emit backtoPreviousPage();
 }
+
+
+void Capture::on_capture_clicked()
+{
+    emit showFinalOutputPage();
+}
+
+
