@@ -42,9 +42,10 @@ BRBooth::BRBooth(QWidget *parent)
     // Show background page upon double clicking a template
     connect(foregroundPage, &Foreground::imageSelectedTwice, this, &BRBooth::showBackgroundPage);
 
-    // Dynamic back button
+    // Dynamic back button and background
     if (dynamicPage) {
         connect(dynamicPage, &Dynamic::backtoLandingPage, this, &BRBooth::showLandingPage);
+        connect(dynamicPage, &Dynamic::videoSelectedTwice, this, &BRBooth::showCapturePage); // Connect to capture interface
     }
 
     // Static background back button
@@ -83,7 +84,7 @@ void BRBooth::showForegroundPage()
     ui->stackedWidget->setCurrentIndex(foregroundPageIndex);
 }
 
-void BRBooth::showdynamicPage()
+void BRBooth::showDynamicPage()
 {
     ui->stackedWidget->setCurrentIndex(dynamicPageIndex);
 }
@@ -105,5 +106,5 @@ void BRBooth::on_staticButton_clicked()
 
 void BRBooth::on_dynamicButton_clicked()
 {
-    showdynamicPage();
+    showDynamicPage();
 }

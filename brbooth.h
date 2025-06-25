@@ -25,7 +25,7 @@ public:
 private slots:
     void showLandingPage();
     void showForegroundPage();
-    void showdynamicPage();
+    void showDynamicPage();
     void showBackgroundPage();
     void showCapturePage();
     void on_staticButton_clicked();

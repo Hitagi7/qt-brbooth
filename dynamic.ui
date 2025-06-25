@@ -78,10 +78,10 @@
        </property>
        <property name="styleSheet">
         <string notr="true">#back {
-    background-color: transparent; 
-    border: none; 
+    background-color: transparent;
+    border: none;
     padding: 0px;
-    margin: 0px; 
+    margin: 0px;
 }
 </string>
        </property>
@@ -223,7 +223,7 @@
     </spacer>
    </item>
    <item>
-    <layout class="QHBoxLayout" name="topImagesHorizontalLayout">
+    <layout class="QHBoxLayout" name="topVideosHorizontalLayout">
      <item>
       <spacer name="horizontalSpacer_left1">
        <property name="orientation">
@@ -238,9 +238,9 @@
       </spacer>
      </item>
      <item>
-      <layout class="QGridLayout" name="gridLayout_top_images">
+      <layout class="QGridLayout" name="gridLayout_top_videos">
        <item row="0" column="0">
-        <widget class="QPushButton" name="image1">
+        <widget class="QWidget" name="videoPlaceholder1">
          <property name="minimumSize">
           <size>
            <width>425</width>
@@ -260,29 +260,28 @@
           <bool>false</bool>
          </property>
          <property name="styleSheet">
-          <string notr="true">#image1{
-    border: none; 
-    background-image: url(:/images/pics/dynamic1.png); 
-    background-repeat: no-repeat;
-    background-position: center;
-	background-color: transparent;
-	width: 241px;
-   height: 141px;
+          <string notr="true">/* This QWidget acts as a container for QVideoWidget */
+/* The actual styling for the QVideoWidget inside will be applied dynamically in C++ or via a separate QSS rule targeting QVideoWidget. */
+/* However, you can set a default border for the placeholder if you wish */
+#videoPlaceholder1 {
+    border: 2px solid gray; /* Example default border */
+    border-radius: 8px;
+}
+/* This style below will be applied to the QVideoWidget itself, which is parented to videoPlaceholder1 */
+QVideoWidget#videoWidget1 { /* Use ID selector if you set objectName in C++ */
+    border: none;
+    background-color: black; /* Or transparent if you prefer */
 }
 
-#image1::hover{
-	border: 5px solid #FFC20F;
+QVideoWidget#videoWidget1::hover {
+    border: 5px solid #FFC20F;
     border-radius: 8px;
 }
 
-/* NEW: Style for the 'selected' custom property */
-#image1[selected=&quot;true&quot;] { /* Use attribute selector for your custom property */
+QVideoWidget#videoWidget1[selected="true"] {
     border: 5px solid #0BC200;
     border-radius: 8px;
 }</string>
-         </property>
-         <property name="text">
-          <string/>
          </property>
         </widget>
        </item>
@@ -303,7 +302,7 @@
         </spacer>
        </item>
        <item row="0" column="2">
-        <widget class="QPushButton" name="image2">
+        <widget class="QWidget" name="videoPlaceholder2">
          <property name="minimumSize">
           <size>
            <width>425</width>
@@ -320,29 +319,24 @@
           <cursorShape>PointingHandCursor</cursorShape>
          </property>
          <property name="styleSheet">
-          <string notr="true">#image2{
-    border: none; 
-    background-image: url(:/images/pics/dynamic2.png); 
-    background-repeat: no-repeat;
-    background-position: center;
-	background-color: transparent;
-	width: 241px;
-   height: 141px;
+          <string notr="true">#videoPlaceholder2 {
+    border: 2px solid gray;
+    border-radius: 8px;
+}
+QVideoWidget#videoWidget2 {
+    border: none;
+    background-color: black;
 }
 
-#image2::hover{
-	border: 5px solid #FFC20F;
+QVideoWidget#videoWidget2::hover {
+    border: 5px solid #FFC20F;
     border-radius: 8px;
 }
 
-/* NEW: Style for the 'selected' custom property */
-#image2[selected=&quot;true&quot;] { /* Use attribute selector for your custom property */
+QVideoWidget#videoWidget2[selected="true"] {
     border: 5px solid #0BC200;
     border-radius: 8px;
 }</string>
-         </property>
-         <property name="text">
-          <string/>
          </property>
         </widget>
        </item>
@@ -363,7 +357,7 @@
         </spacer>
        </item>
        <item row="0" column="4">
-        <widget class="QPushButton" name="image3">
+        <widget class="QWidget" name="videoPlaceholder3">
          <property name="minimumSize">
           <size>
            <width>425</width>
@@ -380,29 +374,24 @@
           <cursorShape>PointingHandCursor</cursorShape>
          </property>
          <property name="styleSheet">
-          <string notr="true">#image3{
-    border: none; 
-    background-image: url(:/images/pics/dynamic3.png); 
-    background-repeat: no-repeat;
-    background-position: center;
-	background-color: transparent;
-	width: 241px;
-   height: 141px;
+          <string notr="true">#videoPlaceholder3 {
+    border: 2px solid gray;
+    border-radius: 8px;
+}
+QVideoWidget#videoWidget3 {
+    border: none;
+    background-color: black;
 }
 
-#image3::hover{
-	border: 5px solid #FFC20F;
+QVideoWidget#videoWidget3::hover {
+    border: 5px solid #FFC20F;
     border-radius: 8px;
 }
 
-/* NEW: Style for the 'selected' custom property */
-#image3[selected=&quot;true&quot;] { /* Use attribute selector for your custom property */
+QVideoWidget#videoWidget3[selected="true"] {
     border: 5px solid #0BC200;
     border-radius: 8px;
 }</string>
-         </property>
-         <property name="text">
-          <string/>
          </property>
         </widget>
        </item>
@@ -437,7 +426,7 @@
     </spacer>
    </item>
    <item>
-    <layout class="QHBoxLayout" name="bottomImagesHorizontalLayout">
+    <layout class="QHBoxLayout" name="bottomVideosHorizontalLayout">
      <item>
       <spacer name="horizontalSpacer_left2">
        <property name="orientation">
@@ -452,9 +441,9 @@
       </spacer>
      </item>
      <item>
-      <layout class="QGridLayout" name="gridLayout_bottom_images">
+      <layout class="QGridLayout" name="gridLayout_bottom_videos">
        <item row="0" column="0">
-        <widget class="QPushButton" name="image4">
+        <widget class="QWidget" name="videoPlaceholder4">
          <property name="minimumSize">
           <size>
            <width>425</width>
@@ -471,29 +460,24 @@
           <cursorShape>PointingHandCursor</cursorShape>
          </property>
          <property name="styleSheet">
-          <string notr="true">#image4{
-    border: none; 
-    background-image: url(:/images/pics/dynamic4.png); 
-    background-repeat: no-repeat;
-    background-position: center;
-	background-color: transparent;
-	width: 241px;
-   height: 141px;
+          <string notr="true">#videoPlaceholder4 {
+    border: 2px solid gray;
+    border-radius: 8px;
+}
+QVideoWidget#videoWidget4 {
+    border: none;
+    background-color: black;
 }
 
-#image4::hover{
-	border: 5px solid #FFC20F;
+QVideoWidget#videoWidget4::hover {
+    border: 5px solid #FFC20F;
     border-radius: 8px;
 }
 
-/* NEW: Style for the 'selected' custom property */
-#image4[selected=&quot;true&quot;] { /* Use attribute selector for your custom property */
+QVideoWidget#videoWidget4[selected="true"] {
     border: 5px solid #0BC200;
     border-radius: 8px;
 }</string>
-         </property>
-         <property name="text">
-          <string/>
          </property>
         </widget>
        </item>
@@ -514,7 +498,7 @@
         </spacer>
        </item>
        <item row="0" column="2">
-        <widget class="QPushButton" name="image5">
+        <widget class="QWidget" name="videoPlaceholder5">
          <property name="minimumSize">
           <size>
            <width>425</width>
@@ -531,29 +515,24 @@
           <cursorShape>PointingHandCursor</cursorShape>
          </property>
          <property name="styleSheet">
-          <string notr="true">#image5{
-    border: none; 
-    background-image: url(:/images/pics/dynamic5.png); 
-    background-repeat: no-repeat;
-    background-position: center;
-	background-color: transparent;
-	width: 241px;
-   height: 141px;
+          <string notr="true">#videoPlaceholder5 {
+    border: 2px solid gray;
+    border-radius: 8px;
+}
+QVideoWidget#videoWidget5 {
+    border: none;
+    background-color: black;
 }
 
-#image5::hover{
-	border: 5px solid #FFC20F;
+QVideoWidget#videoWidget5::hover {
+    border: 5px solid #FFC20F;
     border-radius: 8px;
 }
 
-/* NEW: Style for the 'selected' custom property */
-#image5[selected=&quot;true&quot;] { /* Use attribute selector for your custom property */
+QVideoWidget#videoWidget5[selected="true"] {
     border: 5px solid #0BC200;
     border-radius: 8px;
 }</string>
-         </property>
-         <property name="text">
-          <string/>
          </property>
         </widget>
        </item>

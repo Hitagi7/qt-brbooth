@@ -9,11 +9,6 @@
         <file>pics/4.png</file>
         <file>pics/5.png</file>
         <file>pics/6.png</file>
-        <file>pics/dynamic2.png</file>
-        <file>pics/dynamic1.png</file>
-        <file>pics/dynamic3.png</file>
-        <file>pics/dynamic4.png</file>
-        <file>pics/dynamic5.png</file>
         <file>pics/bg.jpg</file>
         <file>pics/bg1.png</file>
         <file>pics/bg2.png</file>
@@ -21,6 +16,11 @@
         <file>pics/bg4.png</file>
         <file>pics/bg5.png</file>
         <file>pics/capture.png</file>
+        <file>pics/dynamic1.png</file>
+        <file>pics/dynamic2.png</file>
+        <file>pics/dynamic3.png</file>
+        <file>pics/dynamic4.png</file>
+        <file>pics/dynamic5.png</file>
     </qresource>
     <qresource prefix="/fonts">
         <file>Fonts/static/RobotoCondensed-BoldItalic.ttf</file>
@@ -29,5 +29,12 @@
         <file>Icons/hover.svg</file>
         <file>Icons/normal.svg</file>
         <file>Icons/camera.svg</file>
+    </qresource>
+    <qresource prefix="/videos">
+        <file>videos/video1.mp4</file>
+        <file>videos/video2.mp4</file>
+        <file>videos/video3.mp4</file>
+        <file>videos/video4.mp4</file>
+        <file>videos/video5.mp4</file>
     </qresource>
 </RCC>
