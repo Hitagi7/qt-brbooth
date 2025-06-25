@@ -1,7 +1,7 @@
 #include "capture.h"
 #include "ui_capture.h"
 #include "iconhover.h"
-
+#include <QVBoxLayout>
 
 Capture::Capture(QWidget *parent)
     : QWidget(parent)
@@ -68,4 +68,3 @@ void Capture::on_back_clicked()
 {
     emit backtoPreviousPage();
 }
-

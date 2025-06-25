@@ -314,7 +314,7 @@ line-height: normal;
          </layout>
         </item>
         <item>
-         <spacer name="verticalSpacer_2">
+         <spacer name="verticalSpacer_9">
           <property name="orientation">
            <enum>Qt::Orientation::Vertical</enum>
           </property>

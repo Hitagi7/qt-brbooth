@@ -45,5 +45,6 @@ private:
     int backgroundPageIndex;
     Capture *capturePage;
     int capturePageIndex;
+    int previousPageIndex;
 };
 #endif // BRBOOTH_H

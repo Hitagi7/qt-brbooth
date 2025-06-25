@@ -43,23 +43,25 @@ BRBooth::BRBooth(QWidget *parent)
     // Show background page upon double clicking a template
     connect(foregroundPage, &Foreground::imageSelectedTwice, this, &BRBooth::showBackgroundPage);
 
-    // Initialize variable for previous page
-    int previousPageIndex = 0;
-
     // Dynamic back button
     if (dynamicPage) {
         connect(dynamicPage, &Dynamic::backtoLandingPage, this, &BRBooth::showLandingPage);
         connect(dynamicPage, &Dynamic::videoSelectedTwice, this, &BRBooth::showCapturePage); // Connect to capture interface
+        previousPageIndex = dynamicPageIndex;
     }
 
     // Static background back button
     if (backgroundPage) {
         connect(backgroundPage, &Background::backtoForegroundPage, this, &BRBooth::showForegroundPage);
         connect(backgroundPage, &Background::imageSelectedTwice, this, &BRBooth::showCapturePage); // Connect to capture interface
+        previousPageIndex = backgroundPageIndex;
     }
 
     if (capturePage) {
-        connect(capturePage, &Capture::backtoPreviousPage, this, &BRBooth::showBackgroundPage);
+        if (previousPageIndex == backgroundPageIndex)
+            connect(capturePage, &Capture::backtoPreviousPage, this, &BRBooth::showBackgroundPage);
+        else
+            connect(capturePage, &Capture::backtoPreviousPage, this, &BRBooth::showDynamicPage);
     }
 
     // Resets static foreground page everytime its loaded
