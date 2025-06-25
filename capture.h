@@ -24,7 +24,7 @@ public:
 
 
 signals:
-    void backtoBackgroundPage();
+    void backtoPreviousPage();
 
 private slots:
     void on_back_clicked();
