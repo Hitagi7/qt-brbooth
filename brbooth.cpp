@@ -46,22 +46,33 @@ BRBooth::BRBooth(QWidget *parent)
     // Dynamic back button
     if (dynamicPage) {
         connect(dynamicPage, &Dynamic::backtoLandingPage, this, &BRBooth::showLandingPage);
-        connect(dynamicPage, &Dynamic::videoSelectedTwice, this, &BRBooth::showCapturePage); // Connect to capture interface
-        previousPageIndex = dynamicPageIndex;
+        // Connect to capture interface, and store the previous page index
+        connect(dynamicPage, &Dynamic::videoSelectedTwice, this, [this](){
+            previousPageIndex = dynamicPageIndex; // Store dynamic page as the previous
+            showCapturePage();
+        });
     }
 
     // Static background back button
     if (backgroundPage) {
         connect(backgroundPage, &Background::backtoForegroundPage, this, &BRBooth::showForegroundPage);
-        connect(backgroundPage, &Background::imageSelectedTwice, this, &BRBooth::showCapturePage); // Connect to capture interface
-        previousPageIndex = backgroundPageIndex;
+        // Connect to capture interface, and store the previous page index
+        connect(backgroundPage, &Background::imageSelectedTwice, this, [this](){
+            previousPageIndex = backgroundPageIndex; // Store background page as the previous
+            showCapturePage();
+        });
     }
 
+    // Capture page back button logic
     if (capturePage) {
-        if (previousPageIndex == backgroundPageIndex)
-            connect(capturePage, &Capture::backtoPreviousPage, this, &BRBooth::showBackgroundPage);
-        else
-            connect(capturePage, &Capture::backtoPreviousPage, this, &BRBooth::showDynamicPage);
+        // Connect the back signal to a lambda that checks previousPageIndex
+        connect(capturePage, &Capture::backtoPreviousPage, this, [this](){
+            if (previousPageIndex == backgroundPageIndex) {
+                showBackgroundPage();
+            } else if (previousPageIndex == dynamicPageIndex) {
+                showDynamicPage();
+            }
+        });
     }
 
     // Resets static foreground page everytime its loaded
@@ -71,6 +82,9 @@ BRBooth::BRBooth(QWidget *parent)
         }
         if (index == backgroundPageIndex) {
             backgroundPage->resetPage();
+        }
+        if (index == dynamicPageIndex) {
+            dynamicPage->resetPage();
         }
     });
 }
