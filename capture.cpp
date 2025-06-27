@@ -11,8 +11,6 @@
 
 #include <opencv2/opencv.hpp>
 
-
-
 Capture::Capture(QWidget *parent)
     : QWidget(parent)
     , ui(new Ui::Capture)

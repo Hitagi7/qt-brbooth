@@ -48,7 +48,7 @@ RESOURCES += \
 INCLUDEPATH += C:\opencv_build\install\include
 DEPENDPATH += C:\opencv_build\install\include
 
-OPENCV_INSTALL_DIR = C:/Users/User/Documents/OpenCV/opencv/build/install
+OPENCV_INSTALL_DIR = C:/opencv_build/install
 
 # Add OpenCV include paths
 INCLUDEPATH += $$OPENCV_INSTALL_DIR/include \
