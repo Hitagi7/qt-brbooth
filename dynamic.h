@@ -1,16 +1,16 @@
 #ifndef DYNAMIC_H
 #define DYNAMIC_H
 
-#include <QWidget>
-#include <QPushButton> // Keep QPushButton for your 'back' button
-#include <QTimer>
 #include <QEvent>
 #include <QMouseEvent> // Included for Icon Hover for Back Button
+#include <QPushButton> // Keep QPushButton for your 'back' button
+#include <QTimer>
+#include <QWidget>
 
+#include <QLabel> // New: Include QLabel for displaying thumbnails
+#include <QMap>   // To store multiple video
 #include <QMediaPlayer>
 #include <QVideoWidget>
-#include <QMap> // To store multiple video
-#include <QLabel> // New: Include QLabel for displaying thumbnails
 
 QT_BEGIN_NAMESPACE
 namespace Ui {
@@ -50,9 +50,9 @@ private:
     QTimer *debounceTimer;
     bool debounceActive;
 
-    QMap<QString, QMediaPlayer*> videoPlayers;
-    QMap<QString, QVideoWidget*> videoWidgets;
-    QMap<QString, QLabel*> thumbnailLabels; // New: To store QLabel for thumbnails
+    QMap<QString, QMediaPlayer *> videoPlayers;
+    QMap<QString, QVideoWidget *> videoWidgets;
+    QMap<QString, QLabel *> thumbnailLabels; // New: To store QLabel for thumbnails
 
     void applyHighlightStyle(QObject *obj, bool highlight);
     void setupVideoPlayers();

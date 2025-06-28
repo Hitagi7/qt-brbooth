@@ -45,16 +45,36 @@ Capture::Capture(QWidget *parent)
         return; // Exit if no camera is available
     }
 
+    // Set camera resolution for a more controlled aspect ratio if desired
+    // This is optional but can help ensure a consistent input frame size
+    cap.set(cv::CAP_PROP_FRAME_WIDTH, 1920);
+    cap.set(cv::CAP_PROP_FRAME_HEIGHT, 1080);
+
+
     // Create a QLabel to display the video feed and store it as member variable
     videoLabel = new QLabel(ui->videoFeedWidget);
+    // Use `Fixed` or `Minimum` if you want to strictly control size,
+    // but `Expanding` combined with `setScaledContents(true)` is generally good
+    // as long as the parent widget (videoFeedWidget) has appropriate size policies.
     videoLabel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    videoLabel->setScaledContents(true);
+    videoLabel->setScaledContents(true); // Ensures content scales to fit the label
     videoLabel->setAlignment(Qt::AlignCenter);
 
     // Layout the QLabel within its parent widget
     QVBoxLayout *videoLayout = new QVBoxLayout(ui->videoFeedWidget);
     videoLayout->addWidget(videoLabel);
     videoLayout->setContentsMargins(0, 0, 0, 0);
+
+    // To help with "tight" aspect ratio, you might want to adjust
+    // the size policy or minimum size of `ui->videoFeedWidget` in your UI file (.ui)
+    // or programmatically here, to match the desired 4:3 or 16:9 aspect ratio
+    // (e.g., set a fixed minimum size or preferred size).
+    // For example, if your camera is 640x480 (4:3):
+    // ui->videoFeedWidget->setMinimumSize(640, 480);
+    // ui->videoFeedWidget->setMaximumSize(640, 480); // if you want fixed size
+    // Or set a preferred size:
+    // ui->videoFeedWidget->setPreferredSize(QSize(640, 480));
+
 
     // Set up a timer to grab frames from OpenCV and update the QLabel
     cameraTimer = new QTimer(this);
@@ -77,14 +97,6 @@ Capture::~Capture()
     if (cap.isOpened()) {
         cap.release();
     }
-
-    // videoLabel is a child of ui->videoFeedWidget, so it will be deleted
-    // when ui->videoFeedWidget is deleted, or when the parent QWidget is deleted.
-    // No need to delete videoLabel explicitly here unless it's not parented correctly.
-    // However, if you explicitly create it with `new QLabel(ui->videoFeedWidget);`
-    // and `ui->videoFeedWidget` is a QWidget member, it's owned by the QObject hierarchy.
-    // If you used `new QLabel();` without a parent, you would need to delete it.
-    // Given the `new QLabel(ui->videoFeedWidget);`, it's generally fine.
 
     delete ui; // Deletes the UI components, including videoFeedWidget and its children like videoLabel
 }
@@ -115,12 +127,17 @@ void Capture::updateCameraFeed()
             return;
         }
 
+        // --- Mirror the frame horizontally ---
+        cv::flip(frame, frame, 1); // 1 means flip horizontally, 0 means vertically, -1 means both
+
         QImage image = cvMatToQImage(frame);
 
         if (!image.isNull()) {
             // Convert QImage to QPixmap and set it to the QLabel
             QPixmap pixmap = QPixmap::fromImage(image);
             // Scale pixmap to fit the label, keeping aspect ratio
+            // Qt::KeepAspectRatio is crucial here. The "tight" aspect ratio
+            // largely depends on the `videoLabel`'s parent widget's size and layout.
             videoLabel->setPixmap(pixmap.scaled(videoLabel->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
         } else {
             qWarning() << "Failed to convert cv::Mat to QImage!";
@@ -140,14 +157,12 @@ QImage Capture::cvMatToQImage(const cv::Mat &mat)
     switch (mat.type()) {
     case CV_8UC4: // 8-bit, 4 channel (e.g., BGRA or RGBA)
     {
-        // Assuming BGRA in OpenCV, Qt's Format_ARGB32 is ARGB. Swapping might be needed.
-        // For direct conversion, Format_ARGB32 usually expects ARGB. If OpenCV Mat is BGRA, it needs conversion.
-        // Let's assume it's BGRA for typical OpenCV camera output.
-        // A direct cast might work if it's already ARGB in the correct byte order.
-        // If it's BGRA, you'd typically convert to RGB and then to QImage::Format_RGB888 or similar.
-        // For simplicity, if your camera directly gives BGRA, this might be okay.
-        // Otherwise, consider cv::cvtColor(mat, mat_rgb, cv::COLOR_BGRA2RGBA)
-        return QImage(mat.data, mat.cols, mat.rows, mat.step, QImage::Format_ARGB32);
+        // For OpenCV typically giving BGRA, QImage::Format_ARGB32 is ARGB.
+        // A direct cast might lead to incorrect color representation (e.g., blue instead of red).
+        // It's safer to convert to a known format like RGB first.
+        cv::Mat rgb;
+        cv::cvtColor(mat, rgb, cv::COLOR_BGRA2RGB); // Convert BGRA to RGB
+        return QImage(rgb.data, rgb.cols, rgb.rows, rgb.step, QImage::Format_RGB888);
     }
 
     case CV_8UC3: // 8-bit, 3 channel (BGR in OpenCV)
@@ -177,5 +192,3 @@ QImage Capture::cvMatToQImage(const cv::Mat &mat)
         return QImage();
     }
 }
-
-

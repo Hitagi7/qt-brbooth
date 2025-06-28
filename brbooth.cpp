@@ -1,17 +1,17 @@
 #include "brbooth.h"
-#include "ui_brbooth.h"
-#include "foreground.h"
-#include "dynamic.h"
 #include "background.h"
 #include "capture.h"
+#include "dynamic.h"
 #include "final.h"
+#include "foreground.h"
+#include "ui_brbooth.h"
 
 // Boilerplate
 BRBooth::BRBooth(QWidget *parent)
     : QMainWindow(parent)
     , ui(new Ui::BRBooth)
 {
-    qDebug() << "OpenCV Version: "<< CV_VERSION;
+    qDebug() << "OpenCV Version: " << CV_VERSION;
     ui->setupUi(this);
     qDebug() << "OpenCV Version: " << CV_VERSION;
     this->setStyleSheet("QMainWindow#BRBooth {"
@@ -54,7 +54,7 @@ BRBooth::BRBooth(QWidget *parent)
     if (dynamicPage) {
         connect(dynamicPage, &Dynamic::backtoLandingPage, this, &BRBooth::showLandingPage);
         // Connect to capture interface, and store the previous page index
-        connect(dynamicPage, &Dynamic::videoSelectedTwice, this, [this](){
+        connect(dynamicPage, &Dynamic::videoSelectedTwice, this, [this]() {
             previousPageIndex = dynamicPageIndex; // Store dynamic page as the previous
             showCapturePage();
         });
@@ -62,9 +62,12 @@ BRBooth::BRBooth(QWidget *parent)
 
     // Static background back button
     if (backgroundPage) {
-        connect(backgroundPage, &Background::backtoForegroundPage, this, &BRBooth::showForegroundPage);
+        connect(backgroundPage,
+                &Background::backtoForegroundPage,
+                this,
+                &BRBooth::showForegroundPage);
         // Connect to capture interface, and store the previous page index
-        connect(backgroundPage, &Background::imageSelectedTwice, this, [this](){
+        connect(backgroundPage, &Background::imageSelectedTwice, this, [this]() {
             previousPageIndex = backgroundPageIndex; // Store background page as the previous
             showCapturePage();
         });
@@ -73,7 +76,7 @@ BRBooth::BRBooth(QWidget *parent)
     // Capture page back button logic
     if (capturePage) {
         // Connect the back signal to a lambda that checks previousPageIndex
-        connect(capturePage, &Capture::backtoPreviousPage, this, [this](){
+        connect(capturePage, &Capture::backtoPreviousPage, this, [this]() {
             if (previousPageIndex == backgroundPageIndex) {
                 showBackgroundPage();
             } else if (previousPageIndex == dynamicPageIndex) {
@@ -83,71 +86,71 @@ BRBooth::BRBooth(QWidget *parent)
         connect(capturePage, &Capture::showFinalOutputPage, this, &BRBooth::showFinalOutputPage);
     }
 
-        //Final Output Page
-        if(finalOutputPage){
-            connect(finalOutputPage, &Final::backToCapturePage, this, &BRBooth::showCapturePage);
+    //Final Output Page
+    if (finalOutputPage) {
+        connect(finalOutputPage, &Final::backToCapturePage, this, &BRBooth::showCapturePage);
+    }
+
+    // Resets static foreground page everytime its loaded
+    connect(ui->stackedWidget, &QStackedWidget::currentChanged, this, [this](int index) {
+        if (index == foregroundPageIndex) {
+            foregroundPage->resetPage();
         }
+        if (index == backgroundPageIndex) {
+            backgroundPage->resetPage();
+        }
+        if (index == dynamicPageIndex) {
+            dynamicPage->resetPage();
+        }
+    });
+}
 
-        // Resets static foreground page everytime its loaded
-        connect(ui->stackedWidget, &QStackedWidget::currentChanged, this, [this](int index){
-            if (index == foregroundPageIndex) {
-                foregroundPage->resetPage();
-            }
-            if (index == backgroundPageIndex) {
-                backgroundPage->resetPage();
-            }
-            if (index == dynamicPageIndex) {
-                dynamicPage->resetPage();
-            }
-        });
-    }
+BRBooth::~BRBooth()
+{
+    delete ui;
+}
 
-    BRBooth::~BRBooth()
-    {
-        delete ui;
-    }
+void BRBooth::showLandingPage()
+{
+    ui->stackedWidget->setCurrentIndex(landingPageIndex);
+}
 
-    void BRBooth::showLandingPage()
-    {
-        ui->stackedWidget->setCurrentIndex(landingPageIndex);
-    }
+void BRBooth::showForegroundPage()
+{
+    ui->stackedWidget->setCurrentIndex(foregroundPageIndex);
+}
 
-    void BRBooth::showForegroundPage()
-    {
-        ui->stackedWidget->setCurrentIndex(foregroundPageIndex);
-    }
+void BRBooth::showDynamicPage()
+{
+    ui->stackedWidget->setCurrentIndex(dynamicPageIndex);
+}
 
-    void BRBooth::showDynamicPage()
-    {
-        ui->stackedWidget->setCurrentIndex(dynamicPageIndex);
-    }
+void BRBooth::showBackgroundPage()
+{
+    ui->stackedWidget->setCurrentIndex(backgroundPageIndex);
+}
 
-    void BRBooth::showBackgroundPage()
-    {
-        ui->stackedWidget->setCurrentIndex(backgroundPageIndex);
-    }
+void BRBooth::showCapturePage()
+{
+    ui->stackedWidget->setCurrentIndex(capturePageIndex);
+}
 
-    void BRBooth::showCapturePage()
-    {
-        ui->stackedWidget->setCurrentIndex(capturePageIndex);
-    }
+void BRBooth::showFinalOutputPage()
+{
+    ui->stackedWidget->setCurrentIndex(finalOutputPageIndex);
+}
 
-    void BRBooth::showFinalOutputPage()
-    {
-        ui->stackedWidget->setCurrentIndex(finalOutputPageIndex);
-    }
+void BRBooth::on_staticButton_clicked()
+{
+    showForegroundPage();
+}
 
-    void BRBooth::on_staticButton_clicked()
-    {
-        showForegroundPage();
-    }
+void BRBooth::on_dynamicButton_clicked()
+{
+    showDynamicPage();
+}
 
-    void BRBooth::on_dynamicButton_clicked()
-    {
-        showDynamicPage();
-    }
-
-    void BRBooth::on_capture_clicked()
-    {
-        showFinalOutputPage();
-    }
+void BRBooth::on_capture_clicked()
+{
+    showFinalOutputPage();
+}

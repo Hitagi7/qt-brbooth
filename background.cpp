@@ -1,9 +1,9 @@
 #include "background.h"
-#include "ui_background.h"
-#include "iconhover.h"
-#include <QStyle>
-#include <QRegularExpression>
 #include <QMouseEvent>
+#include <QRegularExpression>
+#include <QStyle>
+#include "iconhover.h"
+#include "ui_background.h"
 
 Background::Background(QWidget *parent)
     : QWidget(parent)
@@ -27,8 +27,9 @@ Background::Background(QWidget *parent)
 
     debounceActive = false;
 
-    QList<QPushButton*> imageButtons = findChildren<QPushButton*>(QRegularExpression("image[1-6]"));
-    for (QPushButton* button : imageButtons) {
+    QList<QPushButton *> imageButtons = findChildren<QPushButton *>(
+        QRegularExpression("image[1-6]"));
+    for (QPushButton *button : imageButtons) {
         if (button) {
             button->installEventFilter(this);
             button->setFocusPolicy(Qt::NoFocus);
@@ -52,8 +53,9 @@ void Background::resetPage()
     }
     currentSelectedImageButton = nullptr;
 
-    QList<QPushButton*> imageButtons = findChildren<QPushButton*>(QRegularExpression("image[1-6]"));
-    for (QPushButton* button : imageButtons) {
+    QList<QPushButton *> imageButtons = findChildren<QPushButton *>(
+        QRegularExpression("image[1-6]"));
+    for (QPushButton *button : imageButtons) {
         if (button) {
             applyHighlightStyle(button, false);
         }
@@ -66,7 +68,7 @@ void Background::resetPage()
 bool Background::eventFilter(QObject *obj, QEvent *event)
 {
     if (event->type() == QEvent::MouseButtonPress) {
-        QPushButton *button = qobject_cast<QPushButton*>(obj);
+        QPushButton *button = qobject_cast<QPushButton *>(obj);
         if (button && button->objectName().startsWith("image")) {
             if (debounceActive) {
                 return true;
@@ -124,11 +126,9 @@ void Background::processImageButtonClick(QPushButton *button)
     }
 }
 
-
-void Background::on_image1_clicked(){}
-void Background::on_image2_clicked(){}
-void Background::on_image3_clicked(){}
-void Background::on_image4_clicked(){}
-void Background::on_image5_clicked(){}
-void Background::on_image6_clicked(){}
-
+void Background::on_image1_clicked() {}
+void Background::on_image2_clicked() {}
+void Background::on_image3_clicked() {}
+void Background::on_image4_clicked() {}
+void Background::on_image5_clicked() {}
+void Background::on_image6_clicked() {}

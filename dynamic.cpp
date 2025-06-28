@@ -1,11 +1,11 @@
 #include "dynamic.h"
-#include "ui_dynamic.h"
-#include "iconhover.h"
-#include <QStyle>
-#include <QRegularExpression>
-#include <QVBoxLayout> // For arranging video
-#include <QDebug> // For debugging
+#include <QDebug>  // For debugging
 #include <QPixmap> // For loading images for thumbnails
+#include <QRegularExpression>
+#include <QStyle>
+#include <QVBoxLayout> // For arranging video
+#include "iconhover.h"
+#include "ui_dynamic.h"
 
 Dynamic::Dynamic(QWidget *parent)
     : QWidget(parent)
@@ -34,7 +34,7 @@ Dynamic::Dynamic(QWidget *parent)
 
 Dynamic::~Dynamic()
 {
-    for (QMediaPlayer* player : videoPlayers.values()) {
+    for (QMediaPlayer *player : videoPlayers.values()) {
         if (player) {
             player->stop();
             delete player;
@@ -43,7 +43,7 @@ Dynamic::~Dynamic()
     videoPlayers.clear();
     videoWidgets.clear();
 
-    for (QLabel* label : thumbnailLabels.values()) {
+    for (QLabel *label : thumbnailLabels.values()) {
         if (label) {
             delete label;
         }
@@ -55,12 +55,9 @@ Dynamic::~Dynamic()
 
 void Dynamic::setupVideoPlayers()
 {
-    QList<QWidget*> videoPlaceholders;
-    videoPlaceholders << ui->videoPlaceholder1
-                      << ui->videoPlaceholder2
-                      << ui->videoPlaceholder3
-                      << ui->videoPlaceholder4
-                      << ui->videoPlaceholder5;
+    QList<QWidget *> videoPlaceholders;
+    videoPlaceholders << ui->videoPlaceholder1 << ui->videoPlaceholder2 << ui->videoPlaceholder3
+                      << ui->videoPlaceholder4 << ui->videoPlaceholder5;
 
     QStringList videoPaths;
     videoPaths << "qrc:/videos/videos/video1.mp4"
@@ -77,7 +74,7 @@ void Dynamic::setupVideoPlayers()
                    << "qrc:/images/pics/dynamic5.png";
 
     for (int i = 0; i < videoPlaceholders.size(); ++i) {
-        QWidget* placeholder = videoPlaceholders.at(i);
+        QWidget *placeholder = videoPlaceholders.at(i);
         if (!placeholder) {
             qWarning() << "Video placeholder" << i + 1 << "not found.";
             continue;
@@ -106,7 +103,9 @@ void Dynamic::setupVideoPlayers()
         QLabel *thumbnailLabel = new QLabel(placeholder);
         QPixmap pixmap(thumbnailPaths.at(i));
         if (!pixmap.isNull()) {
-            thumbnailLabel->setPixmap(pixmap.scaled(videoWidget->size(), Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation));
+            thumbnailLabel->setPixmap(pixmap.scaled(videoWidget->size(),
+                                                    Qt::KeepAspectRatioByExpanding,
+                                                    Qt::SmoothTransformation));
         } else {
             qWarning() << "Could not load thumbnail:" << thumbnailPaths.at(i);
         }
@@ -136,7 +135,7 @@ void Dynamic::resetPage()
 {
     if (currentSelectedVideoWidget) {
         applyHighlightStyle(currentSelectedVideoWidget, false);
-        QMediaPlayer* player = videoPlayers.value(currentSelectedVideoWidget->objectName());
+        QMediaPlayer *player = videoPlayers.value(currentSelectedVideoWidget->objectName());
         if (player && player->playbackState() == QMediaPlayer::PlayingState) {
             player->stop();
         }
@@ -144,10 +143,10 @@ void Dynamic::resetPage()
     }
     currentSelectedVideoWidget = nullptr;
 
-    for (QVideoWidget* widget : videoWidgets.values()) {
+    for (QVideoWidget *widget : videoWidgets.values()) {
         if (widget) {
             applyHighlightStyle(widget, false);
-            QMediaPlayer* player = videoPlayers.value(widget->objectName());
+            QMediaPlayer *player = videoPlayers.value(widget->objectName());
             if (player && player->playbackState() == QMediaPlayer::PlayingState) {
                 player->stop();
             }
@@ -162,8 +161,8 @@ void Dynamic::resetPage()
 bool Dynamic::eventFilter(QObject *obj, QEvent *event)
 {
     if (event->type() == QEvent::MouseButtonPress) {
-        QMouseEvent *mouseEvent = static_cast<QMouseEvent*>(event);
-        QVideoWidget *videoWidget = qobject_cast<QVideoWidget*>(obj);
+        QMouseEvent *mouseEvent = static_cast<QMouseEvent *>(event);
+        QVideoWidget *videoWidget = qobject_cast<QVideoWidget *>(obj);
 
         if (videoWidget && mouseEvent->button() == Qt::LeftButton) {
             // Check if the event source is one of our video widgets
@@ -195,7 +194,7 @@ void Dynamic::applyHighlightStyle(QObject *obj, bool highlight)
 {
     if (obj) {
         obj->setProperty("selected", highlight);
-        if (QWidget* widget = qobject_cast<QWidget*>(obj)) {
+        if (QWidget *widget = qobject_cast<QWidget *>(obj)) {
             widget->style()->polish(widget);
             widget->update();
         }
@@ -207,7 +206,7 @@ void Dynamic::on_back_clicked()
 {
     if (currentSelectedVideoWidget) {
         applyHighlightStyle(currentSelectedVideoWidget, false);
-        QMediaPlayer* player = videoPlayers.value(currentSelectedVideoWidget->objectName());
+        QMediaPlayer *player = videoPlayers.value(currentSelectedVideoWidget->objectName());
         if (player && player->playbackState() == QMediaPlayer::PlayingState) {
             player->stop();
         }
@@ -223,12 +222,12 @@ void Dynamic::processVideoClick(QObject *videoWidgetObj)
         return;
     }
 
-    QVideoWidget* clickedVideoWidget = qobject_cast<QVideoWidget*>(videoWidgetObj);
+    QVideoWidget *clickedVideoWidget = qobject_cast<QVideoWidget *>(videoWidgetObj);
     if (!clickedVideoWidget) {
         return;
     }
 
-    QMediaPlayer* player = videoPlayers.value(clickedVideoWidget->objectName());
+    QMediaPlayer *player = videoPlayers.value(clickedVideoWidget->objectName());
     if (!player) {
         qWarning() << "No media player found for" << clickedVideoWidget->objectName();
         return;
@@ -248,11 +247,13 @@ void Dynamic::processVideoClick(QObject *videoWidgetObj)
         // Single click or first click of a potential double-click
         if (currentSelectedVideoWidget) {
             applyHighlightStyle(currentSelectedVideoWidget, false);
-            QMediaPlayer* previousPlayer = videoPlayers.value(currentSelectedVideoWidget->objectName());
+            QMediaPlayer *previousPlayer = videoPlayers.value(
+                currentSelectedVideoWidget->objectName());
             if (previousPlayer && previousPlayer->playbackState() == QMediaPlayer::PlayingState) {
                 previousPlayer->stop();
             }
-            showThumbnail(currentSelectedVideoWidget, true); // Show thumbnail for the previously selected video
+            showThumbnail(currentSelectedVideoWidget,
+                          true); // Show thumbnail for the previously selected video
         }
 
         applyHighlightStyle(clickedVideoWidget, true);
@@ -261,7 +262,8 @@ void Dynamic::processVideoClick(QObject *videoWidgetObj)
         showThumbnail(clickedVideoWidget, false); // Hide thumbnail before playing
 
         // Play the video
-        if (player->playbackState() == QMediaPlayer::StoppedState || player->playbackState() == QMediaPlayer::PausedState) {
+        if (player->playbackState() == QMediaPlayer::StoppedState
+            || player->playbackState() == QMediaPlayer::PausedState) {
             player->play();
         } else if (player->playbackState() == QMediaPlayer::PlayingState) {
             player->stop();
@@ -274,11 +276,12 @@ void Dynamic::processVideoClick(QObject *videoWidgetObj)
 // New helper function to control thumbnail visibility and layering
 void Dynamic::showThumbnail(QObject *videoWidgetObj, bool show)
 {
-    if (!videoWidgetObj) return;
+    if (!videoWidgetObj)
+        return;
 
     QString widgetName = videoWidgetObj->objectName();
-    QLabel* thumbnail = thumbnailLabels.value(widgetName);
-    QVideoWidget* videoWidget = qobject_cast<QVideoWidget*>(videoWidgetObj);
+    QLabel *thumbnail = thumbnailLabels.value(widgetName);
+    QVideoWidget *videoWidget = qobject_cast<QVideoWidget *>(videoWidgetObj);
 
     if (thumbnail && videoWidget) {
         thumbnail->setVisible(show);

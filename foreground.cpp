@@ -1,9 +1,9 @@
 #include "foreground.h"
-#include "ui_foreground.h"
-#include "iconhover.h"
-#include <QStyle>
-#include <QRegularExpression>
 #include <QMouseEvent>
+#include <QRegularExpression>
+#include <QStyle>
+#include "iconhover.h"
+#include "ui_foreground.h"
 
 Foreground::Foreground(QWidget *parent)
     : QWidget(parent)
@@ -27,8 +27,9 @@ Foreground::Foreground(QWidget *parent)
 
     debounceActive = false;
 
-    QList<QPushButton*> imageButtons = findChildren<QPushButton*>(QRegularExpression("image[1-6]"));
-    for (QPushButton* button : imageButtons) {
+    QList<QPushButton *> imageButtons = findChildren<QPushButton *>(
+        QRegularExpression("image[1-6]"));
+    for (QPushButton *button : imageButtons) {
         if (button) {
             button->installEventFilter(this);
             button->setFocusPolicy(Qt::NoFocus);
@@ -52,8 +53,9 @@ void Foreground::resetPage()
     }
     currentSelectedImageButton = nullptr;
 
-    QList<QPushButton*> imageButtons = findChildren<QPushButton*>(QRegularExpression("image[1-6]"));
-    for (QPushButton* button : imageButtons) {
+    QList<QPushButton *> imageButtons = findChildren<QPushButton *>(
+        QRegularExpression("image[1-6]"));
+    for (QPushButton *button : imageButtons) {
         if (button) {
             applyHighlightStyle(button, false);
         }
@@ -66,7 +68,7 @@ void Foreground::resetPage()
 bool Foreground::eventFilter(QObject *obj, QEvent *event)
 {
     if (event->type() == QEvent::MouseButtonPress) {
-        QPushButton *button = qobject_cast<QPushButton*>(obj);
+        QPushButton *button = qobject_cast<QPushButton *>(obj);
         if (button && button->objectName().startsWith("image")) {
             if (debounceActive) {
                 return true;

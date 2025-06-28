@@ -1,27 +1,26 @@
 #ifndef BACKGROUND_H
 #define BACKGROUND_H
 
-#include <QWidget>
-#include <QPushButton>
-#include <QTimer>
 #include <QEvent>
 #include <QMouseEvent> //Included for Icon Hover for Back Button
-
+#include <QPushButton>
+#include <QTimer>
+#include <QWidget>
 
 QT_BEGIN_NAMESPACE
 
 namespace Ui {
-    class Background;
+class Background;
 }
 QT_END_NAMESPACE
 
-class Background  : public QWidget
+class Background : public QWidget
 {
     Q_OBJECT
 
 public:
-    explicit Background (QWidget *parent = nullptr);
-    ~Background ();
+    explicit Background(QWidget *parent = nullptr);
+    ~Background();
 
 public slots:
     void resetPage();

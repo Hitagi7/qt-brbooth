@@ -5,11 +5,11 @@
 
 #include "opencv2/core/core.hpp"
 
-#include "foreground.h"
-#include "dynamic.h"
 #include "background.h"
 #include "capture.h"
+#include "dynamic.h"
 #include "final.h"
+#include "foreground.h"
 
 QT_BEGIN_NAMESPACE
 namespace Ui {
@@ -51,6 +51,5 @@ private:
     int previousPageIndex;
     Final *finalOutputPage;
     int finalOutputPageIndex;
-
 };
 #endif // BRBOOTH_H

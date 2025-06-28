@@ -1,9 +1,9 @@
 #include "final.h"
-#include "ui_final.h"
-#include "iconhover.h"
-#include <QStyle>
-#include <QRegularExpression>
 #include <QMouseEvent>
+#include <QRegularExpression>
+#include <QStyle>
+#include "iconhover.h"
+#include "ui_final.h"
 
 Final::Final(QWidget *parent)
     : QWidget(parent)

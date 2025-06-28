@@ -5,7 +5,8 @@
 int main(int argc, char *argv[])
 {
     QApplication a(argc, argv);
-    int fontId = QFontDatabase::addApplicationFont("::/fonts/Fonts/static/RobotoCondensed-BoldItalic.ttf");
+    int fontId = QFontDatabase::addApplicationFont(
+        "::/fonts/Fonts/static/RobotoCondensed-BoldItalic.ttf");
     if (fontId == -1) {
         qWarning() << "Failed to load RobotoCondensed-BoldItalic.ttf from resources.";
     } else {

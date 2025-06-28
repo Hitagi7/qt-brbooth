@@ -1,16 +1,16 @@
 #ifndef FOREGROUND_H
 #define FOREGROUND_H
 
-#include <QWidget>
-#include <QPushButton>
-#include <QTimer>
 #include <QEvent>
 #include <QMouseEvent> //Included for Icon Hover for Back Button
+#include <QPushButton>
+#include <QTimer>
+#include <QWidget>
 
 QT_BEGIN_NAMESPACE
 
 namespace Ui {
-    class Foreground;
+class Foreground;
 }
 
 QT_END_NAMESPACE
