@@ -130,4 +130,5 @@ void Background::on_image2_clicked(){}
 void Background::on_image3_clicked(){}
 void Background::on_image4_clicked(){}
 void Background::on_image5_clicked(){}
+void Background::on_image6_clicked(){}
 

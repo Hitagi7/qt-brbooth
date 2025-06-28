@@ -42,6 +42,7 @@ private slots:
     void on_image3_clicked();
     void on_image4_clicked();
     void on_image5_clicked();
+    void on_image6_clicked();
 
 private:
     Ui::Background *ui;

@@ -21,6 +21,7 @@
         <file>pics/dynamic3.png</file>
         <file>pics/dynamic4.png</file>
         <file>pics/dynamic5.png</file>
+        <file>pics/bg6.png</file>
     </qresource>
     <qresource prefix="/fonts">
         <file>Fonts/static/RobotoCondensed-BoldItalic.ttf</file>
