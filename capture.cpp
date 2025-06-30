@@ -1,101 +1,132 @@
 // capture.cpp
 #include "capture.h"
 #include "ui_capture.h"
-#include "iconhover.h" // Assuming this is a custom class for icon hover effects
+#include "iconhover.h"
 #include <QVBoxLayout>
 #include <QLabel>
-#include <QDebug> // For qDebug() output
-#include <QImage> // For QImage conversion
-#include <QPixmap> // For QPixmap conversion
-#include <QTimer> // For QTimer
+#include <QDebug>
+#include <QImage>
+#include <QPixmap>
+#include <QTimer>
 #include <QPropertyAnimation>
 #include <QFont>
 #include <QResizeEvent>
-#include <QThread>
+#include <QThread> // Still needed for QThread::msleep, even if minimal
+#include <QElapsedTimer>
 
 #include <opencv2/opencv.hpp>
 
 Capture::Capture(QWidget *parent)
     : QWidget(parent)
     , ui(new Ui::Capture)
-    , cameraTimer(nullptr) // Initialize member variables
-    , videoLabel(nullptr)  // Initialize member variables
+    , cameraTimer(nullptr)
+    , videoLabel(nullptr)
     , countdownTimer(nullptr)
     , countdownLabel(nullptr)
     , countdownValue(0)
     , m_currentCaptureMode (ImageCaptureMode)
+// REMOVED: m_isCameraReadyForCapture, m_framesDisplayedSinceStart, m_needsInitialRecapture from initializer list
 {
     ui->setupUi(this);
 
-    // Setting Up Back Icon
     ui->back->setIcon(QIcon(":/icons/Icons/normal.svg"));
     ui->back->setIconSize(QSize(100, 100));
-
     Iconhover *backButtonHover = new Iconhover(this);
     ui->back->installEventFilter(backButtonHover);
 
-    // --- OpenCV Camera integration starts here ---
+    // Disable capture button by default (will be enabled if camera opens)
+    ui->capture->setEnabled(false);
 
-    // Open the default camera (usually index 0)
-    // Check if cap is opened successfully *before* proceeding
+    // --- Corrected Camera Opening Logic ---
+    bool cameraOpenedSuccessfully = false;
     if (!cap.open(1)) {
-        qWarning() << "Error: Could not open camera with OpenCV!";
-        ui->videoFeedWidget->setStyleSheet("background-color: grey; color: white; border-radius: 10px;");
+        qWarning() << "Error: Could not open camera with index 1. Trying index 0...";
+        if (cap.open(0)) { // Only try index 0 if index 1 failed
+            cameraOpenedSuccessfully = true;
+        } else {
+            qWarning() << "Error: Could not open camera with index 0 either. Please check camera connection and drivers.";
+        }
+    } else {
+        cameraOpenedSuccessfully = true; // Camera 1 opened successfully
+    }
 
-        // Create error message label
-        QLabel *errorLabel = new QLabel("Camera not available", ui->videoFeedWidget);
+    if (!cameraOpenedSuccessfully) {
+        // Handle no camera found scenario
+        qWarning() << "No camera found or could not be opened. Disabling capture.";
+
+        // Display error message in the video feed area
+        ui->videoFeedWidget->setStyleSheet("background-color: #333; color: white; border-radius: 10px;"); // Darker grey
+        QLabel *errorLabel = new QLabel("Camera not available.\nCheck connection and drivers.", ui->videoFeedWidget);
         errorLabel->setAlignment(Qt::AlignCenter);
-        errorLabel->setStyleSheet("color: white; font-size: 16px;");
+        QFont errorFont = errorLabel->font();
+        errorFont.setPointSize(18);
+        errorFont.setBold(true);
+        errorLabel->setFont(errorFont);
+        errorLabel->setStyleSheet("color: #FF5555;"); // Red text for error
 
         QVBoxLayout *errorLayout = new QVBoxLayout(ui->videoFeedWidget);
         errorLayout->addWidget(errorLabel);
+        errorLayout->setContentsMargins(20, 20, 20, 20); // Add some padding
 
-        return; // Exit if no camera is available
+        return; // Exit constructor if no camera is available
     }
 
-    // Set camera resolution for a more controlled aspect ratio if desired
-    // This is optional but can help ensure a consistent input frame size
-    cap.set(cv::CAP_PROP_FRAME_WIDTH, 1920);
-    cap.set(cv::CAP_PROP_FRAME_HEIGHT, 1080);
+    // --- If camera opened successfully, proceed with setup ---
 
-    // Read and discard a few frames to allow auto-exposure/white-balance to settle
+    // Attempt to set camera resolution and FPS
+    qDebug() << "Attempting to set camera resolution to 1280x720.";
+    cap.set(cv::CAP_PROP_FRAME_WIDTH, 1280);
+    cap.set(cv::CAP_PROP_FRAME_HEIGHT, 720);
+    qDebug() << "Attempting to set camera FPS to 60.";
+    cap.set(cv::CAP_PROP_FPS, 60.0);
+
+    // --- DIAGNOSTIC: CHECK ACTUAL CAMERA SETTINGS ---
+    double actual_fps = cap.get(cv::CAP_PROP_FPS);
+    double actual_width = cap.get(cv::CAP_PROP_FRAME_WIDTH);
+    double actual_height = cap.get(cv::CAP_PROP_FRAME_HEIGHT);
+    qDebug() << "========================================";
+    qDebug() << "Camera settings REQUESTED: 1280x720 @ 60 FPS";
+    qDebug() << "Camera settings ACTUAL: " << actual_width << "x" << actual_height << " @ " << actual_fps << " FPS";
+    qDebug() << "========================================";
+    if (actual_fps < 59) {
+        qWarning() << "WARNING: Camera did not accept 60 FPS request. Actual FPS is" << actual_fps;
+    }
+
+    // --- Initial Camera Warm-up (silent discard) - Reduced for minimal impact ---
     cv::Mat dummyFrame;
-    int warmUpDurationSeconds = 10;
-    int estimatedFramesToRead = warmUpDurationSeconds * 30; // 150 frames for 5 seconds at 30 FPS
+    int warmUpDurationSeconds = 1; // Very short warm-up
+    int estimatedFramesToRead = (actual_fps > 0) ? (warmUpDurationSeconds * actual_fps) : (warmUpDurationSeconds * 30);
+    qDebug() << "Starting initial silent warm-up: reading " << estimatedFramesToRead << " frames...";
     for (int i = 0; i < estimatedFramesToRead; ++i) {
         if (!cap.read(dummyFrame)) {
             qWarning() << "Warning: Failed to read dummy frame during warm-up at frame" << i;
+            break; // Exit loop if frame read fails
         }
     }
+    QThread::msleep(100); // Small delay after silent warm-up
 
-    // Create a QLabel to display the video feed and store it as member variable
+    qDebug() << "Silent warm-up complete. Starting live display.";
+
+    // Video feed label setup
     videoLabel = new QLabel(ui->videoFeedWidget);
     videoLabel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    videoLabel->setScaledContents(true); // Ensures content scales to fit the label
     videoLabel->setAlignment(Qt::AlignCenter);
+    videoLabel->setScaledContents(true);
 
-    // Layout the QLabel within its parent widget
+    // Layout for video feed widget
     QVBoxLayout *videoLayout = new QVBoxLayout(ui->videoFeedWidget);
     videoLayout->addWidget(videoLabel);
     videoLayout->setContentsMargins(0, 0, 0, 0);
 
-    // To help with "tight" aspect ratio, you might want to adjust
-    // the size policy or minimum size of `ui->videoFeedWidget` in your UI file (.ui)
-    // or programmatically here, to match the desired 4:3 or 16:9 aspect ratio
-    // (e.g., set a fixed minimum size or preferred size).
-    // For example, if your camera is 640x480 (4:3):
-    // ui->videoFeedWidget->setMinimumSize(640, 480);
-    // ui->videoFeedWidget->setMaximumSize(640, 480); // if you want fixed size
-    // Or set a preferred size:
-    // ui->videoFeedWidget->setPreferredSize(QSize(640, 480));
-
-
-    // Set up a timer to grab frames from OpenCV and update the QLabel
+    // Camera timer for continuous feed updates
     cameraTimer = new QTimer(this);
     connect(cameraTimer, &QTimer::timeout, this, &Capture::updateCameraFeed);
-    cameraTimer->start(30); // Update every 30 milliseconds (approx 33 FPS)
+    cameraTimer->start(1000 / 60); // Target 60 FPS updates
 
-    //CountdownTimer Setup
+    // Enable capture button immediately after camera is opened and stream starts
+    ui->capture->setEnabled(true);
+
+    // CountdownTimer Setup
     countdownLabel = new QLabel(ui->videoFeedWidget);
     countdownLabel->setAlignment(Qt::AlignCenter);
     QFont font = countdownLabel->font();
@@ -110,11 +141,12 @@ Capture::Capture(QWidget *parent)
     connect(countdownTimer, &QTimer::timeout, this, &Capture::updateCountdown);
 
     qDebug() << "OpenCV Camera started successfully!";
+    qDebug() << "OpenCV Camera display timer started for 60 FPS.";
 }
 
 Capture::~Capture()
 {
-    // Stop andd delete the timer
+    // Stop and delete the timer
     if (cameraTimer){
         cameraTimer->stop();
         delete cameraTimer;
@@ -135,6 +167,7 @@ Capture::~Capture()
     delete ui; // Deletes the UI components, including videoFeedWidget and its children like videoLabel
 }
 
+
 void Capture::resizeEvent(QResizeEvent *event){
     //Ensures countdownLabel is centered when widget resizes
     if(countdownLabel){
@@ -148,7 +181,63 @@ void Capture::resizeEvent(QResizeEvent *event){
 void Capture::setCaptureMode(CaptureMode mode){
     m_currentCaptureMode = mode;
     qDebug() << "Capture mode set to: " << (mode == ImageCaptureMode ? "Image Capture Mode" : "Video Record Mode");
+}
 
+void Capture::updateCameraFeed()
+{
+    static QElapsedTimer frameTimer;
+    static qint64 frameCount = 0;
+    static qint64 totalTime = 0;
+
+    if (frameCount == 0) {
+        frameTimer.start();
+    }
+
+    QElapsedTimer loopTimer;
+    loopTimer.start();
+
+    if (!videoLabel || !cap.isOpened()) {
+        return;
+    }
+
+    cv::Mat frame;
+    if (cap.read(frame)) {
+        if (frame.empty()) {
+            qWarning() << "Read empty frame from camera!";
+            return;
+        }
+
+        cv::flip(frame, frame, 1);
+
+        QImage image = cvMatToQImage(frame);
+
+        if (!image.isNull()) {
+            QPixmap pixmap = QPixmap::fromImage(image);
+            videoLabel->setPixmap(pixmap.scaled(videoLabel->size(), Qt::KeepAspectRatio, Qt::FastTransformation));
+
+            // REMOVED: m_isCameraReadyForCapture logic here
+        } else {
+            qWarning() << "Failed to convert cv::Mat to QImage!";
+        }
+    } else {
+        qWarning() << "Failed to read frame from camera! Stopping timer.";
+        cameraTimer->stop();
+        ui->capture->setEnabled(false); // Also disable capture button if stream fails
+    }
+
+    qint64 loopTime = loopTimer.elapsed();
+    totalTime += loopTime;
+    frameCount++;
+
+    if (frameCount % 60 == 0) {
+        qDebug() << "----------------------------------------";
+        qDebug() << "Avg loop time (last 60 frames):" << (double)totalTime / frameCount << "ms";
+        qDebug() << "Current FPS (measured over 60 frames):" << 1000.0 / ((double)frameTimer.elapsed() / frameCount) << "FPS";
+        qDebug() << "----------------------------------------";
+        frameCount = 0;
+        totalTime = 0;
+        frameTimer.start();
+    }
 }
 
 void Capture::on_back_clicked()
@@ -158,30 +247,25 @@ void Capture::on_back_clicked()
 
 void Capture::on_capture_clicked()
 {
+    // REMOVED: m_isCameraReadyForCapture check here
+
     if (m_currentCaptureMode == ImageCaptureMode) {
         ui->capture->setEnabled(false);
 
-        // Initialize countdown
         countdownValue = 5;
         countdownLabel->setText(QString::number(countdownValue));
         countdownLabel->show();
 
-        // Animate the countdown label (optional, for visual effect)
         QPropertyAnimation *animation = new QPropertyAnimation(countdownLabel, "windowOpacity", this);
-        animation->setDuration(300); // Fade in
+        animation->setDuration(300);
         animation->setStartValue(0.0);
         animation->setEndValue(1.0);
         animation->start();
 
-        // Start the countdown timer
-        countdownTimer->start(1000); // 1000 milliseconds = 1 second
+        countdownTimer->start(1000);
     } else {
-        // This block will be executed if m_currentCaptureMode is VideoRecordMode.
-        // For now, it just prints a message. This is where video recording logic would go later.
         qDebug() << "Capture button clicked in Video Record Mode. (Video recording logic not yet implemented).";
-        // Optionally, you might want to show a message to the user that video mode is not active.
     }
-
 }
 
 void Capture::updateCountdown()
@@ -194,20 +278,36 @@ void Capture::updateCountdown()
         countdownLabel->hide();
         performImageCapture();
 
+        // Always re-enable after countdown
         ui->capture->setEnabled(true);
     }
 }
 
 void Capture::performImageCapture()
 {
-    cv::Mat frameToCapture;
+    cv::Mat tempFrame; // Temporary frame for discards
+    cv::Mat frameToCapture; // The actual frame we want to keep
+
+    // REMOVED: m_needsInitialRecapture (double-take) logic
+
+    // Standard discard for robustness (you can remove this loop too if you want the absolute minimum)
+    int framesToDiscard = 10;
+    qDebug() << "Discarding standard " << framesToDiscard << " frames before actual capture...";
+    for (int i = 0; i < framesToDiscard; ++i) {
+        if (!cap.read(tempFrame)) {
+            qWarning() << "Warning: Failed to read a pre-capture dummy frame during discard phase.";
+            break;
+        }
+    }
+    // QThread::msleep(50); // Optional small delay
+
+    // --- Actual capture of the final frame ---
     if (cap.read(frameToCapture)){
         if(frameToCapture.empty()){
             qWarning() << "Captured an empty frame!";
             return;
         }
 
-        //Mirror the captured frame
         cv::flip(frameToCapture, frameToCapture, 1);
 
         QImage capturedImageQ = cvMatToQImage(frameToCapture);
@@ -221,68 +321,28 @@ void Capture::performImageCapture()
             qWarning() << "Failed to convert captured cv::Mat to QImage!";
         }
     } else{
-        qWarning() << "Failed to read frame from camera";
+        qWarning() << "Failed to read frame from camera for actual capture!";
     }
-    emit showFinalOutputPage();;
-}
-void Capture::updateCameraFeed()
-{
-    if(!videoLabel || !cap.isOpened()){
-        return;
-    }
-
-    cv::Mat frame;
-    if (cap.read(frame)){
-        if(frame.empty()){
-            qWarning() << "Read empty frame from camera!";
-            return;
-        }
-
-        cv::flip(frame, frame, 1);
-        QImage image = cvMatToQImage(frame);
-
-        if(!image.isNull()){
-            QPixmap pixmap = QPixmap::fromImage(image);
-            videoLabel->setPixmap(pixmap.scaled(videoLabel->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
-        }else{
-            qWarning() << "Failed to convert cv::Mat to QImage for live feed";
-        }
-    }else {
-        qWarning() << "Failed to read frame from camera to live feed";
-        if (cameraTimer->isActive()){
-            cameraTimer->stop();
-            videoLabel->setText("Camera stream interrupted");
-            videoLabel->setStyleSheet("color: red; font-size: 14px;");
-        }
-    }
+    emit showFinalOutputPage();
 }
 
-// Helper function to convert cv::Mat to QImage
 QImage Capture::cvMatToQImage(const cv::Mat &mat)
 {
     switch (mat.type()) {
-    case CV_8UC4: // 8-bit, 4 channel (e.g., BGRA or RGBA)
+    case CV_8UC4:
     {
-        // For OpenCV typically giving BGRA, QImage::Format_ARGB32 is ARGB.
-        // A direct cast might lead to incorrect color representation (e.g., blue instead of red).
-        // It's safer to convert to a known format like RGB first.
         cv::Mat rgb;
-        cv::cvtColor(mat, rgb, cv::COLOR_BGRA2RGB); // Convert BGRA to RGB
+        cv::cvtColor(mat, rgb, cv::COLOR_BGRA2RGB);
         return QImage(rgb.data, rgb.cols, rgb.rows, rgb.step, QImage::Format_RGB888);
     }
-
-    case CV_8UC3: // 8-bit, 3 channel (BGR in OpenCV)
+    case CV_8UC3:
     {
-        // OpenCV uses BGR by default for 3-channel images from cameras/files.
-        // Qt's QImage::Format_RGB888 expects RGB. So, a swap is necessary.
         QImage image(mat.data, mat.cols, mat.rows, mat.step, QImage::Format_RGB888);
-        return image.rgbSwapped(); // Correctly swaps R and B channels
+        return image.rgbSwapped();
     }
-
-    case CV_8UC1: // 8-bit, 1 channel (Grayscale)
+    case CV_8UC1:
     {
         static QVector<QRgb> sColorTable;
-        // Only create our color table once
         if (sColorTable.isEmpty())
         {
             for (int i = 0; i < 256; ++i)
@@ -292,7 +352,6 @@ QImage Capture::cvMatToQImage(const cv::Mat &mat)
         image.setColorTable(sColorTable);
         return image;
     }
-
     default:
         qWarning() << "cvMatToQImage - Mat type not handled: " << mat.type();
         return QImage();
