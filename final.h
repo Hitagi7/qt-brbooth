@@ -2,6 +2,8 @@
 #define FINAL_H
 
 #include <QWidget>
+#include <QPixmap>
+#include <QLabel>
 
 namespace Ui {
 class Final;
@@ -15,6 +17,8 @@ public:
     explicit Final(QWidget *parent = nullptr);
     ~Final();
 
+    void setImage(const QPixmap &image);
+
 signals:
     void backToCapturePage();
 
@@ -23,6 +27,7 @@ private slots:
 
 private:
     Ui::Final *ui;
+    QLabel *imageDisplayLabel;
 };
 
 #endif // FINAL_H

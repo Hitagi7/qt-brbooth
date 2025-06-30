@@ -35,7 +35,6 @@ private slots:
     void showFinalOutputPage();
     void on_staticButton_clicked();
     void on_dynamicButton_clicked();
-    void on_capture_clicked();
 
 private:
     Ui::BRBooth *ui;

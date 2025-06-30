@@ -2,6 +2,7 @@
 #include <QMouseEvent>
 #include <QRegularExpression>
 #include <QStyle>
+#include <QVBoxLayout>
 #include "iconhover.h"
 #include "ui_final.h"
 
@@ -17,6 +18,22 @@ Final::Final(QWidget *parent)
 
     Iconhover *backButtonHover = new Iconhover(this); // 'this' as parent for memory management
     ui->back->installEventFilter(backButtonHover);
+
+    //Setup for displaying captured image
+    QVBoxLayout *finalWidgetLayout = qobject_cast<QVBoxLayout*>(ui->finalWidget->layout());
+    if(!finalWidgetLayout){
+        finalWidgetLayout = new QVBoxLayout(ui->finalWidget);
+        finalWidgetLayout->setContentsMargins(0,0,0,0);
+    }
+
+    imageDisplayLabel = new QLabel(ui->finalWidget);
+    imageDisplayLabel->setAlignment(Qt::AlignCenter);
+    imageDisplayLabel->setScaledContents(true);
+
+    finalWidgetLayout->addWidget(imageDisplayLabel);
+    finalWidgetLayout->setStretchFactor(imageDisplayLabel,1);
+
+
 }
 
 Final::~Final()
@@ -27,4 +44,17 @@ Final::~Final()
 void Final::on_back_clicked()
 {
     emit backToCapturePage();
+}
+
+void Final::setImage(const QPixmap &image)
+{
+    if(!image.isNull()){
+        //Scales image
+        imageDisplayLabel->setPixmap(image.scaled(imageDisplayLabel->size(),
+                                                  Qt::KeepAspectRatio,
+                                                  Qt::SmoothTransformation));
+        imageDisplayLabel->setText("");
+    } else{
+        imageDisplayLabel->clear();
+    }
 }

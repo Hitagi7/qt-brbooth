@@ -56,6 +56,7 @@ BRBooth::BRBooth(QWidget *parent)
         // Connect to capture interface, and store the previous page index
         connect(dynamicPage, &Dynamic::videoSelectedTwice, this, [this]() {
             previousPageIndex = dynamicPageIndex; // Store dynamic page as the previous
+            capturePage->setCaptureMode(Capture::VideoRecordMode);
             showCapturePage();
         });
     }
@@ -69,6 +70,7 @@ BRBooth::BRBooth(QWidget *parent)
         // Connect to capture interface, and store the previous page index
         connect(backgroundPage, &Background::imageSelectedTwice, this, [this]() {
             previousPageIndex = backgroundPageIndex; // Store background page as the previous
+            capturePage->setCaptureMode(Capture::ImageCaptureMode);
             showCapturePage();
         });
     }
@@ -84,6 +86,7 @@ BRBooth::BRBooth(QWidget *parent)
             }
         });
         connect(capturePage, &Capture::showFinalOutputPage, this, &BRBooth::showFinalOutputPage);
+        connect(capturePage, &Capture::imageCaptured, finalOutputPage, &Final::setImage);
     }
 
     //Final Output Page
@@ -150,7 +153,3 @@ void BRBooth::on_dynamicButton_clicked()
     showDynamicPage();
 }
 
-void BRBooth::on_capture_clicked()
-{
-    showFinalOutputPage();
-}
