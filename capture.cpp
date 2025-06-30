@@ -25,7 +25,6 @@ Capture::Capture(QWidget *parent)
     , countdownLabel(nullptr)
     , countdownValue(0)
     , m_currentCaptureMode (ImageCaptureMode)
-// REMOVED: m_isCameraReadyForCapture, m_framesDisplayedSinceStart, m_needsInitialRecapture from initializer list
 {
     ui->setupUi(this);
 
@@ -308,6 +307,9 @@ void Capture::performImageCapture()
             return;
         }
 
+        qDebug() << "Captured frame size: "
+                 << frameToCapture.cols << "x" << frameToCapture.rows;  // <--- Add this
+
         cv::flip(frameToCapture, frameToCapture, 1);
 
         QImage capturedImageQ = cvMatToQImage(frameToCapture);
@@ -357,3 +359,4 @@ QImage Capture::cvMatToQImage(const cv::Mat &mat)
         return QImage();
     }
 }
+// ctrl z

@@ -48,13 +48,12 @@ void Final::on_back_clicked()
 
 void Final::setImage(const QPixmap &image)
 {
-    if(!image.isNull()){
-        //Scales image
-        imageDisplayLabel->setPixmap(image.scaled(imageDisplayLabel->size(),
-                                                  Qt::KeepAspectRatio,
-                                                  Qt::SmoothTransformation));
+    if (!image.isNull()) {
+        imageDisplayLabel->setScaledContents(false); // Prevent stretching
+        imageDisplayLabel->setPixmap(image);
         imageDisplayLabel->setText("");
-    } else{
+    } else {
         imageDisplayLabel->clear();
     }
+
 }
