@@ -345,4 +345,3 @@ QImage Capture::cvMatToQImage(const cv::Mat &mat)
         return QImage();
     }
 }
-// ctrl z

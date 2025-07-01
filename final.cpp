@@ -5,6 +5,8 @@
 #include <QVBoxLayout>
 #include "iconhover.h"
 #include "ui_final.h"
+#include <QFileDialog> // Required for QFileDialog
+#include <QMessageBox> // Required for QMessageBox
 
 Final::Final(QWidget *parent)
     : QWidget(parent)
@@ -32,8 +34,6 @@ Final::Final(QWidget *parent)
 
     finalWidgetLayout->addWidget(imageDisplayLabel);
     finalWidgetLayout->setStretchFactor(imageDisplayLabel,1);
-
-
 }
 
 Final::~Final()
@@ -55,5 +55,29 @@ void Final::setImage(const QPixmap &image)
     } else {
         imageDisplayLabel->clear();
     }
+}
 
+void Final::on_save_clicked()
+{
+    QPixmap imageToSave = imageDisplayLabel->pixmap();
+
+    if (imageToSave.isNull()) {
+        QMessageBox::warning(this, "Save Image", "No image to save.");
+        return;
+    }
+
+    // Get a file name from the user
+    QString fileName = QFileDialog::getSaveFileName(this, "Save Image",
+                                                    QDir::homePath() + "/untitled.png", // Default path and filename
+                                                    "Images (*.png *.jpg *.bmp *.gif)"); // Supported image formats
+
+    if (!fileName.isEmpty()) {
+        // Save the image
+        if (imageToSave.save(fileName)) {
+            QMessageBox::information(this, "Save Image", "Image saved successfully!");
+        } else {
+            QMessageBox::critical(this, "Save Image", "Failed to save image.");
+        }
+    }
+    emit backToLandingPage();
 }

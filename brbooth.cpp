@@ -92,6 +92,7 @@ BRBooth::BRBooth(QWidget *parent)
     //Final Output Page
     if (finalOutputPage) {
         connect(finalOutputPage, &Final::backToCapturePage, this, &BRBooth::showCapturePage);
+        connect(finalOutputPage, &Final::backToLandingPage, this, &BRBooth::showLandingPage);
     }
 
     // Resets static foreground page everytime its loaded

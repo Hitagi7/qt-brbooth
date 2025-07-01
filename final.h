@@ -2,12 +2,11 @@
 #define FINAL_H
 
 #include <QWidget>
-#include <QPixmap>
-#include <QLabel>
+#include <QLabel> // Make sure QLabel is included
 
-namespace Ui {
-class Final;
-}
+QT_BEGIN_NAMESPACE
+namespace Ui { class Final; }
+QT_END_NAMESPACE
 
 class Final : public QWidget
 {
@@ -21,13 +20,15 @@ public:
 
 signals:
     void backToCapturePage();
+    void backToLandingPage();
 
 private slots:
     void on_back_clicked();
+    void on_save_clicked(); // This slot will handle saving the image
 
 private:
     Ui::Final *ui;
-    QLabel *imageDisplayLabel;
+    QLabel *imageDisplayLabel; // Declare imageDisplayLabel as a member
 };
 
 #endif // FINAL_H

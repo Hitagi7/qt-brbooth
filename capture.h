@@ -65,8 +65,6 @@ private:
     int countdownValue; //current value of the countdown
 
     CaptureMode m_currentCaptureMode; //stores current mode of operation for Capture page
-
-    bool m_cameraFullyReady;
 };
 
 #endif // CAPTURE_H
