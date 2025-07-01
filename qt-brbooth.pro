@@ -26,7 +26,8 @@ HEADERS += \
     dynamic.h \
     final.h \
     foreground.h \
-    iconhover.h
+    iconhover.h \
+    videotemplate.h
 
 FORMS += \
     background.ui \

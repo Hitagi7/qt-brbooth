@@ -9,6 +9,8 @@
 #include <QPixmap>
 #include <QPushButton>
 #include <QThread>
+#include <QList>
+#include "videotemplate.h"
 
 // Required for OpenCV types (cv::VideoCapture and cv::Mat) used as members
 #include <opencv2/opencv.hpp>
@@ -32,11 +34,12 @@ public:
     ~Capture();
 
     void setCaptureMode(CaptureMode mode);
-
+    void setVideoTemplate(const VideoTemplate& templateData);
 signals:
     void backtoPreviousPage();
     void showFinalOutputPage();
     void imageCaptured(const QPixmap &image);
+    void videoRecorded(const QList<QPixmap> &frames);
 
 protected:
     void resizeEvent(QResizeEvent *event) override;
@@ -46,6 +49,7 @@ private slots:
     void updateCameraFeed(); // Declaration for the slot used to update camera feed
     void updateCountdown();
     void performImageCapture();
+    void updateRecordTimer();
 
 private:
     Ui::Capture *ui;
@@ -58,6 +62,9 @@ private:
     // Helper function declaration
     QImage cvMatToQImage(const cv::Mat &mat); // Helper to convert OpenCV Mat to QImage
     QPixmap m_capturedImage; //stores the last captured image
+    void startRecording();
+    void stopRecording();
+
 
     //Countdown Timers;
     QTimer *countdownTimer; //Timer for the 5-second countdown
@@ -67,6 +74,15 @@ private:
     CaptureMode m_currentCaptureMode; //stores current mode of operation for Capture page
 
     bool m_cameraFullyReady;
+
+    //Video Recording
+    QList<QPixmap> m_recordedFrames; //Stores frames as QPixmaps
+    bool m_isRecording; //indicates if recording is active
+    QTimer *recordTimer; //Timer for recording duration
+    VideoTemplate m_currentVideoTemplate;
+    int m_recordedSeconds;
+
+
 };
 
 #endif // CAPTURE_H
