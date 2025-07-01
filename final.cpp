@@ -49,7 +49,7 @@ void Final::on_back_clicked()
 void Final::setImage(const QPixmap &image)
 {
     if (!image.isNull()) {
-        imageDisplayLabel->setScaledContents(false); // Prevent stretching
+        imageDisplayLabel->setScaledContents(true); // Prevent stretching
         imageDisplayLabel->setPixmap(image);
         imageDisplayLabel->setText("");
     } else {

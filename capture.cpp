@@ -91,20 +91,6 @@ Capture::Capture(QWidget *parent)
         qWarning() << "WARNING: Camera did not accept 60 FPS request. Actual FPS is" << actual_fps;
     }
 
-    // --- Initial Camera Warm-up (silent discard) - Reduced for minimal impact ---
-    cv::Mat dummyFrame;
-    int warmUpDurationSeconds = 1; // Very short warm-up
-    int estimatedFramesToRead = (actual_fps > 0) ? (warmUpDurationSeconds * actual_fps) : (warmUpDurationSeconds * 30);
-    qDebug() << "Starting initial silent warm-up: reading " << estimatedFramesToRead << " frames...";
-    for (int i = 0; i < estimatedFramesToRead; ++i) {
-        if (!cap.read(dummyFrame)) {
-            qWarning() << "Warning: Failed to read dummy frame during warm-up at frame" << i;
-            break; // Exit loop if frame read fails
-        }
-    }
-    QThread::msleep(100); // Small delay after silent warm-up
-
-    qDebug() << "Silent warm-up complete. Starting live display.";
 
     // Video feed label setup
     videoLabel = new QLabel(ui->videoFeedWidget);
