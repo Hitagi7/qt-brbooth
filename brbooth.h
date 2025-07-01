@@ -2,6 +2,10 @@
 #define BRBOOTH_H
 
 #include <QMainWindow>
+#include <QDebug>
+#include <QMediaPlayer>
+#include <QVideoWidget>
+#include <QResizeEvent> // Still needed for QVideoWidget resizing
 
 #include "opencv2/core/core.hpp"
 
@@ -14,7 +18,6 @@ QT_BEGIN_NAMESPACE
 namespace Ui {
 class BRBooth;
 }
-
 QT_END_NAMESPACE
 
 class BRBooth : public QMainWindow
@@ -32,7 +35,10 @@ private slots:
     void showBackgroundPage();
     void showCapturePage();
     void on_staticButton_clicked();
-    void on_dynamicButton_clicked();
+    void on_dynamicButton_clicked(); // RE-ADDED: For the QPushButton
+
+protected:
+    void resizeEvent(QResizeEvent *event) override; // Still needed
 
 private:
     Ui::BRBooth *ui;
@@ -46,5 +52,8 @@ private:
     Capture *capturePage;
     int capturePageIndex;
     int previousPageIndex;
+
+    QMediaPlayer *dynamicMediaPlayer;
+    QVideoWidget *dynamicVideoWidget;
 };
 #endif // BRBOOTH_H
