@@ -1,6 +1,7 @@
 // capture.cpp
 #include "capture.h"
 #include "ui_capture.h"
+#include "videotemplate.h"
 #include "iconhover.h"
 #include <QVBoxLayout>
 #include <QLabel>
@@ -25,6 +26,11 @@ Capture::Capture(QWidget *parent)
     , countdownLabel(nullptr)
     , countdownValue(0)
     , m_currentCaptureMode (ImageCaptureMode)
+    , m_isRecording(false)
+    , recordTimer(nullptr)
+    , m_currentVideoTemplate("Default", 5)
+    , m_recordedSeconds(0)
+
 {
     ui->setupUi(this);
 
@@ -125,6 +131,10 @@ Capture::Capture(QWidget *parent)
     countdownTimer = new QTimer(this);
     connect(countdownTimer, &QTimer::timeout, this, &Capture::updateCountdown);
 
+    //Record Timer Setup
+    recordTimer = new QTimer(this);
+    connect(recordTimer, &QTimer::timeout, this, &Capture::updateRecordTimer);
+
     qDebug() << "OpenCV Camera started successfully!";
     qDebug() << "OpenCV Camera display timer started for 60 FPS.";
 }
@@ -142,6 +152,12 @@ Capture::~Capture()
         countdownTimer->stop();
         delete countdownTimer;
         countdownTimer = nullptr;
+    }
+
+    if(recordTimer){
+        recordTimer->stop();
+        delete recordTimer;
+        recordTimer = nullptr;
     }
 
     // Release the camera resource
@@ -166,6 +182,12 @@ void Capture::resizeEvent(QResizeEvent *event){
 void Capture::setCaptureMode(CaptureMode mode){
     m_currentCaptureMode = mode;
     qDebug() << "Capture mode set to: " << (mode == ImageCaptureMode ? "Image Capture Mode" : "Video Record Mode");
+}
+
+void Capture::setVideoTemplate(const VideoTemplate &templateData)
+{
+    m_currentVideoTemplate = templateData;
+
 }
 
 void Capture::updateCameraFeed()
@@ -204,10 +226,22 @@ void Capture::updateCameraFeed()
         } else {
             qWarning() << "Failed to convert cv::Mat to QImage!";
         }
+
+        if(m_isRecording){
+            QImage imageToStore = cvMatToQImage(frame);
+            if (!imageToStore.isNull()){
+                m_recordedFrames.append(QPixmap::fromImage(imageToStore));
+            } else {
+                qWarning() << "Failed to convert cv::Mat to QImage for recording!";
+            }
+        }
     } else {
         qWarning() << "Failed to read frame from camera! Stopping timer.";
         cameraTimer->stop();
         ui->capture->setEnabled(false); // Also disable capture button if stream fails
+        if (m_isRecording){
+            stopRecording();
+        }
     }
 
     qint64 loopTime = loopTimer.elapsed();
@@ -227,14 +261,34 @@ void Capture::updateCameraFeed()
 
 void Capture::on_back_clicked()
 {
+    // 1. Stop and hide the countdown timer/label if active
+    if (countdownTimer->isActive()) {
+        countdownTimer->stop();
+        countdownLabel->hide();
+        // Reset countdown value for the next time
+        countdownValue = 0;
+        qDebug() << "Countdown stopped by back button.";
+    }
+
+    // 2. Stop any ongoing video recording
+    if (m_isRecording) {
+        stopRecording();
+        qDebug() << "Recording stopped by back button.";
+    }
+    // else if the capture button is disabled (e.g., during photo countdown or just after capture start)
+    // ensure it's re-enabled and reset for a potential next photo capture
+    else if (!ui->capture->isEnabled()) {
+        ui->capture->setEnabled(true);
+        qDebug() << "Capture button reset by back button.";
+    }
+
+    // 3. Emit the signal to go back to the previous page
     emit backtoPreviousPage();
 }
 
 void Capture::on_capture_clicked()
 {
-    // REMOVED: m_isCameraReadyForCapture check here
 
-    if (m_currentCaptureMode == ImageCaptureMode) {
         ui->capture->setEnabled(false);
 
         countdownValue = 5;
@@ -248,9 +302,6 @@ void Capture::on_capture_clicked()
         animation->start();
 
         countdownTimer->start(1000);
-    } else {
-        qDebug() << "Capture button clicked in Video Record Mode. (Video recording logic not yet implemented).";
-    }
 }
 
 void Capture::updateCountdown()
@@ -261,30 +312,67 @@ void Capture::updateCountdown()
     } else {
         countdownTimer->stop();
         countdownLabel->hide();
-        performImageCapture();
 
-        // Always re-enable after countdown
-        ui->capture->setEnabled(true);
+        if(m_currentCaptureMode == ImageCaptureMode){
+            performImageCapture();
+            ui->capture->setEnabled(true);
+        }else if(m_currentCaptureMode == VideoRecordMode){
+            startRecording();
+        }
     }
 }
 
+void Capture::updateRecordTimer()
+{
+    m_recordedSeconds++;
+    qDebug() << "Recording: " << m_recordedSeconds << " / " << m_currentVideoTemplate.durationSeconds << " seconds";
+
+
+   //Stop automatically after m_currentVideoTemplate.durationSeconds
+    if (m_recordedSeconds >= m_currentVideoTemplate.durationSeconds) {
+        stopRecording();
+    }
+}
+
+void Capture::startRecording()
+{
+    if(!cap.isOpened()){
+        qWarning() << "Cannot start recording: Camera not open!";
+        ui->capture->setEnabled(true);
+        return;
+    }
+
+    m_recordedFrames.clear();
+    m_isRecording = true;
+    m_recordedSeconds = 0;
+    recordTimer->start(1000);
+}
+
+void Capture::stopRecording()
+{
+    if (!m_isRecording)
+    {
+        return;
+    }
+
+    recordTimer->stop();
+    m_isRecording = false;
+
+    qDebug() << "Recording stopped. Captured " << m_recordedFrames.size() << " frames.";
+    if (!m_recordedFrames.isEmpty()) {
+        // MODIFIED: Emit the list of QPixmaps
+        emit videoRecorded(m_recordedFrames);
+    } else {
+        qWarning() << "No frames recorded for video!";
+    }
+
+    emit showFinalOutputPage(); // Transition to final page
+     ui->capture->setEnabled(true);
+}
 void Capture::performImageCapture()
 {
-    cv::Mat tempFrame; // Temporary frame for discards
     cv::Mat frameToCapture; // The actual frame we want to keep
 
-    // REMOVED: m_needsInitialRecapture (double-take) logic
-
-    // Standard discard for robustness (you can remove this loop too if you want the absolute minimum)
-    int framesToDiscard = 10;
-    qDebug() << "Discarding standard " << framesToDiscard << " frames before actual capture...";
-    for (int i = 0; i < framesToDiscard; ++i) {
-        if (!cap.read(tempFrame)) {
-            qWarning() << "Warning: Failed to read a pre-capture dummy frame during discard phase.";
-            break;
-        }
-    }
-    // QThread::msleep(50); // Optional small delay
 
     // --- Actual capture of the final frame ---
     if (cap.read(frameToCapture)){

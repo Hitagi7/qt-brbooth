@@ -5,6 +5,7 @@
 #include "final.h"
 #include "foreground.h"
 #include "ui_brbooth.h"
+#include "videotemplate.h"
 
 // Boilerplate
 BRBooth::BRBooth(QWidget *parent)
@@ -57,6 +58,12 @@ BRBooth::BRBooth(QWidget *parent)
         connect(dynamicPage, &Dynamic::videoSelectedTwice, this, [this]() {
             previousPageIndex = dynamicPageIndex; // Store dynamic page as the previous
             capturePage->setCaptureMode(Capture::VideoRecordMode);
+
+            // ADDITION: Set a default video template for now (e.g., 10 seconds)
+            // Replace this with actual template logic when you have it
+            VideoTemplate defaultVideoTemplate("Default Dynamic Template", 10); // 10 seconds for dynamic
+            capturePage->setVideoTemplate(defaultVideoTemplate);
+
             showCapturePage();
         });
     }
@@ -87,6 +94,7 @@ BRBooth::BRBooth(QWidget *parent)
         });
         connect(capturePage, &Capture::showFinalOutputPage, this, &BRBooth::showFinalOutputPage);
         connect(capturePage, &Capture::imageCaptured, finalOutputPage, &Final::setImage);
+        connect(capturePage, &Capture::videoRecorded, finalOutputPage, &Final::setVideo);
     }
 
     //Final Output Page

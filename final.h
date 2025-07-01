@@ -3,6 +3,11 @@
 
 #include <QWidget>
 #include <QLabel> // Make sure QLabel is included
+#include <QPixmap>
+#include <QLabel>
+#include <QList>
+#include <QTimer>
+
 
 QT_BEGIN_NAMESPACE
 namespace Ui { class Final; }
@@ -17,6 +22,7 @@ public:
     ~Final();
 
     void setImage(const QPixmap &image);
+    void setVideo(const QList<QPixmap> &frames);
 
 signals:
     void backToCapturePage();
@@ -29,6 +35,13 @@ private slots:
 private:
     Ui::Final *ui;
     QLabel *imageDisplayLabel; // Declare imageDisplayLabel as a member
+    void playNextFrame();
+
+    //Video PLayback
+    QList<QPixmap> m_videoFrames; //Stores the frames
+    QTimer *videoPlaybackTimer; //Timer to advance frames
+    int m_currentFrameIndex; //Current frame being displayed
+
 };
 
 #endif // FINAL_H

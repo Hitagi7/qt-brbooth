@@ -1,6 +1,7 @@
 #include <QApplication>
 #include <QFontDatabase>
 #include "brbooth.h"
+#include "videotemplate.h"
 
 int main(int argc, char *argv[])
 {
@@ -13,6 +14,7 @@ int main(int argc, char *argv[])
         qDebug() << "Font loaded successfully. Font ID:" << fontId;
     }
 
+    qRegisterMetaType<VideoTemplate>("Video Template");
     BRBooth w;
     w.showFullScreen();
     return a.exec();
