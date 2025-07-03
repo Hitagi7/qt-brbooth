@@ -19,6 +19,8 @@
 #include <QScreen>
 #include <QApplication>
 #include <QVBoxLayout>
+#include <QMediaPlayer>
+#include <QVideoWidget>
 
 BRBooth::BRBooth(QWidget *parent)
     : QMainWindow(parent)
@@ -51,6 +53,7 @@ BRBooth::BRBooth(QWidget *parent)
         dynamicVideoWidget->setAttribute(Qt::WA_TransparentForMouseEvents);
 
         if (chillTextLabel) {
+            chillTextLabel->hide();
             chillTextLabel->raise();
             chillTextLabel->setGeometry(0, 0, 649, 468);
         }
@@ -101,14 +104,9 @@ BRBooth::BRBooth(QWidget *parent)
 
     if (dynamicPage) {
         connect(dynamicPage, &Dynamic::backtoLandingPage, this, &BRBooth::showLandingPage);
-        // This is the line that needs correction.
-        // Replace &Dynamic::videoSelectedTwice with &Dynamic::showCapturePage
         connect(dynamicPage, &Dynamic::showCapturePage, this, [this](){
-            previousPageIndex = dynamicPageIndex; // Set previous page to dynamic page
-            showCapturePage();
+            previousPageIndex = dynamicPageIndex;
         });
-        // Remove the duplicate or incorrect connection if it existed:
-        // connect(dynamicPage, &Dynamic::videoSelectedTwice, this, [this](){ ... });
     }
 
     if (backgroundPage) {
@@ -160,7 +158,6 @@ BRBooth::~BRBooth()
 void BRBooth::resizeEvent(QResizeEvent *event)
 {
     QMainWindow::resizeEvent(event);
-    QPushButton* dynamicButton = ui->landingpage->findChild<QPushButton*>("dynamicButton");
     QLabel* chillTextLabel = ui->landingpage->findChild<QLabel*>("chillTextLabel");
 
     if (dynamicVideoWidget) {

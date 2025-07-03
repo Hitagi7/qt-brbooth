@@ -60,3 +60,4 @@ private: // These remain private as they are internal helper functions
 };
 
 #endif // DYNAMIC_H
+
