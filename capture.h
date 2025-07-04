@@ -50,6 +50,8 @@ private slots:
     void updateCountdown();
     void performImageCapture();
     void updateRecordTimer();
+    void loadYoloModel();
+    void loadClassNames(const QString& filePath);
 
 private:
     Ui::Capture *ui;
@@ -65,6 +67,10 @@ private:
     void startRecording();
     void stopRecording();
 
+    //Yolov5
+    cv::dnn::Net yoloNet;
+    std::vector<std::string> classNames;
+    std::vector<cv::Rect> runYoloDetection(const cv::Mat& frame, std::vector<int>& outClassIds, std::vector<float>& outConfidences);
 
     //Countdown Timers;
     QTimer *countdownTimer; //Timer for the 5-second countdown

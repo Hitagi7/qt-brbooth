@@ -15,6 +15,9 @@
 #include <QThread> // Still needed for QThread::msleep, even if minimal
 #include <QElapsedTimer>
 
+#include <fstream>
+#include <string>
+#include <opencv2/dnn.hpp>
 #include <opencv2/opencv.hpp>
 
 Capture::Capture(QWidget *parent)
@@ -33,6 +36,12 @@ Capture::Capture(QWidget *parent)
 
 {
     ui->setupUi(this);
+
+    //Load Model and Class Names
+    loadClassNames("models/coco.names"); // or ":/models/coco.names" if using Qt resources
+    yoloNet = cv::dnn::readNetFromONNX("C:/Users/User/Documents/qt-brbooth/models/yolov5n.onnx");
+    yoloNet.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
+    yoloNet.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
 
     ui->back->setIcon(QIcon(":/icons/Icons/normal.svg"));
     ui->back->setIconSize(QSize(100, 100));
@@ -166,6 +175,8 @@ Capture::~Capture()
     }
 
     delete ui; // Deletes the UI components, including videoFeedWidget and its children like videoLabel
+
+
 }
 
 
@@ -209,31 +220,34 @@ void Capture::updateCameraFeed()
 
     cv::Mat frame;
     if (cap.read(frame)) {
-        if (frame.empty()) {
-            qWarning() << "Read empty frame from camera!";
-            return;
+        if (frame.empty()) { return; }
+
+        // Object Detection
+        std::vector<int> classIds;
+        std::vector<float> confidences;
+        std::vector<cv::Rect> detections = runYoloDetection(frame, classIds, confidences);
+
+        // Draw boxes
+        for (size_t i = 0; i < detections.size(); ++i) {
+            cv::rectangle(frame, detections[i], cv::Scalar(0, 255, 0), 2);
+            std::string label = classNames.size() > classIds[i] ? classNames[classIds[i]] : std::to_string(classIds[i]);
+            label += " " + std::to_string((int)(confidences[i] * 100)) + "%";
+            int baseLine = 0;
+            cv::Size labelSize = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseLine);
+            int top = std::max(detections[i].y, labelSize.height);
+            cv::rectangle(frame, cv::Point(detections[i].x, top - labelSize.height),
+                          cv::Point(detections[i].x + labelSize.width, top + baseLine),
+                          cv::Scalar(0,255,0), cv::FILLED);
+            cv::putText(frame, label, cv::Point(detections[i].x, top),
+                        cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0,0,0), 1);
         }
 
-        cv::flip(frame, frame, 1);
+        cv::flip(frame, frame, 1); // keep as before
 
         QImage image = cvMatToQImage(frame);
-
         if (!image.isNull()) {
             QPixmap pixmap = QPixmap::fromImage(image);
             videoLabel->setPixmap(pixmap.scaled(videoLabel->size(), Qt::KeepAspectRatio, Qt::FastTransformation));
-
-            // REMOVED: m_isCameraReadyForCapture logic here
-        } else {
-            qWarning() << "Failed to convert cv::Mat to QImage!";
-        }
-
-        if(m_isRecording){
-            QImage imageToStore = cvMatToQImage(frame);
-            if (!imageToStore.isNull()){
-                m_recordedFrames.append(QPixmap::fromImage(imageToStore));
-            } else {
-                qWarning() << "Failed to convert cv::Mat to QImage for recording!";
-            }
         }
     } else {
         qWarning() << "Failed to read frame from camera! Stopping timer.";
@@ -432,4 +446,77 @@ QImage Capture::cvMatToQImage(const cv::Mat &mat)
         qWarning() << "cvMatToQImage - Mat type not handled: " << mat.type();
         return QImage();
     }
+}
+
+void Capture::loadYoloModel() {
+    QString modelPath = ":/models/yolov5s.onnx"; // or your path
+    yoloNet = cv::dnn::readNetFromONNX(modelPath.toStdString());
+    yoloNet.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
+    yoloNet.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
+
+}
+
+void Capture::loadClassNames(const QString& filePath) {
+    classNames.clear();
+    std::ifstream ifs(filePath.toStdString());
+    std::string line;
+    while (std::getline(ifs, line)) {
+        if (!line.empty())
+            classNames.push_back(QString::fromStdString(line).toStdString());
+    }
+}
+
+std::vector<cv::Rect> Capture::runYoloDetection(const cv::Mat& frame, std::vector<int>& outClassIds, std::vector<float>& outConfidences)
+{
+    cv::Mat blob;
+    cv::dnn::blobFromImage(frame, blob, 1/255.0, cv::Size(640, 640), cv::Scalar(), true, false);
+    yoloNet.setInput(blob);
+    std::vector<cv::Mat> outputs;
+    yoloNet.forward(outputs, yoloNet.getUnconnectedOutLayersNames());
+
+    std::vector<cv::Rect> boxes;
+    outClassIds.clear();
+    outConfidences.clear();
+
+    float confThreshold = 0.3f;
+    float nmsThreshold = 0.5f;
+    std::vector<int> indices;
+    std::vector<cv::Rect> allBoxes;
+    std::vector<float> allScores;
+    std::vector<int> allClassIds;
+
+    // Process output
+    for (auto& output : outputs) {
+        float* data = (float*)output.data;
+        for (int i = 0; i < output.rows; ++i, data += output.cols) {
+            float score = data[4];
+            if (score > confThreshold) {
+                cv::Mat scores = output.row(i).colRange(5, output.cols);
+                cv::Point classIdPoint;
+                double maxClassScore;
+                minMaxLoc(scores, 0, &maxClassScore, 0, &classIdPoint);
+                if (maxClassScore > confThreshold) {
+                    int centerX = (int)(data[0] * frame.cols);
+                    int centerY = (int)(data[1] * frame.rows);
+                    int width = (int)(data[2] * frame.cols);
+                    int height = (int)(data[3] * frame.rows);
+                    int left = centerX - width / 2;
+                    int top = centerY - height / 2;
+                    allBoxes.push_back(cv::Rect(left, top, width, height));
+                    allScores.push_back((float)maxClassScore);
+                    allClassIds.push_back(classIdPoint.x);
+                }
+            }
+        }
+    }
+
+    // NMS to remove duplicates
+    cv::dnn::NMSBoxes(allBoxes, allScores, confThreshold, nmsThreshold, indices);
+    for (int idx : indices) {
+        boxes.push_back(allBoxes[idx]);
+        outClassIds.push_back(allClassIds[idx]);
+        outConfidences.push_back(allScores[idx]);
+    }
+
+    return boxes;
 }
