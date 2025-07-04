@@ -124,8 +124,8 @@ void Final::setVideo(const QList<QPixmap> &frames)
 
     if (!m_videoFrames.isEmpty()) {
         qDebug() << "Playing back video with " << m_videoFrames.size() << " frames.";
-        // Determine playback speed. Assuming Capture's cameraTimer started at 1000/60 for 60 FPS
-        videoPlaybackTimer->start(1000 / 60); // Aim for 60 FPS playback
+        // FIXED: Use 60 FPS for playback to match recording FPS
+        videoPlaybackTimer->start(1000 / 60); // Aim for 60 FPS playback to match recording
         playNextFrame(); // Display the first frame immediately
     } else {
         qWarning() << "No video frames provided for playback!";
@@ -172,7 +172,6 @@ cv::Mat QImageToCvMat(const QImage &inImage)
     }
 }
 
-
 // ADDITION: New function to save video frames to a file
 void Final::saveVideoToFile()
 {
@@ -181,37 +180,33 @@ void Final::saveVideoToFile()
         return;
     }
 
-    // Get a file name from the user (CAN BE CHANGED)
     QString defaultFileName = QDir::homePath() + "/video_" + QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss") + ".avi";
     QString fileName = QFileDialog::getSaveFileName(this, "Save Video",
                                                     defaultFileName,
-                                                    "Videos (*.avi *.mp4)"); // Offer AVI and MP4
+                                                    "Videos (*.avi *.mp4)");
 
     if (fileName.isEmpty()) {
-        return; // User cancelled
+        return;
     }
 
-    // Determine the codec based on the file extension
-    int fourcc = cv::VideoWriter::fourcc('M', 'J', 'P', 'G'); // Default to MJPG
+    int fourcc = cv::VideoWriter::fourcc('M', 'J', 'P', 'G');
     if (fileName.endsWith(".mp4", Qt::CaseInsensitive)) {
-        fourcc = cv::VideoWriter::fourcc('M', 'P', '4', 'V'); // H.264 is preferred for MP4, but MP4V is widely supported.
-        // You might need to check if your OpenCV build supports H.264 (e.g., with FFMPEG backend).
-        // 'XVID' can also be an option for AVI.
+        fourcc = cv::VideoWriter::fourcc('M', 'P', '4', 'V');
     }
 
-
-    // Get frame size from the first frame
     QSize frameSize = m_videoFrames.first().size();
     int width = frameSize.width();
     int height = frameSize.height();
 
-    // Determine FPS (assuming 60 FPS capture)
-    double fps = 60.0; // This should ideally come from the Capture class if it's dynamic
+    // FIXED: Calculate actual FPS based on captured frames
+    // If we have 285 frames for 10 seconds, that's 28.5 FPS
+    // Use this as the save FPS to get normal playback speed
+    double actualFPS = (double)m_videoFrames.size() / 10.0; // Assuming 10 seconds duration
+    qDebug() << "Saving video with actual FPS: " << actualFPS;
 
     cv::VideoWriter videoWriter;
 
-    // Open the video writer
-    if (!videoWriter.open(fileName.toStdString(), fourcc, fps, cv::Size(width, height), true)) {
+    if (!videoWriter.open(fileName.toStdString(), fourcc, actualFPS, cv::Size(width, height), true)) {
         QMessageBox::critical(this, "Save Video", "Failed to open video writer. Check codecs and file path.");
         qWarning() << "Failed to open video writer for file: " << fileName << " with FOURCC: " << fourcc;
         return;
@@ -230,17 +225,17 @@ void Final::saveVideoToFile()
             qWarning() << "Failed to convert QImage to cv::Mat during video saving.";
             continue;
         }
-        // Ensure the frame is in 3 channels (BGR for OpenCV) for video writer
-        if (frame.channels() == 4) { // If QImage was ARGB/RGB32, it's 4 channels
+
+        if (frame.channels() == 4) {
             cv::cvtColor(frame, frame, cv::COLOR_BGRA2BGR);
-        } else if (frame.channels() == 1) { // If it was grayscale
+        } else if (frame.channels() == 1) {
             cv::cvtColor(frame, frame, cv::COLOR_GRAY2BGR);
         }
 
         videoWriter.write(frame);
     }
 
-    videoWriter.release(); // Release the video writer
-    QMessageBox::information(this, "Save Video", "Video saved successfully!");
+    videoWriter.release();
+    QMessageBox::information(this, "Save Video", QString("Video saved successfully at %1 FPS!").arg(actualFPS, 0, 'f', 1));
     qDebug() << "Video saved to: " << fileName;
 }

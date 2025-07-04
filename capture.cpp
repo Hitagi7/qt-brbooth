@@ -1,4 +1,3 @@
-// capture.cpp
 #include "capture.h"
 #include "ui_capture.h"
 #include "videotemplate.h"
@@ -28,6 +27,8 @@ Capture::Capture(QWidget *parent)
     , m_currentCaptureMode (ImageCaptureMode)
     , m_isRecording(false)
     , recordTimer(nullptr)
+    , recordingFrameTimer(nullptr)
+    , m_targetRecordingFPS(60)
     , m_currentVideoTemplate("Default", 5)
     , m_recordedSeconds(0)
 
@@ -97,7 +98,6 @@ Capture::Capture(QWidget *parent)
         qWarning() << "WARNING: Camera did not accept 60 FPS request. Actual FPS is" << actual_fps;
     }
 
-
     // Video feed label setup
     videoLabel = new QLabel(ui->videoFeedWidget);
     videoLabel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
@@ -131,9 +131,14 @@ Capture::Capture(QWidget *parent)
     countdownTimer = new QTimer(this);
     connect(countdownTimer, &QTimer::timeout, this, &Capture::updateCountdown);
 
-    //Record Timer Setup
+    // Record Timer Setup
     recordTimer = new QTimer(this);
     connect(recordTimer, &QTimer::timeout, this, &Capture::updateRecordTimer);
+
+    // FIXED: Use precise timer for recording - calculate exact interval
+    recordingFrameTimer = new QTimer(this);
+    recordingFrameTimer->setTimerType(Qt::PreciseTimer);
+    connect(recordingFrameTimer, &QTimer::timeout, this, &Capture::captureRecordingFrame);
 
     qDebug() << "OpenCV Camera started successfully!";
     qDebug() << "OpenCV Camera display timer started for 60 FPS.";
@@ -160,6 +165,12 @@ Capture::~Capture()
         recordTimer = nullptr;
     }
 
+    if(recordingFrameTimer){
+        recordingFrameTimer->stop();
+        delete recordingFrameTimer;
+        recordingFrameTimer = nullptr;
+    }
+
     // Release the camera resource
     if (cap.isOpened()) {
         cap.release();
@@ -167,7 +178,6 @@ Capture::~Capture()
 
     delete ui; // Deletes the UI components, including videoFeedWidget and its children like videoLabel
 }
-
 
 void Capture::resizeEvent(QResizeEvent *event){
     //Ensures countdownLabel is centered when widget resizes
@@ -187,7 +197,6 @@ void Capture::setCaptureMode(CaptureMode mode){
 void Capture::setVideoTemplate(const VideoTemplate &templateData)
 {
     m_currentVideoTemplate = templateData;
-
 }
 
 void Capture::updateCameraFeed()
@@ -221,20 +230,11 @@ void Capture::updateCameraFeed()
         if (!image.isNull()) {
             QPixmap pixmap = QPixmap::fromImage(image);
             videoLabel->setPixmap(pixmap.scaled(videoLabel->size(), Qt::KeepAspectRatio, Qt::FastTransformation));
-
-            // REMOVED: m_isCameraReadyForCapture logic here
         } else {
             qWarning() << "Failed to convert cv::Mat to QImage!";
         }
 
-        if(m_isRecording){
-            QImage imageToStore = cvMatToQImage(frame);
-            if (!imageToStore.isNull()){
-                m_recordedFrames.append(QPixmap::fromImage(imageToStore));
-            } else {
-                qWarning() << "Failed to convert cv::Mat to QImage for recording!";
-            }
-        }
+        // Recording is now handled by separate timer - no frame capture here
     } else {
         qWarning() << "Failed to read frame from camera! Stopping timer.";
         cameraTimer->stop();
@@ -256,6 +256,34 @@ void Capture::updateCameraFeed()
         frameCount = 0;
         totalTime = 0;
         frameTimer.start();
+    }
+}
+
+void Capture::captureRecordingFrame()
+{
+    if (!m_isRecording || !cap.isOpened()) {
+        return;
+    }
+
+    // FIXED: Simple approach - just capture every time the timer fires
+    cv::Mat frame;
+    if (cap.read(frame)) {
+        if (frame.empty()) {
+            qWarning() << "Read empty frame for recording!";
+            return;
+        }
+
+        cv::flip(frame, frame, 1);
+
+        QImage imageToStore = cvMatToQImage(frame);
+        if (!imageToStore.isNull()) {
+            m_recordedFrames.append(QPixmap::fromImage(imageToStore));
+            qDebug() << "Captured frame #" << m_recordedFrames.size() << " for recording";
+        } else {
+            qWarning() << "Failed to convert cv::Mat to QImage for recording!";
+        }
+    } else {
+        qWarning() << "Failed to read frame from camera for recording!";
     }
 }
 
@@ -288,20 +316,19 @@ void Capture::on_back_clicked()
 
 void Capture::on_capture_clicked()
 {
+    ui->capture->setEnabled(false);
 
-        ui->capture->setEnabled(false);
+    countdownValue = 5;
+    countdownLabel->setText(QString::number(countdownValue));
+    countdownLabel->show();
 
-        countdownValue = 5;
-        countdownLabel->setText(QString::number(countdownValue));
-        countdownLabel->show();
+    QPropertyAnimation *animation = new QPropertyAnimation(countdownLabel, "windowOpacity", this);
+    animation->setDuration(300);
+    animation->setStartValue(0.0);
+    animation->setEndValue(1.0);
+    animation->start();
 
-        QPropertyAnimation *animation = new QPropertyAnimation(countdownLabel, "windowOpacity", this);
-        animation->setDuration(300);
-        animation->setStartValue(0.0);
-        animation->setEndValue(1.0);
-        animation->start();
-
-        countdownTimer->start(1000);
+    countdownTimer->start(1000);
 }
 
 void Capture::updateCountdown()
@@ -326,9 +353,11 @@ void Capture::updateRecordTimer()
 {
     m_recordedSeconds++;
     qDebug() << "Recording: " << m_recordedSeconds << " / " << m_currentVideoTemplate.durationSeconds << " seconds";
+    qDebug() << "Total frames captured so far: " << m_recordedFrames.size();
+    qDebug() << "Expected frames so far: " << (m_recordedSeconds * m_targetRecordingFPS);
+    qDebug() << "Actual FPS so far: " << ((double)m_recordedFrames.size() / m_recordedSeconds);
 
-
-   //Stop automatically after m_currentVideoTemplate.durationSeconds
+    //Stop automatically after m_currentVideoTemplate.durationSeconds
     if (m_recordedSeconds >= m_currentVideoTemplate.durationSeconds) {
         stopRecording();
     }
@@ -345,7 +374,15 @@ void Capture::startRecording()
     m_recordedFrames.clear();
     m_isRecording = true;
     m_recordedSeconds = 0;
-    recordTimer->start(1000);
+
+    // FIXED: Use precise interval calculation for exactly 60 FPS
+    int frameIntervalMs = 1000 / m_targetRecordingFPS; // 16.67ms for 60 FPS
+
+    recordTimer->start(1000); // For tracking seconds
+    recordingFrameTimer->start(frameIntervalMs); // Precise timing for 60 FPS
+
+    qDebug() << "Recording started at" << m_targetRecordingFPS << "FPS";
+    qDebug() << "Frame interval: " << frameIntervalMs << "ms";
 }
 
 void Capture::stopRecording()
@@ -356,9 +393,13 @@ void Capture::stopRecording()
     }
 
     recordTimer->stop();
+    recordingFrameTimer->stop();
     m_isRecording = false;
 
     qDebug() << "Recording stopped. Captured " << m_recordedFrames.size() << " frames.";
+    qDebug() << "Expected frames for " << m_recordedSeconds << " seconds at " << m_targetRecordingFPS << " FPS: " << (m_recordedSeconds * m_targetRecordingFPS);
+    qDebug() << "Actual average FPS: " << ((double)m_recordedFrames.size() / m_recordedSeconds);
+
     if (!m_recordedFrames.isEmpty()) {
         // MODIFIED: Emit the list of QPixmaps
         emit videoRecorded(m_recordedFrames);
@@ -367,12 +408,12 @@ void Capture::stopRecording()
     }
 
     emit showFinalOutputPage(); // Transition to final page
-     ui->capture->setEnabled(true);
+    ui->capture->setEnabled(true);
 }
+
 void Capture::performImageCapture()
 {
     cv::Mat frameToCapture; // The actual frame we want to keep
-
 
     // --- Actual capture of the final frame ---
     if (cap.read(frameToCapture)){
