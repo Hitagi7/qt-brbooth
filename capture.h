@@ -2,6 +2,7 @@
 #define CAPTURE_H
 
 #include <QWidget>
+#include <QSlider>
 #include <QTimer>
 #include <QLabel>
 #include <QPixmap>
@@ -39,6 +40,7 @@ private slots:
     void on_capture_clicked();
     void updateCountdown();
     void updateRecordTimer();
+    void on_verticalSlider_valueChanged(int value);
 
 private:
     Ui::Capture *ui;

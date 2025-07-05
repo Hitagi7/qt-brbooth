@@ -35,6 +35,20 @@ Capture::Capture(QWidget *parent)
 {
     ui->setupUi(this);
 
+    ui->verticalSlider->setMinimum(0);
+    ui->verticalSlider->setMaximum(100);
+
+    int tickStep = 10; // Define your desired tick and snap interval
+
+    ui->verticalSlider->setTickPosition(QSlider::TicksBothSides); // Try both sides
+    ui->verticalSlider->setTickInterval(tickStep);
+    ui->verticalSlider->setSingleStep(tickStep); // Make single steps snap to ticks
+
+    // Optional: If you want valueChanged signal only on release
+    // ui->verticalSlider->setTracking(false);
+
+    ui->verticalSlider->setValue(100); // Initial value
+
     ui->back->setIcon(QIcon(":/icons/Icons/normal.svg"));
     ui->back->setIconSize(QSize(100, 100));
     Iconhover *backButtonHover = new Iconhover(this);
@@ -474,3 +488,21 @@ QImage Capture::cvMatToQImage(const cv::Mat &mat)
         return QImage();
     }
 }
+
+void Capture::on_verticalSlider_valueChanged(int value)
+{
+    int tickInterval = ui->verticalSlider->tickInterval();
+    if (tickInterval == 0) return; // Avoid division by zero
+
+    // Calculate the nearest tick value
+    int snappedValue = qRound( (double)value / tickInterval ) * tickInterval;
+
+    // Optional: Ensure it's within range
+    snappedValue = qBound(ui->verticalSlider->minimum(), snappedValue, ui->verticalSlider->maximum());
+
+    // If the current value is not already snapped, set it to the snapped value
+    if (value != snappedValue) {
+        ui->verticalSlider->setValue(snappedValue);
+    }
+}
+

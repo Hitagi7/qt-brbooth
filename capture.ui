@@ -180,6 +180,9 @@
          <height>700</height>
         </size>
        </property>
+       <property name="autoFillBackground">
+        <bool>false</bool>
+       </property>
        <property name="styleSheet">
         <string notr="true">#verticalSlider::groove:vertical {
 
@@ -259,11 +262,26 @@ border-top-right-radius: 0px;
 
 }</string>
        </property>
+       <property name="maximum">
+        <number>100</number>
+       </property>
+       <property name="singleStep">
+        <number>10</number>
+       </property>
+       <property name="tracking">
+        <bool>true</bool>
+       </property>
        <property name="orientation">
         <enum>Qt::Orientation::Vertical</enum>
        </property>
        <property name="invertedAppearance">
         <bool>true</bool>
+       </property>
+       <property name="tickPosition">
+        <enum>QSlider::TickPosition::TicksBothSides</enum>
+       </property>
+       <property name="tickInterval">
+        <number>10</number>
        </property>
       </widget>
      </item>
