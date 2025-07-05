@@ -9,6 +9,7 @@
 #include <QMessageBox> // Required for QMessageBox
 #include <QImage>
 #include <QDateTime> // For generating unique filenames
+#include <QStandardPaths>
 #include <opencv2/opencv.hpp> // For video writing
 
 Final::Final(QWidget *parent)
@@ -95,18 +96,29 @@ void Final::on_save_clicked()
             return;
         }
 
-        // Get a file name from the user
-        QString fileName = QFileDialog::getSaveFileName(this, "Save Image",
-                                                        QDir::homePath() + "/untitled.png", // Default path and filename
-                                                        "Images (*.png *.jpg *.bmp *.gif)"); // Supported image formats
+        // Get Downloads folder path
+        QString downloadsPath = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
+        if (downloadsPath.isEmpty()) {
+            // Fallback to C:/Downloads if QStandardPaths doesn't work
+            downloadsPath = "C:/Downloads"; // Placeholder download location
+        }
 
-        if (!fileName.isEmpty()) {
-            // Save the image
-            if (imageToSave.save(fileName)) {
-                QMessageBox::information(this, "Save Image", "Image saved successfully!");
-            } else {
-                QMessageBox::critical(this, "Save Image", "Failed to save image.");
-            }
+        // Generate unique filename with timestamp
+        QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss");
+        QString fileName = downloadsPath + "/image_" + timestamp + ".png";
+
+        // Create directory if it doesn't exist
+        QDir dir;
+        if (!dir.exists(downloadsPath)) {
+            dir.mkpath(downloadsPath);
+        }
+
+        // Save the image
+        if (imageToSave.save(fileName)) {
+            QMessageBox::information(this, "Save Image",
+                                     QString("Image saved successfully to:\n%1").arg(fileName));
+        } else {
+            QMessageBox::critical(this, "Save Image", "Failed to save image.");
         }
     }
     emit backToLandingPage();
@@ -180,19 +192,24 @@ void Final::saveVideoToFile()
         return;
     }
 
-    QString defaultFileName = QDir::homePath() + "/video_" + QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss") + ".avi";
-    QString fileName = QFileDialog::getSaveFileName(this, "Save Video",
-                                                    defaultFileName,
-                                                    "Videos (*.avi *.mp4)");
+    // Get Downloads folder path
+    QString downloadsPath = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
+    if (downloadsPath.isEmpty()) {
+        // Fallback to C:/Downloads if QStandardPaths doesn't work
+        downloadsPath = "C:/Downloads";
+    }
 
-    if (fileName.isEmpty()) {
-        return;
+    // Generate unique filename with timestamp
+    QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss");
+    QString fileName = downloadsPath + "/video_" + timestamp + ".avi";
+
+    // Create directory if it doesn't exist
+    QDir dir;
+    if (!dir.exists(downloadsPath)) {
+        dir.mkpath(downloadsPath);
     }
 
     int fourcc = cv::VideoWriter::fourcc('M', 'J', 'P', 'G');
-    if (fileName.endsWith(".mp4", Qt::CaseInsensitive)) {
-        fourcc = cv::VideoWriter::fourcc('M', 'P', '4', 'V');
-    }
 
     QSize frameSize = m_videoFrames.first().size();
     int width = frameSize.width();
@@ -236,6 +253,7 @@ void Final::saveVideoToFile()
     }
 
     videoWriter.release();
-    QMessageBox::information(this, "Save Video", QString("Video saved successfully at %1 FPS!").arg(actualFPS, 0, 'f', 1));
+    QMessageBox::information(this, "Save Video",
+                             QString("Video saved successfully at %1 FPS to:\n%2").arg(actualFPS, 0, 'f', 1).arg(fileName));
     qDebug() << "Video saved to: " << fileName;
 }
