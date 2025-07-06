@@ -49,8 +49,9 @@ private:
     void applyHighlightStyle(QObject *obj, bool highlight);
     void showOverlayVideo(const QString& videoPath);
     void hideOverlayVideo();
+    void setPlaceholderHoverState(QWidget* placeholder, bool hovered);
 
-
+    QHash<QString, QWidget*> videoPlaceholders;
     Ui::Dynamic *ui;
 
     QHash<QString, QMediaPlayer*> videoPlayers;

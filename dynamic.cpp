@@ -14,6 +14,7 @@
 #include <QScreen>
 #include <QApplication>
 #include <QVBoxLayout>
+#include <QEvent>
 
 Dynamic::Dynamic(QWidget* parent)
     : QWidget(parent)
@@ -67,24 +68,16 @@ Dynamic::Dynamic(QWidget* parent)
     setupVideoPlayers();
 
     // --- Setup for the "large" video display as an overlay ---
-    // Parent the fullscreen video widget directly to 'this' (the Dynamic widget)
     fullscreenVideoWidget = new QVideoWidget(this);
     fullscreenVideoWidget->setMinimumSize(QSize(640, 480));
     fullscreenVideoWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     fullscreenVideoWidget->setAttribute(Qt::WA_StyledBackground, true);
-    // MODIFIED: Changed background-color to transparent to avoid dark places
     fullscreenVideoWidget->setStyleSheet("background-color: transparent; border: 5px solid #FFC20F; border-radius: 8px;");
-    fullscreenVideoWidget->hide(); // Start hidden
+    fullscreenVideoWidget->hide();
 
     fullscreenPlayer = new QMediaPlayer(this);
     fullscreenPlayer->setVideoOutput(fullscreenVideoWidget);
-
-    // Attempt to force stretching by setting aspect ratio mode on the video output
-    // NOTE: QVideoWidget itself does not directly expose an aspect ratio mode.
-    // This setting might not fully achieve distortion to fill the frame,
-    // as QVideoWidget primarily focuses on preserving aspect ratio.
-    // The true "ignore aspect ratio" for video content requires QGraphicsVideoItem.
-    fullscreenVideoWidget->setAspectRatioMode(Qt::IgnoreAspectRatio); // ADDED: Attempt to force stretching
+    fullscreenVideoWidget->setAspectRatioMode(Qt::IgnoreAspectRatio);
 
     connect(fullscreenPlayer, &QMediaPlayer::mediaStatusChanged, this, [this](QMediaPlayer::MediaStatus status) {
         if (status == QMediaPlayer::EndOfMedia) {
@@ -94,9 +87,8 @@ Dynamic::Dynamic(QWidget* parent)
     });
 
     fullscreenVideoWidget->installEventFilter(this);
-    this->installEventFilter(this); // To capture clicks on the 'Dynamic' widget itself
+    this->installEventFilter(this);
 
-    // Initial state: Back button should be enabled as GIFs are shown.
     if (ui->back) {
         ui->back->setEnabled(true);
     }
@@ -113,6 +105,7 @@ Dynamic::~Dynamic()
     }
     videoPlayers.clear();
     videoWidgets.clear();
+    videoPlaceholders.clear();
     for (QStackedLayout* layout : videoLayouts.values()) {
         if (layout) {
             if (!layout->parentWidget()) {
@@ -128,7 +121,7 @@ Dynamic::~Dynamic()
         fullscreenPlayer = nullptr;
     }
     if (fullscreenVideoWidget) {
-        delete fullscreenVideoWidget; // It's parented to 'this', so this is correct
+        delete fullscreenVideoWidget;
         fullscreenVideoWidget = nullptr;
     }
 
@@ -137,12 +130,12 @@ Dynamic::~Dynamic()
 
 void Dynamic::setupVideoPlayers()
 {
-    QList<QWidget*> videoPlaceholders;
-    if (ui->videoPlaceholder1) videoPlaceholders << ui->videoPlaceholder1; else qWarning() << "videoPlaceholder1 not found in UI.";
-    if (ui->videoPlaceholder2) videoPlaceholders << ui->videoPlaceholder2; else qWarning() << "videoPlaceholder2 not found in UI.";
-    if (ui->videoPlaceholder3) videoPlaceholders << ui->videoPlaceholder3; else qWarning() << "videoPlaceholder3 not found in UI.";
-    if (ui->videoPlaceholder4) videoPlaceholders << ui->videoPlaceholder4; else qWarning() << "videoPlaceholder4 not found in UI.";
-    if (ui->videoPlaceholder5) videoPlaceholders << ui->videoPlaceholder5; else qWarning() << "videoPlaceholder5 not found in UI.";
+    QList<QWidget*> placeholders;
+    if (ui->videoPlaceholder1) placeholders << ui->videoPlaceholder1; else qWarning() << "videoPlaceholder1 not found in UI.";
+    if (ui->videoPlaceholder2) placeholders << ui->videoPlaceholder2; else qWarning() << "videoPlaceholder2 not found in UI.";
+    if (ui->videoPlaceholder3) placeholders << ui->videoPlaceholder3; else qWarning() << "videoPlaceholder3 not found in UI.";
+    if (ui->videoPlaceholder4) placeholders << ui->videoPlaceholder4; else qWarning() << "videoPlaceholder4 not found in UI.";
+    if (ui->videoPlaceholder5) placeholders << ui->videoPlaceholder5; else qWarning() << "videoPlaceholder5 not found in UI.";
 
     QStringList videoPreviewPaths;
     videoPreviewPaths << "qrc:/gif/test1.gif"
@@ -158,31 +151,34 @@ void Dynamic::setupVideoPlayers()
                      << "qrc:/videos/videos/video4.mp4"
                      << "qrc:/videos/videos/video5.mp4";
 
-    int numPlaceholders = videoPlaceholders.size();
-    int numPreviews = videoPreviewPaths.size();
-    int numActualVideos = actualVideoPaths.size();
-
-    if (numPlaceholders != numPreviews || numPlaceholders != numActualVideos) {
-        qWarning() << "WARNING: Mismatch in number of placeholders, preview GIFs, or actual videos. Placeholders:" << numPlaceholders
-                   << "Previews:" << numPreviews << "Actual Videos:" << numActualVideos;
-    }
-
-    int loopLimit = qMin(numPlaceholders, qMin(numPreviews, numActualVideos));
-
-    qDebug() << "Application supported Image Read Formats (in Dynamic::setupVideoPlayers):" << QImageReader::supportedImageFormats();
+    int loopLimit = qMin(placeholders.size(), qMin(videoPreviewPaths.size(), actualVideoPaths.size()));
 
     for (int i = 0; i < loopLimit; ++i) {
-        QWidget* placeholder = videoPlaceholders.at(i);
+        QWidget* placeholder = placeholders.at(i);
         if (!placeholder) {
             qWarning() << "Video placeholder at index" << i << "is null in loop. Skipping.";
             continue;
         }
 
+        // SIMPLIFIED APPROACH: Apply hover styling directly to the placeholder widget
+        placeholder->setMouseTracking(true);
+        placeholder->setAttribute(Qt::WA_Hover, true);
+        placeholder->setProperty("hovered", false);
+        placeholder->setProperty("actualVideoPath", actualVideoPaths.at(i));
+
+        // Set base style for placeholder - this will work reliably
+        placeholder->setStyleSheet(
+            "QWidget {"
+            "  background-color: transparent;"
+            "  border: 5px solid transparent;"
+            "  border-radius: 8px;"
+            "}"
+            );
+
         qDebug() << "Setting up video player for placeholder:" << placeholder->objectName() << "at index" << i;
-        qDebug() << "Placeholder geometry:" << placeholder->geometry();
 
         QStackedLayout *stackedLayout = new QStackedLayout(placeholder);
-        stackedLayout->setContentsMargins(0, 0, 0, 0);
+        stackedLayout->setContentsMargins(5, 5, 5, 5); // Leave space for border
         stackedLayout->setStackingMode(QStackedLayout::StackAll);
 
         QMediaPlayer *player = new QMediaPlayer(this);
@@ -190,7 +186,7 @@ void Dynamic::setupVideoPlayers()
         player->setVideoOutput(videoWidget);
 
         if (!QFile(videoPreviewPaths.at(i)).exists()) {
-            qWarning() << "ERROR: Preview GIF file does not exist in resources or path is incorrect:" << videoPreviewPaths.at(i);
+            qWarning() << "ERROR: Preview GIF file does not exist:" << videoPreviewPaths.at(i);
         }
         player->setSource(QUrl(videoPreviewPaths.at(i)));
 
@@ -205,15 +201,10 @@ void Dynamic::setupVideoPlayers()
         videoWidget->setMaximumSize(placeholder->maximumSize());
         videoWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
         videoWidget->setAttribute(Qt::WA_StyledBackground, true);
-        videoWidget->setProperty("selected", false);
         videoWidget->setObjectName(QString("videoWidget%1").arg(i + 1));
-        videoWidget->setProperty("actualVideoPath", actualVideoPaths.at(i));
+        videoWidget->setAspectRatioMode(Qt::IgnoreAspectRatio);
 
-        // Attempt to force stretching by setting aspect ratio mode on the video output
-        // NOTE: QVideoWidget itself does not directly expose an aspect ratio mode.
-        // This setting might not fully achieve distortion to fill the frame,
-        // as QVideoWidget primarily focuses on preserving aspect ratio.
-        videoWidget->setAspectRatioMode(Qt::IgnoreAspectRatio); // ADDED: Attempt to force stretching
+        // DON'T style the video widget - leave it completely alone
 
         stackedLayout->addWidget(videoWidget);
         placeholder->setLayout(stackedLayout);
@@ -222,23 +213,61 @@ void Dynamic::setupVideoPlayers()
         player->setObjectName(QString("mediaPlayer%1").arg(i + 1));
         videoPlayers.insert(widgetName, player);
         videoWidgets.insert(widgetName, videoWidget);
+        videoPlaceholders.insert(widgetName, placeholder); // Store placeholder reference
         videoLayouts.insert(widgetName, stackedLayout);
 
+        // Install event filter ONLY on placeholder - this is key!
         placeholder->installEventFilter(this);
+        qDebug() << "Event filter installed on placeholder:" << placeholder->objectName();
 
         videoWidget->setFocusPolicy(Qt::NoFocus);
-        videoWidget->style()->polish(videoWidget);
-
         videoWidget->show();
         player->play();
     }
 }
 
+// Apply hover styling to placeholder widget
+void Dynamic::setPlaceholderHoverState(QWidget* placeholder, bool hovered)
+{
+    if (!placeholder) return;
+
+    placeholder->setProperty("hovered", hovered);
+
+    if (hovered) {
+        placeholder->setStyleSheet(
+            "QWidget {"
+            "  background-color: rgba(255, 194, 15, 0.1);"
+            "  border: 5px solid #FFC20F;"
+            "  border-radius: 8px;"
+            "}"
+            );
+        qDebug() << "Applied hover style to placeholder:" << placeholder->objectName();
+    } else {
+        placeholder->setStyleSheet(
+            "QWidget {"
+            "  background-color: transparent;"
+            "  border: 5px solid transparent;"
+            "  border-radius: 8px;"
+            "}"
+            );
+        qDebug() << "Removed hover style from placeholder:" << placeholder->objectName();
+    }
+
+    placeholder->style()->polish(placeholder);
+    placeholder->update();
+}
+
 void Dynamic::resetPage()
 {
-    hideOverlayVideo(); // This will hide the fullscreen video and enable back button
+    hideOverlayVideo();
 
-    // Restart GIF previews in the now-visible grid
+    // Reset hover states on placeholders
+    for (QWidget* placeholder : videoPlaceholders.values()) {
+        if (placeholder) {
+            setPlaceholderHoverState(placeholder, false);
+        }
+    }
+
     for (QVideoWidget* widget : videoWidgets.values()) {
         if (widget) {
             applyHighlightStyle(widget, false);
@@ -250,8 +279,6 @@ void Dynamic::resetPage()
                 player->setPosition(0);
                 player->play();
             }
-            // videoGridContent and its children (placeholders) are never hidden in this overlay approach
-            // so no need to show them explicitly here.
         }
     }
     currentSelectedVideoWidget = nullptr;
@@ -262,74 +289,70 @@ void Dynamic::resetPage()
 
 bool Dynamic::eventFilter(QObject *obj, QEvent *event)
 {
+    // Handle hover on placeholder widgets - this should work reliably
+    for (QWidget* placeholder : videoPlaceholders.values()) {
+        if (obj == placeholder) {
+            if (event->type() == QEvent::Enter) {
+                qDebug() << "DEBUG: Mouse entered placeholder" << placeholder->objectName();
+                setPlaceholderHoverState(placeholder, true);
+                return false;
+            } else if (event->type() == QEvent::Leave) {
+                qDebug() << "DEBUG: Mouse left placeholder" << placeholder->objectName();
+                setPlaceholderHoverState(placeholder, false);
+                return false;
+            }
+        }
+    }
+
     if (event->type() == QEvent::MouseButtonPress) {
         QMouseEvent *mouseEvent = static_cast<QMouseEvent*>(event);
         if (mouseEvent->button() == Qt::LeftButton) {
 
-            // Case 1: Click on the fullscreen video widget itself
             if (obj == fullscreenVideoWidget && fullscreenVideoWidget->isVisible()) {
                 fullscreenPlayer->stop();
-                qDebug() << "Emitting showCapturePage() signal."; // Debug message added
+                qDebug() << "Emitting showCapturePage() signal.";
                 emit showCapturePage();
-                hideOverlayVideo(); // Added this line to clean up the view
+                hideOverlayVideo();
                 return true;
             }
 
-            // Case 2: Click on the Dynamic widget itself (the background)
-            // if the fullscreen video is visible, and the click wasn't on the fullscreen video, header, or back button
             if (obj == this && fullscreenVideoWidget->isVisible()) {
-                // Get the click position relative to the Dynamic widget
                 QPoint clickPos = mouseEvent->pos();
-
-                // Get geometries of elements that should NOT trigger a reset
-                // These geometries are relative to the Dynamic widget
-                // Re-added ui->fglabel as it is present in Dynamic.ui
-                QRect fgLabelRect = ui->fglabel->geometry(); // ADDED: fglabel back
+                QRect fgLabelRect = ui->fglabel->geometry();
                 QRect backButtonRect = ui->back->geometry();
 
-                // Check if the click is outside all interactive elements that should prevent a reset
-                // Adjusted condition to include fgLabelRect
                 if (!fullscreenVideoWidget->geometry().contains(clickPos) &&
-                    !fgLabelRect.contains(clickPos) && // ADDED: fglabel back
+                    !fgLabelRect.contains(clickPos) &&
                     !backButtonRect.contains(clickPos)) {
-                    resetPage(); // Reset the page, hiding the overlay video
+                    resetPage();
                     return true;
                 }
             }
 
-            // Case 3: Click on one of the small video placeholders (only if fullscreen video is NOT visible)
-            // This ensures clicks on GIFs don't trigger anything if the large video is already up.
+            // Handle clicks on placeholder widgets
             if (!fullscreenVideoWidget->isVisible()) {
-                QObject* clickedObj = obj;
-                // If the clicked object is a QVideoWidget, get its parent placeholder
-                if (QVideoWidget* vw = qobject_cast<QVideoWidget*>(obj)) {
-                    clickedObj = vw->parentWidget();
-                }
-
-                QWidget* clickedPlaceholder = qobject_cast<QWidget*>(clickedObj);
-
-                if (clickedPlaceholder && clickedPlaceholder->objectName().startsWith("videoPlaceholder")) {
-                    QVideoWidget *targetVideoWidget = nullptr;
-                    for (const QString& name : videoWidgets.keys()) {
-                        QVideoWidget* vw = videoWidgets.value(name);
-                        if (vw && vw->parentWidget() == clickedPlaceholder) {
-                            targetVideoWidget = vw;
-                            break;
+                for (QWidget* placeholder : videoPlaceholders.values()) {
+                    if (obj == placeholder) {
+                        // Find the associated video widget
+                        QVideoWidget *targetVideoWidget = nullptr;
+                        for (const QString& name : videoWidgets.keys()) {
+                            QVideoWidget* vw = videoWidgets.value(name);
+                            if (vw && videoPlaceholders.value(name) == placeholder) {
+                                targetVideoWidget = vw;
+                                break;
+                            }
                         }
-                    }
 
-                    if (targetVideoWidget) {
-                        if (debounceActive) {
-                            return true;
-                        } else {
-                            debounceActive = true;
-                            debounceTimer->start();
-                            processVideoClick(targetVideoWidget);
-                            return true;
+                        if (targetVideoWidget) {
+                            if (debounceActive) {
+                                return true;
+                            } else {
+                                debounceActive = true;
+                                debounceTimer->start();
+                                processVideoClick(targetVideoWidget);
+                                return true;
+                            }
                         }
-                    } else {
-                        qWarning() << "Click on placeholder:" << clickedPlaceholder->objectName()
-                        << " but could not find an associated QVideoWidget.";
                     }
                 }
             }
@@ -356,11 +379,9 @@ void Dynamic::applyHighlightStyle(QObject *obj, bool highlight)
 
 void Dynamic::on_back_clicked()
 {
-    // If the large overlay video is currently visible, hide it.
     if (fullscreenVideoWidget && fullscreenVideoWidget->isVisible()) {
-        hideOverlayVideo(); // Hide video, enable back button
+        hideOverlayVideo();
     } else {
-        // Otherwise, go back to the landing page.
         emit backtoLandingPage();
     }
 }
@@ -373,15 +394,14 @@ void Dynamic::processVideoClick(QObject *videoWidgetObj)
         return;
     }
 
-    QMediaPlayer *player = videoPlayers.value(clickedVideoWidget->objectName());
-    if (!player) {
-        qWarning() << "No media player found for" << clickedVideoWidget->objectName();
-        return;
+    // Get the actual video path from the placeholder widget
+    QWidget* placeholder = videoPlaceholders.value(clickedVideoWidget->objectName());
+    QString actualVideoPath;
+    if (placeholder) {
+        actualVideoPath = placeholder->property("actualVideoPath").toString();
     }
 
-    QString actualVideoPath = clickedVideoWidget->property("actualVideoPath").toString();
     if (!actualVideoPath.isEmpty()) {
-        // Stop all small preview players immediately
         for (QMediaPlayer* p : videoPlayers.values()) {
             if (p->playbackState() == QMediaPlayer::PlayingState) {
                 p->stop();
@@ -389,7 +409,7 @@ void Dynamic::processVideoClick(QObject *videoWidgetObj)
             p->setPosition(0);
         }
 
-        showOverlayVideo(actualVideoPath); // Pass the path to the show function
+        showOverlayVideo(actualVideoPath);
         fullscreenPlayer->play();
         qDebug() << "Playing actual video:" << actualVideoPath << " as an overlay.";
     } else {
@@ -405,33 +425,24 @@ void Dynamic::onPlayerMediaStatusChanged(QMediaPlayer::MediaStatus status)
     Q_UNUSED(status);
 }
 
-// showOverlayVideo now takes the video path and uses videoGridContent's geometry
 void Dynamic::showOverlayVideo(const QString& videoPath)
 {
-    if (!fullscreenPlayer || !fullscreenVideoWidget || !ui->videoGridContent) { // ADDED: ui->videoGridContent check back
-        qWarning() << "showOverlayVideo: Essential components (player, video widget, or videoGridContent) are null.";
+    if (!fullscreenPlayer || !fullscreenVideoWidget || !ui->videoGridContent) {
+        qWarning() << "showOverlayVideo: Essential components are null.";
         return;
     }
 
-    // Get the geometry of the videoGridContent widget, which contains all your GIFs.
-    // This geometry is relative to the 'Dynamic' widget itself.
-    QRect targetRect = ui->videoGridContent->geometry(); // CHANGED: Use ui->videoGridContent's geometry
-
-    // Set the fullscreenVideoWidget's geometry to match the targetRect
+    QRect targetRect = ui->videoGridContent->geometry();
     fullscreenVideoWidget->setGeometry(targetRect);
-
-    // Set the source and play the video
     fullscreenPlayer->setSource(QUrl(videoPath));
-
-    fullscreenVideoWidget->show(); // Make the video widget visible
-    fullscreenVideoWidget->raise(); // Bring it to the front, on top of all other siblings (like videoGridContent)
+    fullscreenVideoWidget->show();
+    fullscreenVideoWidget->raise();
 
     if (ui->back) {
-        ui->back->setEnabled(false); // Disable the back button
+        ui->back->setEnabled(false);
     }
 }
 
-// hideOverlayVideo no longer takes arguments
 void Dynamic::hideOverlayVideo()
 {
     if (!fullscreenPlayer || !fullscreenVideoWidget) {
@@ -440,12 +451,16 @@ void Dynamic::hideOverlayVideo()
     }
 
     fullscreenPlayer->stop();
-    fullscreenPlayer->setSource(QUrl()); // Clear the media source
-    fullscreenVideoWidget->hide(); // Hide the video widget
+    fullscreenPlayer->setSource(QUrl());
+    fullscreenVideoWidget->hide();
 
-    // ui->videoGridContent remains visible, no need to show it here.
+    // Reset hover states
+    for (QWidget* placeholder : videoPlaceholders.values()) {
+        if (placeholder) {
+            setPlaceholderHoverState(placeholder, false);
+        }
+    }
 
-    // Restart GIF previews in the now-visible grid
     for (QVideoWidget* widget : videoWidgets.values()) {
         if (widget) {
             applyHighlightStyle(widget, false);
@@ -459,6 +474,6 @@ void Dynamic::hideOverlayVideo()
     currentSelectedVideoWidget = nullptr;
 
     if (ui->back) {
-        ui->back->setEnabled(true); // Re-enable the back button
+        ui->back->setEnabled(true);
     }
 }

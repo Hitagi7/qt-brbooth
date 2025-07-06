@@ -59,7 +59,7 @@
            <string notr="true">#title {
     color: #FFF;
     text-align: center;
-    font-family: "Roboto Condensed";
+    font-family: &quot;Roboto Condensed&quot;;
     font-style: italic;
     font-weight: 700;
     font-size: 55px;
@@ -178,7 +178,7 @@ height: 101px;
 
 color: #FFF;
 text-align: center;
-font-family: "Roboto Condensed";
+font-family: &quot;Roboto Condensed&quot;;
 font-size: 64px;
 font-style: italic;
 font-weight: 550;
@@ -260,40 +260,7 @@ line-height: normal;
               <property name="text">
                <string/>
               </property>
-              <widget class="QLabel" name="chillTextLabel">
-               <property name="geometry">
-                <rect>
-                 <x>0</x>
-                 <y>0</y>
-                 <width>649</width> <height>468</height> </rect>
-               </property>
-               <property name="styleSheet">
-                <string notr="true">
-                    color: white;
-                    font-family: "Arial Black"; /* Choose a bold font that looks good */
-                    font-size: 80px; /* Adjust size to fit */
-                    font-weight: bold;
-                    background-color: transparent;
-                </string>
-               </property>
-               <property name="text">
-                <string>CHILL</string>
-               </property>
-               <property name="alignment">
-                <set>Qt::AlignCenter</set>
-               </property>
-               <property name="toolTip">
-                <string>Click to select Dynamic background</string>
-               </property>
-               <property name="mouseTracking">
-                <bool>false</bool>
-               </property>
-               <property name="focusPolicy">
-                <enum>Qt::NoFocus</enum>
-               </property>
-               <attribute name="Qt::WA_TransparentForMouseEvents">true</attribute>
-              </widget>
-              </widget>
+             </widget>
             </item>
             <item>
              <spacer name="verticalSpacer">
@@ -332,7 +299,7 @@ height: 101px;
 
 color: #FFF;
 text-align: center;
-font-family: "Roboto Condensed";
+font-family: &quot;Roboto Condensed&quot;;
 font-size: 64px;
 font-style: italic;
 font-weight: 550;
