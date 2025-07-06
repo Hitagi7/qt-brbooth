@@ -39,4 +39,12 @@
         <file>videos/video4.mp4</file>
         <file>videos/video5.mp4</file>
     </qresource>
+    <qresource prefix="/gif">
+        <file>test.gif</file>
+        <file>test1.gif</file>
+        <file>test2.gif</file>
+        <file>test3.gif</file>
+        <file>test4.gif</file>
+        <file>test5.gif</file>
+    </qresource>
 </RCC>

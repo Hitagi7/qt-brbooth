@@ -1,3 +1,4 @@
+
 #include "capture.h"
 #include "ui_capture.h"
 #include "videotemplate.h"

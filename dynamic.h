@@ -1,40 +1,39 @@
+// dynamic.h
+
 #ifndef DYNAMIC_H
 #define DYNAMIC_H
 
 #include <QEvent>
-#include <QMouseEvent> // Included for Icon Hover for Back Button
-#include <QPushButton> // Keep QPushButton for your 'back' button
+#include <QMouseEvent>
+#include <QPushButton>
 #include <QTimer>
 #include <QWidget>
-
-#include <QLabel> // New: Include QLabel for displaying thumbnails
-#include <QMap>   // To store multiple video
+#include <QLabel>
+#include <QMap>
 #include <QMediaPlayer>
-#include <QVideoWidget>
+#include <QVideoWidget> // Using QVideoWidget as per your last working code
+#include <QWidget>
+#include <QHash>
+#include <QStackedLayout>
 
-QT_BEGIN_NAMESPACE
+
 namespace Ui {
 class Dynamic;
 }
-QT_END_NAMESPACE
-
-// Forward declaration of Iconhover if it's used
-class Iconhover;
 
 class Dynamic : public QWidget
 {
     Q_OBJECT
 
 public:
-    explicit Dynamic(QWidget *parent = nullptr);
+    explicit Dynamic(QWidget* parent = nullptr);
     ~Dynamic();
 
-public slots:
     void resetPage();
 
 signals:
     void backtoLandingPage();
-    void videoSelectedTwice(); // Changed signal name to reflect video selection
+    void showCapturePage();
 
 protected:
     bool eventFilter(QObject *obj, QEvent *event) override;
@@ -42,21 +41,28 @@ protected:
 private slots:
     void on_back_clicked();
     void resetDebounce();
-    void processVideoClick(QObject *videoWIdgetObj);
+    void onPlayerMediaStatusChanged(QMediaPlayer::MediaStatus status);
 
 private:
-    Ui::Dynamic *ui;
-    QObject *currentSelectedVideoWidget;
-    QTimer *debounceTimer;
-    bool debounceActive;
-
-    QMap<QString, QMediaPlayer *> videoPlayers;
-    QMap<QString, QVideoWidget *> videoWidgets;
-    QMap<QString, QLabel *> thumbnailLabels; // New: To store QLabel for thumbnails
-
-    void applyHighlightStyle(QObject *obj, bool highlight);
     void setupVideoPlayers();
-    void showThumbnail(QObject *videoWidgetObj, bool show); // New: Helper to show/hide thumbnail
+    void processVideoClick(QObject *videoWidgetObj);
+    void applyHighlightStyle(QObject *obj, bool highlight);
+    void showOverlayVideo(const QString& videoPath);
+    void hideOverlayVideo();
+
+
+    Ui::Dynamic *ui;
+
+    QHash<QString, QMediaPlayer*> videoPlayers;
+    QHash<QString, QVideoWidget*> videoWidgets; // Using QVideoWidget as per your last working code
+    QHash<QString, QStackedLayout*> videoLayouts;
+
+    QVideoWidget* fullscreenVideoWidget; // Using QVideoWidget as per your last working code
+    QMediaPlayer* fullscreenPlayer;
+
+    QTimer* debounceTimer;
+    bool debounceActive;
+    QVideoWidget* currentSelectedVideoWidget; // Using QVideoWidget as per your last working code
 };
 
 #endif // DYNAMIC_H

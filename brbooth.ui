@@ -59,12 +59,12 @@
            <string notr="true">#title {
     color: #FFF;
     text-align: center;
-    font-family: &quot;Roboto Condensed&quot;;
+    font-family: "Roboto Condensed";
     font-style: italic;
     font-weight: 700;
     font-size: 55px;
-        background-color: #0BC200;
-        border-radius: 9px;
+    background-color: #0BC200;
+    border-radius: 9px;
     border-bottom: 2px solid #020202;
 }</string>
           </property>
@@ -118,18 +118,18 @@
               </property>
               <property name="styleSheet">
                <string notr="true">#staticButton {
-        background: url(:/images/pics/mickey.png);
-        background-repeat: no-repeat;
+    background: url(:/images/pics/mickey.png);
+    background-repeat: no-repeat;
     background-position: center;
-        background-size: contain;
-        background-color: transparent;
-        border-radius: 8px;
-        width: 649px;
-        height: 468px;
+    background-size: contain;
+    background-color: transparent;
+    border-radius: 8px;
+    width: 649px;
+    height: 468px;
 }
 
 #staticButton::hover{
-        border: 5px solid #FFC20F;
+    border: 5px solid #FFC20F;
     border-radius: 8px;
 }</string>
               </property>
@@ -143,8 +143,60 @@
               <property name="orientation">
                <enum>Qt::Orientation::Vertical</enum>
               </property>
-              <property name="sizeType">
-               <enum>QSizePolicy::Policy::Minimum</enum>
+              <property name="sizeHint" stdset="0">
+               <size>
+                <width>20</width>
+                <height>40</height>
+               </size>
+              </property>
+             </spacer>
+            </item>
+            <item alignment="Qt::AlignmentFlag::AlignHCenter|Qt::AlignmentFlag::AlignVCenter">
+             <widget class="QLabel" name="staticLabel">
+              <property name="minimumSize">
+               <size>
+                <width>350</width>
+                <height>101</height>
+               </size>
+              </property>
+              <property name="maximumSize">
+               <size>
+                <width>350</width>
+                <height>101</height>
+               </size>
+              </property>
+              <property name="cursor">
+               <cursorShape>ArrowCursor</cursorShape>
+              </property>
+              <property name="styleSheet">
+               <string notr="true">#staticLabel {
+border-radius: 9px;
+border-bottom: 3px solid #020202;
+background: #0BC200;
+width: 350px;
+height: 101px;
+
+color: #FFF;
+text-align: center;
+font-family: "Roboto Condensed";
+font-size: 64px;
+font-style: italic;
+font-weight: 550;
+line-height: normal;
+}</string>
+              </property>
+              <property name="text">
+               <string>Static</string>
+              </property>
+              <property name="alignment">
+               <set>Qt::AlignmentFlag::AlignCenter</set>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <spacer name="verticalSpacer_7">
+              <property name="orientation">
+               <enum>Qt::Orientation::Vertical</enum>
               </property>
               <property name="sizeHint" stdset="0">
                <size>
@@ -193,33 +245,112 @@
               </property>
               <property name="styleSheet">
                <string notr="true">#dynamicButton {
-        background: url(:/images/pics/ballerina.png);
-        background-repeat: no-repeat;
-    background-position: center;
-        background-size: contain;
-        background-color: transparent;
-        border-radius: 8px;
-        width: 649px;
-        height: 468px;
+    background-color: transparent; /* Keep button background transparent */
+    border-radius: 8px;
+    width: 649px;
+    height: 468px;
+    border: none; /* No default border */
 }
 
 #dynamicButton::hover{
-        border: 5px solid #FFC20F;
+    border: 5px solid #FFC20F; /* Apply border on hover */
     border-radius: 8px;
 }</string>
               </property>
               <property name="text">
                <string/>
               </property>
-             </widget>
+              <widget class="QLabel" name="chillTextLabel">
+               <property name="geometry">
+                <rect>
+                 <x>0</x>
+                 <y>0</y>
+                 <width>649</width> <height>468</height> </rect>
+               </property>
+               <property name="styleSheet">
+                <string notr="true">
+                    color: white;
+                    font-family: "Arial Black"; /* Choose a bold font that looks good */
+                    font-size: 80px; /* Adjust size to fit */
+                    font-weight: bold;
+                    background-color: transparent;
+                </string>
+               </property>
+               <property name="text">
+                <string>CHILL</string>
+               </property>
+               <property name="alignment">
+                <set>Qt::AlignCenter</set>
+               </property>
+               <property name="toolTip">
+                <string>Click to select Dynamic background</string>
+               </property>
+               <property name="mouseTracking">
+                <bool>false</bool>
+               </property>
+               <property name="focusPolicy">
+                <enum>Qt::NoFocus</enum>
+               </property>
+               <attribute name="Qt::WA_TransparentForMouseEvents">true</attribute>
+              </widget>
+              </widget>
             </item>
             <item>
              <spacer name="verticalSpacer">
               <property name="orientation">
                <enum>Qt::Orientation::Vertical</enum>
               </property>
-              <property name="sizeType">
-               <enum>QSizePolicy::Policy::Minimum</enum>
+              <property name="sizeHint" stdset="0">
+               <size>
+                <width>20</width>
+                <height>40</height>
+               </size>
+              </property>
+             </spacer>
+            </item>
+            <item alignment="Qt::AlignmentFlag::AlignHCenter|Qt::AlignmentFlag::AlignVCenter">
+             <widget class="QLabel" name="dynamicLabel">
+              <property name="minimumSize">
+               <size>
+                <width>350</width>
+                <height>101</height>
+               </size>
+              </property>
+              <property name="maximumSize">
+               <size>
+                <width>350</width>
+                <height>101</height>
+               </size>
+              </property>
+              <property name="styleSheet">
+               <string notr="true">#dynamicLabel {
+border-radius: 9px;
+border-bottom: 3px solid #020202;
+background: #0BC200;
+width: 350px;
+height: 101px;
+
+color: #FFF;
+text-align: center;
+font-family: "Roboto Condensed";
+font-size: 64px;
+font-style: italic;
+font-weight: 550;
+line-height: normal;
+}</string>
+              </property>
+              <property name="text">
+               <string>Dynamic</string>
+              </property>
+              <property name="alignment">
+               <set>Qt::AlignmentFlag::AlignCenter</set>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <spacer name="verticalSpacer_3">
+              <property name="orientation">
+               <enum>Qt::Orientation::Vertical</enum>
               </property>
               <property name="sizeHint" stdset="0">
                <size>
