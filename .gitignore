@@ -80,3 +80,11 @@ CMakeLists.txt.user*
 .rcc/
 .uic/
 /build*/
+
+# YOLO specific files
+*.onnx
+models/
+test_images/
+
+# ONNX Runtime
+onnxruntime*/

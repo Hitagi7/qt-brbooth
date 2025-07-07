@@ -17,7 +17,8 @@ SOURCES += \
     foreground.cpp \
     iconhover.cpp \
     main.cpp \
-    brbooth.cpp
+    brbooth.cpp \
+    src/yolo/yolov5detector.cpp
 
 HEADERS += \
     background.h \
@@ -27,7 +28,8 @@ HEADERS += \
     final.h \
     foreground.h \
     iconhover.h \
-    videotemplate.h
+    videotemplate.h \
+    src/yolo/yolov5detector.h
 
 FORMS += \
     background.ui \
@@ -46,6 +48,7 @@ RESOURCES += \
     resources.qrc
 
 
+# OpenCV Configuration
 INCLUDEPATH += C:\opencv_build\install\include
 DEPENDPATH += C:\opencv_build\install\include
 
@@ -54,6 +57,32 @@ OPENCV_INSTALL_DIR = C:/opencv_build/install
 # Add OpenCV include paths
 INCLUDEPATH += $$OPENCV_INSTALL_DIR/include \
                $$OPENCV_INSTALL_DIR/include/opencv2
+
+# ONNX Runtime Configuration
+# For development, ONNX Runtime can be installed from:
+# https://github.com/microsoft/onnxruntime/releases
+# Set ONNXRUNTIME_ROOT_PATH to your ONNX Runtime installation directory
+ONNXRUNTIME_ROOT_PATH = C:/onnxruntime
+
+# Check if ONNX Runtime is available
+exists($$ONNXRUNTIME_ROOT_PATH/include/onnxruntime_cxx_api.h) {
+    DEFINES += ONNXRUNTIME_AVAILABLE
+    INCLUDEPATH += $$ONNXRUNTIME_ROOT_PATH/include
+    
+    # Platform-specific library configurations
+    win32 {
+        LIBS += -L$$ONNXRUNTIME_ROOT_PATH/lib \
+                -lonnxruntime
+    } else:unix {
+        LIBS += -L$$ONNXRUNTIME_ROOT_PATH/lib \
+                -lonnxruntime
+    }
+    
+    message("ONNX Runtime found and configured")
+} else {
+    warning("ONNX Runtime not found at $$ONNXRUNTIME_ROOT_PATH")
+    warning("YOLOv5 detection will be disabled. Please install ONNX Runtime to enable object detection.")
+}
 
 
 LIBS += -L$$OPENCV_INSTALL_DIR/x64/vc17/lib \
