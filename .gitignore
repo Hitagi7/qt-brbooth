@@ -80,3 +80,16 @@ CMakeLists.txt.user*
 .rcc/
 .uic/
 /build*/
+
+# YOLO models and data
+models/
+*.onnx
+*.pt
+*.weights
+
+# ONNX Runtime
+third_party/onnxruntime/
+
+# CMake build directories
+build/
+cmake-build-*/
