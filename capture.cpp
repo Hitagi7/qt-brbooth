@@ -29,11 +29,6 @@ Capture::Capture(QWidget *parent)
 {
     ui->setupUi(this);
 
-    this->setWindowFlags(Qt::FramelessWindowHint | Qt::Widget);
-    this->setStyleSheet("* { margin: 0px; padding: 0px; border: none; background: transparent; }");
-    this->setContentsMargins(0, 0, 0, 0);
-    this->setAttribute(Qt::WA_StyledBackground, true);
-    this->setAttribute(Qt::WA_NoSystemBackground, true);
 
     // IMMEDIATELY setup stacked layout after UI setup
     setupStackedLayoutHybrid();

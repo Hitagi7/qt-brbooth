@@ -1,3 +1,4 @@
+
 #include <QApplication>
 #include <QFontDatabase>
 #include "brbooth.h"
