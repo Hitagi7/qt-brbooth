@@ -2,9 +2,11 @@
 #define CAPTURE_H
 
 #include <QWidget>
+#include <QPushButton>
+#include <QStackedLayout>
 #include <QSlider>
-#include <QTimer>
 #include <QLabel>
+#include <QTimer>
 #include <QPixmap>
 #include <QList>
 #include <opencv2/opencv.hpp>
@@ -24,7 +26,7 @@ public:
         VideoRecordMode
     };
 
-    Capture(QWidget *parent = nullptr);
+    explicit Capture(QWidget *parent = nullptr);
     ~Capture();
 
     void setCaptureMode(CaptureMode mode);
@@ -46,7 +48,6 @@ private:
     Ui::Capture *ui;
     cv::VideoCapture cap;
     QTimer *cameraTimer;
-    QLabel *videoLabel;
     QTimer *countdownTimer;
     QLabel *countdownLabel;
     int countdownValue;
@@ -64,6 +65,11 @@ private:
     void stopRecording();
     void performImageCapture();
     QImage cvMatToQImage(const cv::Mat &mat);
+    void setupStackedLayoutHybrid(); // New method for hybrid approach
+    void updateOverlayStyles();      // New method to update overlay styles
+
+    // Hybrid stacked layout components
+    QStackedLayout *stackedLayout;
 
 signals:
     void backtoPreviousPage();
