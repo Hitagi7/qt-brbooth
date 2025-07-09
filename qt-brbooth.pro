@@ -5,9 +5,6 @@ greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
 
 CONFIG += c++17
 
-# You can make your code fail to compile if it uses deprecated APIs.
-# In order to do so, uncomment the following line.
-#DEFINES += QT_DISABLE_DEPRECATED_BEFORE=0x060000    # disables all the APIs deprecated before Qt 6.0.0
 
 SOURCES += \
     background.cpp \
@@ -17,7 +14,8 @@ SOURCES += \
     foreground.cpp \
     iconhover.cpp \
     main.cpp \
-    brbooth.cpp
+    brbooth.cpp \
+    persondetector.cpp
 
 HEADERS += \
     background.h \
@@ -27,7 +25,8 @@ HEADERS += \
     final.h \
     foreground.h \
     iconhover.h \
-    videotemplate.h
+    videotemplate.h \
+    persondetector.h
 
 FORMS += \
     background.ui \
@@ -45,7 +44,7 @@ else: unix:!android: target.path = /opt/$${TARGET}/bin
 RESOURCES += \
     resources.qrc
 
-
+# OpenCV Configuration (you already have this)
 INCLUDEPATH += C:\opencv_build\install\include
 DEPENDPATH += C:\opencv_build\install\include
 
@@ -54,7 +53,6 @@ OPENCV_INSTALL_DIR = C:/opencv_build/install
 # Add OpenCV include paths
 INCLUDEPATH += $$OPENCV_INSTALL_DIR/include \
                $$OPENCV_INSTALL_DIR/include/opencv2
-
 
 LIBS += -L$$OPENCV_INSTALL_DIR/x64/vc17/lib \
         -lopencv_core4110d \
@@ -71,4 +69,3 @@ LIBS += -L$$OPENCV_INSTALL_DIR/x64/vc17/lib \
         -lopencv_objdetect4110d \
         -lopencv_photo4110d \
         -lopencv_stitching4110d
-

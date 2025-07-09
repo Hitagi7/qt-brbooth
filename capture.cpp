@@ -1,4 +1,3 @@
-// capture.cpp
 #include "capture.h"
 #include "ui_capture.h"
 #include "videotemplate.h"
@@ -14,10 +13,12 @@
 #include <QResizeEvent>
 #include <QThread> // Still needed for QThread::msleep, even if minimal
 #include <QElapsedTimer>
+#include "persondetector.h"
 
-#include <fstream>
-#include <string>
-#include <opencv2/dnn.hpp>
+#include <QCoreApplication>
+#include <QDir>
+#include <QFileInfo>
+
 #include <opencv2/opencv.hpp>
 
 Capture::Capture(QWidget *parent)
@@ -25,6 +26,7 @@ Capture::Capture(QWidget *parent)
     , ui(new Ui::Capture)
     , cameraTimer(nullptr)
     , videoLabel(nullptr)
+    , yoloLabel(nullptr)
     , countdownTimer(nullptr)
     , countdownLabel(nullptr)
     , countdownValue(0)
@@ -33,15 +35,8 @@ Capture::Capture(QWidget *parent)
     , recordTimer(nullptr)
     , m_currentVideoTemplate("Default", 5)
     , m_recordedSeconds(0)
-
 {
     ui->setupUi(this);
-
-    //Load Model and Class Names
-    loadClassNames("models/coco.names"); // or ":/models/coco.names" if using Qt resources
-    yoloNet = cv::dnn::readNetFromONNX("C:/Users/User/Documents/qt-brbooth/models/yolov5n.onnx");
-    yoloNet.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
-    yoloNet.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
 
     ui->back->setIcon(QIcon(":/icons/Icons/normal.svg"));
     ui->back->setIconSize(QSize(100, 100));
@@ -50,6 +45,71 @@ Capture::Capture(QWidget *parent)
 
     // Disable capture button by default (will be enabled if camera opens)
     ui->capture->setEnabled(false);
+
+    //Yolov5
+    personDetector = new PersonDetector(this);
+
+    // Get application directory
+    QString appDir = QCoreApplication::applicationDirPath();
+    qDebug() << "=== MODEL LOADING DEBUG ===";
+    qDebug() << "Application directory:" << appDir;
+
+    // Check if models folder exists
+    QString modelsDir = appDir + "/models";
+    QDir dir(modelsDir);
+    qDebug() << "Models directory path:" << modelsDir;
+    qDebug() << "Models directory exists:" << dir.exists();
+
+    // List all files in models directory
+    if (dir.exists()) {
+        QStringList files = dir.entryList(QDir::Files);
+        qDebug() << "Files in models directory:" << files;
+    } else {
+        qDebug() << "Models directory does NOT exist!";
+    }
+
+    // Check specific model file
+    QString modelPath = appDir + "/models/yolov5s.onnx";
+    QFileInfo fileInfo(modelPath);
+    qDebug() << "Full model path:" << modelPath;
+    qDebug() << "Model file exists:" << fileInfo.exists();
+    qDebug() << "Model file size:" << fileInfo.size() << "bytes";
+    qDebug() << "Model file readable:" << fileInfo.isReadable();
+
+    // Try to load the model
+    bool modelLoaded = false;
+    if (fileInfo.exists() && fileInfo.size() > 0) {
+        qDebug() << "Attempting to load model...";
+        modelLoaded = personDetector->loadModel(modelPath);
+        qDebug() << "Model loaded successfully:" << modelLoaded;
+    } else {
+        qDebug() << "Cannot load model - file doesn't exist or is empty";
+    }
+
+    if (!modelLoaded) {
+        qDebug() << "=== MODEL LOADING FAILED ===";
+        qDebug() << "Please check:";
+        qDebug() << "1. yolov5n.onnx file exists at:" << modelPath;
+        qDebug() << "2. File is not corrupted (should be several MB)";
+        qDebug() << "3. File has read permissions";
+    }
+
+    qDebug() << "=== END MODEL DEBUG ===";
+
+    // Connect signals
+    connect(personDetector, &PersonDetector::peopleDetected,
+            this, &Capture::onPeopleDetected);
+
+    // Timer for periodic detection (every 100ms)
+    detectionTimer = new QTimer(this);
+    connect(detectionTimer, &QTimer::timeout, this, &Capture::processCurrentFrame);
+    detectionTimer->start(100); // 10 FPS detection
+
+    // Creation of YOLO label for person detection display
+    yoloLabel = new QLabel(ui->videoFeedWidget);
+    yoloLabel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    yoloLabel->setAlignment(Qt::AlignCenter);
+    yoloLabel->setScaledContents(true);
 
     // --- Corrected Camera Opening Logic ---
     bool cameraOpenedSuccessfully = false;
@@ -106,16 +166,15 @@ Capture::Capture(QWidget *parent)
         qWarning() << "WARNING: Camera did not accept 60 FPS request. Actual FPS is" << actual_fps;
     }
 
-
     // Video feed label setup
     videoLabel = new QLabel(ui->videoFeedWidget);
     videoLabel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     videoLabel->setAlignment(Qt::AlignCenter);
     videoLabel->setScaledContents(true);
 
-    // Layout for video feed widget
+    // Layout for video feed widget - using yoloLabel for detection display
     QVBoxLayout *videoLayout = new QVBoxLayout(ui->videoFeedWidget);
-    videoLayout->addWidget(videoLabel);
+    videoLayout->addWidget(yoloLabel); // Use yoloLabel instead of videoLabel for detection overlay
     videoLayout->setContentsMargins(0, 0, 0, 0);
 
     // Camera timer for continuous feed updates
@@ -150,7 +209,7 @@ Capture::Capture(QWidget *parent)
 
 Capture::~Capture()
 {
-    // Stop and delete the timer
+    // Stop and delete the timers
     if (cameraTimer){
         cameraTimer->stop();
         delete cameraTimer;
@@ -169,16 +228,25 @@ Capture::~Capture()
         recordTimer = nullptr;
     }
 
+    if(detectionTimer){
+        detectionTimer->stop();
+        delete detectionTimer;
+        detectionTimer = nullptr;
+    }
+
+    // Clean up labels
+    if (yoloLabel) {
+        delete yoloLabel;
+        yoloLabel = nullptr;
+    }
+
     // Release the camera resource
     if (cap.isOpened()) {
         cap.release();
     }
 
     delete ui; // Deletes the UI components, including videoFeedWidget and its children like videoLabel
-
-
 }
-
 
 void Capture::resizeEvent(QResizeEvent *event){
     //Ensures countdownLabel is centered when widget resizes
@@ -198,7 +266,6 @@ void Capture::setCaptureMode(CaptureMode mode){
 void Capture::setVideoTemplate(const VideoTemplate &templateData)
 {
     m_currentVideoTemplate = templateData;
-
 }
 
 void Capture::updateCameraFeed()
@@ -214,7 +281,7 @@ void Capture::updateCameraFeed()
     QElapsedTimer loopTimer;
     loopTimer.start();
 
-    if (!videoLabel || !cap.isOpened()) {
+    if (!yoloLabel || !cap.isOpened()) {
         return;
     }
 
@@ -222,32 +289,13 @@ void Capture::updateCameraFeed()
     if (cap.read(frame)) {
         if (frame.empty()) { return; }
 
-        // Object Detection
-        std::vector<int> classIds;
-        std::vector<float> confidences;
-        std::vector<cv::Rect> detections = runYoloDetection(frame, classIds, confidences);
-
-        // Draw boxes
-        for (size_t i = 0; i < detections.size(); ++i) {
-            cv::rectangle(frame, detections[i], cv::Scalar(0, 255, 0), 2);
-            std::string label = classNames.size() > classIds[i] ? classNames[classIds[i]] : std::to_string(classIds[i]);
-            label += " " + std::to_string((int)(confidences[i] * 100)) + "%";
-            int baseLine = 0;
-            cv::Size labelSize = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseLine);
-            int top = std::max(detections[i].y, labelSize.height);
-            cv::rectangle(frame, cv::Point(detections[i].x, top - labelSize.height),
-                          cv::Point(detections[i].x + labelSize.width, top + baseLine),
-                          cv::Scalar(0,255,0), cv::FILLED);
-            cv::putText(frame, label, cv::Point(detections[i].x, top),
-                        cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0,0,0), 1);
-        }
-
         cv::flip(frame, frame, 1); // keep as before
 
         QImage image = cvMatToQImage(frame);
         if (!image.isNull()) {
             QPixmap pixmap = QPixmap::fromImage(image);
-            videoLabel->setPixmap(pixmap.scaled(videoLabel->size(), Qt::KeepAspectRatio, Qt::FastTransformation));
+            // Update yoloLabel instead of videoLabel for consistency
+            yoloLabel->setPixmap(pixmap.scaled(yoloLabel->size(), Qt::KeepAspectRatio, Qt::FastTransformation));
         }
     } else {
         qWarning() << "Failed to read frame from camera! Stopping timer.";
@@ -302,20 +350,19 @@ void Capture::on_back_clicked()
 
 void Capture::on_capture_clicked()
 {
+    ui->capture->setEnabled(false);
 
-        ui->capture->setEnabled(false);
+    countdownValue = 5;
+    countdownLabel->setText(QString::number(countdownValue));
+    countdownLabel->show();
 
-        countdownValue = 5;
-        countdownLabel->setText(QString::number(countdownValue));
-        countdownLabel->show();
+    QPropertyAnimation *animation = new QPropertyAnimation(countdownLabel, "windowOpacity", this);
+    animation->setDuration(300);
+    animation->setStartValue(0.0);
+    animation->setEndValue(1.0);
+    animation->start();
 
-        QPropertyAnimation *animation = new QPropertyAnimation(countdownLabel, "windowOpacity", this);
-        animation->setDuration(300);
-        animation->setStartValue(0.0);
-        animation->setEndValue(1.0);
-        animation->start();
-
-        countdownTimer->start(1000);
+    countdownTimer->start(1000);
 }
 
 void Capture::updateCountdown()
@@ -341,8 +388,7 @@ void Capture::updateRecordTimer()
     m_recordedSeconds++;
     qDebug() << "Recording: " << m_recordedSeconds << " / " << m_currentVideoTemplate.durationSeconds << " seconds";
 
-
-   //Stop automatically after m_currentVideoTemplate.durationSeconds
+    //Stop automatically after m_currentVideoTemplate.durationSeconds
     if (m_recordedSeconds >= m_currentVideoTemplate.durationSeconds) {
         stopRecording();
     }
@@ -381,12 +427,12 @@ void Capture::stopRecording()
     }
 
     emit showFinalOutputPage(); // Transition to final page
-     ui->capture->setEnabled(true);
+    ui->capture->setEnabled(true);
 }
+
 void Capture::performImageCapture()
 {
     cv::Mat frameToCapture; // The actual frame we want to keep
-
 
     // --- Actual capture of the final frame ---
     if (cap.read(frameToCapture)){
@@ -396,7 +442,7 @@ void Capture::performImageCapture()
         }
 
         qDebug() << "Captured frame size: "
-                 << frameToCapture.cols << "x" << frameToCapture.rows;  // <--- Add this
+                 << frameToCapture.cols << "x" << frameToCapture.rows;
 
         cv::flip(frameToCapture, frameToCapture, 1);
 
@@ -414,6 +460,22 @@ void Capture::performImageCapture()
         qWarning() << "Failed to read frame from camera for actual capture!";
     }
     emit showFinalOutputPage();
+}
+
+QImage Capture::getCurrentCameraFrame()
+{
+    if (!cap.isOpened()) {
+        return QImage();
+    }
+
+    cv::Mat frame;
+    if (cap.read(frame)) {
+        if (!frame.empty()) {
+            cv::flip(frame, frame, 1); // Mirror the frame like in updateCameraFeed
+            return cvMatToQImage(frame);
+        }
+    }
+    return QImage();
 }
 
 QImage Capture::cvMatToQImage(const cv::Mat &mat)
@@ -448,75 +510,39 @@ QImage Capture::cvMatToQImage(const cv::Mat &mat)
     }
 }
 
-void Capture::loadYoloModel() {
-    QString modelPath = ":/models/yolov5s.onnx"; // or your path
-    yoloNet = cv::dnn::readNetFromONNX(modelPath.toStdString());
-    yoloNet.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
-    yoloNet.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
-
-}
-
-void Capture::loadClassNames(const QString& filePath) {
-    classNames.clear();
-    std::ifstream ifs(filePath.toStdString());
-    std::string line;
-    while (std::getline(ifs, line)) {
-        if (!line.empty())
-            classNames.push_back(QString::fromStdString(line).toStdString());
-    }
-}
-
-std::vector<cv::Rect> Capture::runYoloDetection(const cv::Mat& frame, std::vector<int>& outClassIds, std::vector<float>& outConfidences)
+void Capture::processCurrentFrame()
 {
-    cv::Mat blob;
-    cv::dnn::blobFromImage(frame, blob, 1/255.0, cv::Size(640, 640), cv::Scalar(), true, false);
-    yoloNet.setInput(blob);
-    std::vector<cv::Mat> outputs;
-    yoloNet.forward(outputs, yoloNet.getUnconnectedOutLayersNames());
+    // Get current frame from camera
+    QImage currentFrame = getCurrentCameraFrame();
 
-    std::vector<cv::Rect> boxes;
-    outClassIds.clear();
-    outConfidences.clear();
+    if (!currentFrame.isNull()) {
+        // Detect people
+        auto detections = personDetector->detectPeople(currentFrame, 0.5f);
 
-    float confThreshold = 0.3f;
-    float nmsThreshold = 0.5f;
-    std::vector<int> indices;
-    std::vector<cv::Rect> allBoxes;
-    std::vector<float> allScores;
-    std::vector<int> allClassIds;
+        // Draw detections on frame
+        QImage frameWithDetections = personDetector->drawDetections(currentFrame, detections);
 
-    // Process output
-    for (auto& output : outputs) {
-        float* data = (float*)output.data;
-        for (int i = 0; i < output.rows; ++i, data += output.cols) {
-            float score = data[4];
-            if (score > confThreshold) {
-                cv::Mat scores = output.row(i).colRange(5, output.cols);
-                cv::Point classIdPoint;
-                double maxClassScore;
-                minMaxLoc(scores, 0, &maxClassScore, 0, &classIdPoint);
-                if (maxClassScore > confThreshold) {
-                    int centerX = (int)(data[0] * frame.cols);
-                    int centerY = (int)(data[1] * frame.rows);
-                    int width = (int)(data[2] * frame.cols);
-                    int height = (int)(data[3] * frame.rows);
-                    int left = centerX - width / 2;
-                    int top = centerY - height / 2;
-                    allBoxes.push_back(cv::Rect(left, top, width, height));
-                    allScores.push_back((float)maxClassScore);
-                    allClassIds.push_back(classIdPoint.x);
-                }
-            }
+        // Display the result on the programmatically created yoloLabel
+        if (yoloLabel) {
+            QPixmap pixmap = QPixmap::fromImage(frameWithDetections);
+            yoloLabel->setPixmap(pixmap.scaled(yoloLabel->size(), Qt::KeepAspectRatio, Qt::FastTransformation));
         }
+
+        // Log person count
+        qDebug() << "People detected:" << detections.size();
+    }
+}
+
+void Capture::onPeopleDetected(int count)
+{
+    qDebug() << "Detected" << count << "people";
+
+    if (count > lastPersonCount) {
+        qDebug() << "New person entered the booth area!";
+        // Trigger booth actions (take photo, start interaction, etc.)
+    } else if (count < lastPersonCount) {
+        qDebug() << "Person left the booth area";
     }
 
-    // NMS to remove duplicates
-    cv::dnn::NMSBoxes(allBoxes, allScores, confThreshold, nmsThreshold, indices);
-    for (int idx : indices) {
-        boxes.push_back(allBoxes[idx]);
-        outClassIds.push_back(allClassIds[idx]);
-        outConfidences.push_back(allScores[idx]);
-    }
-
-    return boxes;
+    lastPersonCount = count;
 }

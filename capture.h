@@ -1,4 +1,3 @@
-// capture.h
 #ifndef CAPTURE_H
 #define CAPTURE_H
 
@@ -11,6 +10,7 @@
 #include <QThread>
 #include <QList>
 #include "videotemplate.h"
+#include "persondetector.h"
 
 // Required for OpenCV types (cv::VideoCapture and cv::Mat) used as members
 #include <opencv2/opencv.hpp>
@@ -35,6 +35,7 @@ public:
 
     void setCaptureMode(CaptureMode mode);
     void setVideoTemplate(const VideoTemplate& templateData);
+
 signals:
     void backtoPreviousPage();
     void showFinalOutputPage();
@@ -43,6 +44,7 @@ signals:
 
 protected:
     void resizeEvent(QResizeEvent *event) override;
+
 private slots:
     void on_back_clicked();
     void on_capture_clicked();
@@ -50,8 +52,8 @@ private slots:
     void updateCountdown();
     void performImageCapture();
     void updateRecordTimer();
-    void loadYoloModel();
-    void loadClassNames(const QString& filePath);
+    void onPeopleDetected(int count);
+    void processCurrentFrame();
 
 private:
     Ui::Capture *ui;
@@ -59,18 +61,15 @@ private:
     // Member variables for OpenCV camera and video display
     QTimer *cameraTimer;  // QTimer object to trigger frame updates
     QLabel *videoLabel;   // QLabel to display the video feed
+    QLabel *yoloLabel;    // QLabel to display YOLO detection results
     cv::VideoCapture cap; // OpenCV VideoCapture object for camera access
 
-    // Helper function declaration
+    // Helper function declarations
     QImage cvMatToQImage(const cv::Mat &mat); // Helper to convert OpenCV Mat to QImage
+    QImage getCurrentCameraFrame(); // Helper to get current camera frame
     QPixmap m_capturedImage; //stores the last captured image
     void startRecording();
     void stopRecording();
-
-    //Yolov5
-    cv::dnn::Net yoloNet;
-    std::vector<std::string> classNames;
-    std::vector<cv::Rect> runYoloDetection(const cv::Mat& frame, std::vector<int>& outClassIds, std::vector<float>& outConfidences);
 
     //Countdown Timers;
     QTimer *countdownTimer; //Timer for the 5-second countdown
@@ -78,7 +77,6 @@ private:
     int countdownValue; //current value of the countdown
 
     CaptureMode m_currentCaptureMode; //stores current mode of operation for Capture page
-
 
     bool m_cameraFullyReady;
 
@@ -89,7 +87,10 @@ private:
     VideoTemplate m_currentVideoTemplate;
     int m_recordedSeconds;
 
-
+    //Yolov5
+    PersonDetector* personDetector;
+    QTimer* detectionTimer;
+    int lastPersonCount;
 };
 
 #endif // CAPTURE_H
