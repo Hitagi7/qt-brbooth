@@ -276,8 +276,18 @@ void Capture::updateCameraFeed()
 
     cv::Mat frame;
     if (cap.read(frame)) {
+<<<<<<< HEAD
         if (frame.empty()) return;
         cv::flip(frame, frame, 1);
+=======
+        if (frame.empty()) {
+            qWarning() << "Read empty frame from camera!";
+            return;
+        }
+
+        // cv::flip(frame, frame, 1);
+
+>>>>>>> 6ff16c41bcaa658ec1f1f139e1547569ba21556f
         QImage image = cvMatToQImage(frame);
         if (!image.isNull()) {
             QPixmap pixmap = QPixmap::fromImage(image);
