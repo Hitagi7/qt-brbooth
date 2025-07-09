@@ -237,7 +237,7 @@ void Capture::updateCameraFeed()
             return;
         }
 
-        cv::flip(frame, frame, 1);
+        // cv::flip(frame, frame, 1);
 
         QImage image = cvMatToQImage(frame);
 
