@@ -71,6 +71,13 @@ private:
     // Hybrid stacked layout components
     QStackedLayout *stackedLayout;
 
+    QLabel *videoLabelFPS;
+    QElapsedTimer loopTimer;
+    qint64 totalTime;
+    int frameCount;
+    QElapsedTimer frameTimer;
+    bool isProcessingFrame;
+
 signals:
     void backtoPreviousPage();
     void imageCaptured(const QPixmap &image);
