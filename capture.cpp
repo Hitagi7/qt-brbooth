@@ -164,9 +164,9 @@ Capture::Capture(QWidget *parent)
     countdownLabel->setFixedSize(200,200);
     countdownLabel->hide();
 
-    //QT Foreground Overlay
+    //QT Foreground Overlay ========================================================s
     QLabel* overlayImageLabel = new QLabel(ui->overlayWidget);
-    QPixmap overlayPixmap(":/overlays/overlay.png"); // Replace with the correct path
+    QPixmap overlayPixmap(":/foreground/templates/foreground/2.png"); // Replace with the correct path
     overlayImageLabel->setPixmap(overlayPixmap);
     overlayImageLabel->setScaledContents(true); // Make it scale with the window
     overlayImageLabel->setAttribute(Qt::WA_TransparentForMouseEvents); // Don't block input
