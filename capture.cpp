@@ -8,8 +8,10 @@
 #include <QFont>
 #include <QResizeEvent>
 #include <QElapsedTimer>
-#include <QVBoxLayout>
+#include <QVBoxLayout> // Still needed for countdownLabel positioning, but not for main layout
+#include <QGridLayout> // New: For main layout
 #include <opencv2/opencv.hpp>
+// Removed: #include <QPainter> // No longer needed for debugging borders
 
 Capture::Capture(QWidget *parent)
     : QWidget(parent)
@@ -26,15 +28,59 @@ Capture::Capture(QWidget *parent)
     , m_currentVideoTemplate("Default", 5)
     , m_recordedSeconds(0)
     , stackedLayout(nullptr)
+    , videoLabelFPS(nullptr) // Initialize pointer to nullptr
+    , totalTime(0)           // Initialize totalTime
+    , frameCount(0)          // Initialize frameCount
+    , isProcessingFrame(false) // Initialize frame processing flag
 {
     ui->setupUi(this);
 
+    // Ensure no margins or spacing for the Capture widget itself
+    setContentsMargins(0, 0, 0, 0);
+
+    // Setup the main grid layout for the Capture widget
+    QGridLayout* mainLayout = new QGridLayout(this);
+    mainLayout->setContentsMargins(0, 0, 0, 0);
+    mainLayout->setSpacing(0);
 
     // IMMEDIATELY setup stacked layout after UI setup
-    setupStackedLayoutHybrid();
+    setupStackedLayoutHybrid(); // This will now add stackedLayout to mainLayout
+
+    // Force initial size match
+    ui->videoLabel->resize(this->size());
+    ui->overlayWidget->resize(this->size());
+
+    // Force show and update
+    ui->videoLabel->show();
+    ui->overlayWidget->show();
+    ui->videoLabel->update();
+    ui->overlayWidget->update();
+
+    // CRITICAL FIX: Explicitly set the size of videoLabel and overlayWidget
+    // to match the Capture widget's initial size immediately after layout setup.
+    // This addresses the initial QSize(100, 30) issue.
+    ui->videoLabel->resize(this->size());
+    ui->overlayWidget->resize(this->size());
+    // Force a repaint and layout update
+    updateGeometry();
 
     // Update overlay styles for better visibility
     updateOverlayStyles();
+
+    // Ensure videoLabel fills and paints properly
+    ui->videoLabel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    ui->videoLabel->setMinimumSize(1, 1);
+    ui->videoLabel->setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+    ui->videoLabel->setStyleSheet("background-color: black;");
+    ui->videoLabel->setScaledContents(false);  // ❗ Disable it – we're scaling manually
+    ui->videoLabel->setAlignment(Qt::AlignTop | Qt::AlignLeft);
+
+    // Also ensure overlayWidget expands fully
+    ui->overlayWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    ui->overlayWidget->setMinimumSize(1, 1);
+    ui->overlayWidget->setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+    // Corrected: ui->videoLabel->setStyleSheet was applied twice, this one is for overlayWidget
+    ui->overlayWidget->setStyleSheet("background-color: transparent;"); // Ensure overlay is transparent
 
     // Setup slider
     ui->verticalSlider->setMinimum(0);
@@ -43,7 +89,7 @@ Capture::Capture(QWidget *parent)
     ui->verticalSlider->setTickPosition(QSlider::TicksBothSides);
     ui->verticalSlider->setTickInterval(tickStep);
     ui->verticalSlider->setSingleStep(tickStep);
-    ui->verticalSlider->setValue(100);
+    ui->verticalSlider->setValue(0);
 
     // Setup icons and button states
     ui->back->setIcon(QIcon(":/icons/Icons/normal.svg"));
@@ -69,14 +115,40 @@ Capture::Capture(QWidget *parent)
     }
 
     // Set camera properties
+    qDebug() << "Attempting to set camera resolution to 1280x720.";
     cap.set(cv::CAP_PROP_FRAME_WIDTH, 1280);
     cap.set(cv::CAP_PROP_FRAME_HEIGHT, 720);
+
+    // Request 60 FPS from the camera hardware
+    qDebug() << "Attempting to set camera FPS to 60.";
     cap.set(cv::CAP_PROP_FPS, 60.0);
 
-    // Start camera timer for updates
+    // --- DIAGNOSTIC 1: CHECK ACTUAL CAMERA SETTINGS ---
+    // Check what the camera driver actually settled on.
+    double actual_fps = cap.get(cv::CAP_PROP_FPS);
+    double actual_width = cap.get(cv::CAP_PROP_FRAME_WIDTH);
+    double actual_height = cap.get(cv::CAP_PROP_FRAME_HEIGHT);
+    qDebug() << "========================================";
+    qDebug() << "Camera settings REQUESTED: 1280x720 @ 60 FPS";
+    qDebug() << "Camera settings ACTUAL: " << actual_width << "x" << actual_height << " @ " << actual_fps << " FPS";
+    qDebug() << "========================================";
+    if (actual_fps < 59) {
+        qWarning() << "WARNING: Camera did not accept 60 FPS request. Actual FPS is" << actual_fps;
+    }
+
+    // ✅ FIX 1: Use actual camera FPS for timer instead of fixed 60 FPS
+    int timerInterval = qMax(1, static_cast<int>(1000.0 / actual_fps));
+    qDebug() << "Setting camera timer interval to" << timerInterval << "ms for" << actual_fps << "FPS";
+
+    // Start camera timer for updates with dynamic interval
     cameraTimer = new QTimer(this);
     connect(cameraTimer, &QTimer::timeout, this, &Capture::updateCameraFeed);
-    cameraTimer->start(1000 / 60);
+    cameraTimer->start(timerInterval); // ✅ Use actual camera FPS
+
+    // Initialize and start performance timers
+    // These should be started here to ensure valid elapsed times from the first frame.
+    loopTimer.start();
+    frameTimer.start();
 
     ui->capture->setEnabled(true);
 
@@ -94,6 +166,7 @@ Capture::Capture(QWidget *parent)
     // Setup timers
     countdownTimer = new QTimer(this);
     connect(countdownTimer, &QTimer::timeout, this, &Capture::updateCountdown);
+    qDebug() << "OpenCV Camera display timer started for" << actual_fps << "FPS";
 
     recordTimer = new QTimer(this);
     connect(recordTimer, &QTimer::timeout, this, &Capture::updateRecordTimer);
@@ -107,69 +180,57 @@ Capture::Capture(QWidget *parent)
     connect(ui->capture, &QPushButton::clicked, this, &Capture::on_capture_clicked);
     connect(ui->verticalSlider, &QSlider::valueChanged, this, &Capture::on_verticalSlider_valueChanged);
 
-    qDebug() << "OpenCV Camera started successfully with hybrid stacked layout!";
+    qDebug() << "OpenCV Camera started successfully with hybrid stacked layout and optimized FPS!";
 }
 
 void Capture::setupStackedLayoutHybrid()
 {
     qDebug() << "Setting up hybrid stacked layout...";
 
-    // CRITICAL: Set widget properties BEFORE layout manipulation
+    // Ensure videoLabel and overlayWidget are parented to 'this'
+    ui->videoLabel->setParent(this);
+    ui->overlayWidget->setParent(this);
+
     ui->videoLabel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    ui->videoLabel->setScaledContents(true);
-    ui->videoLabel->setStyleSheet("background-color: black;");
+    ui->videoLabel->setMinimumSize(1, 1);
 
     ui->overlayWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    ui->overlayWidget->setStyleSheet("background: transparent;");
+    ui->overlayWidget->setMinimumSize(1, 1);
+    ui->overlayWidget->setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
 
-    // FORCE the overlayWidget to be on top with raise() and higher Z-order
+    // 🟥 Debug border (make sure this shows!)
+    ui->videoLabel->setStyleSheet("background-color: black; border: 5px solid red;");
+    ui->overlayWidget->setStyleSheet("background-color: transparent; border: 5px dashed green;");
+
+    // Fix stacking
+    if (!stackedLayout) {
+        stackedLayout = new QStackedLayout;
+        stackedLayout->setStackingMode(QStackedLayout::StackAll);
+        stackedLayout->setContentsMargins(0, 0, 0, 0);
+        stackedLayout->setSpacing(0);
+
+        stackedLayout->addWidget(ui->videoLabel);      // Background
+        stackedLayout->addWidget(ui->overlayWidget);  // Foreground
+
+        // ⬇️ Replace existing layout if needed
+        if (layout()) {
+            delete layout(); // remove any previous layout
+        }
+
+        QGridLayout* mainLayout = new QGridLayout(this);
+        mainLayout->setContentsMargins(0, 0, 0, 0);
+        mainLayout->setSpacing(0);
+        mainLayout->addLayout(stackedLayout, 0, 0);
+        mainLayout->setRowStretch(0, 1);
+        mainLayout->setColumnStretch(0, 1);
+
+        setLayout(mainLayout);
+    }
+
     ui->overlayWidget->raise();
-    ui->overlayWidget->setAttribute(Qt::WA_TranslucentBackground, false);
-    ui->overlayWidget->setAttribute(Qt::WA_NoSystemBackground, false);
-
-    // Make sure buttons are visible and have proper Z-order
     ui->back->raise();
     ui->capture->raise();
     ui->verticalSlider->raise();
-    ui->back->show();
-    ui->capture->show();
-    ui->verticalSlider->show();
-
-    // Get the current layout and remove widgets from it
-    QLayout *currentLayout = layout();
-    if (currentLayout) {
-        qDebug() << "Removing widgets from current layout...";
-
-        // Remove widgets from current layout
-        currentLayout->removeWidget(ui->videoLabel);
-        currentLayout->removeWidget(ui->overlayWidget);
-
-        // Delete the old layout
-        delete currentLayout;
-    }
-
-    // Create new stacked layout
-    stackedLayout = new QStackedLayout;
-    stackedLayout->setStackingMode(QStackedLayout::StackAll); // CRITICAL: Allow all widgets to be visible
-
-    // Add widgets to stacked layout
-    stackedLayout->addWidget(ui->videoLabel);    // Background layer (index 0)
-    stackedLayout->addWidget(ui->overlayWidget); // Foreground layer (index 1)
-
-    // Ensure the overlay is the current/top widget
-    stackedLayout->setCurrentWidget(ui->overlayWidget);
-
-    // Set the stacked layout as the main layout
-    setLayout(stackedLayout);
-
-    // FORCE update and show
-    ui->overlayWidget->update();
-    ui->overlayWidget->show();
-    ui->back->update();
-    ui->capture->update();
-    ui->verticalSlider->update();
-
-
 }
 
 void Capture::updateOverlayStyles()
@@ -242,6 +303,7 @@ void Capture::updateOverlayStyles()
 
     qDebug() << "Clean professional overlay styles applied";
 }
+
 Capture::~Capture()
 {
     if (cameraTimer){ cameraTimer->stop(); delete cameraTimer; }
@@ -254,12 +316,20 @@ Capture::~Capture()
 
 void Capture::resizeEvent(QResizeEvent *event)
 {
-    if(countdownLabel){
-        int x = (ui->overlayWidget->width() - countdownLabel->width())/2;
-        int y = (ui->overlayWidget->height() - countdownLabel->height())/2;
-        countdownLabel->move(x,y);
-    }
     QWidget::resizeEvent(event);
+
+    ui->videoLabel->resize(size());
+    ui->overlayWidget->resize(size());
+
+    if (countdownLabel) {
+        int x = (width() - countdownLabel->width()) / 2;
+        int y = (height() - countdownLabel->height()) / 2;
+        countdownLabel->move(x, y);
+    }
+
+    update();
+    if (ui->videoLabel) ui->videoLabel->resize(this->size());
+    if (ui->overlayWidget) ui->overlayWidget->resize(this->size());
 }
 
 void Capture::setCaptureMode(CaptureMode mode) {
@@ -272,44 +342,78 @@ void Capture::setVideoTemplate(const VideoTemplate &templateData) {
 
 void Capture::updateCameraFeed()
 {
-    if (!ui->videoLabel || !cap.isOpened()) return;
+    // ✅ FIX 3: Frame skipping logic - Skip if still processing previous frame
+    if (isProcessingFrame) {
+        qDebug() << "Frame skipped - still processing previous frame";
+        return;
+    }
+
+    isProcessingFrame = true;
+
+    // Start loopTimer at the very beginning of the function to measure total time for one frame update cycle.
+    loopTimer.start();
+
+    if (!ui->videoLabel || !cap.isOpened()) {
+        isProcessingFrame = false;
+        return;
+    }
 
     cv::Mat frame;
-    if (cap.read(frame)) {
-<<<<<<< HEAD
-        if (frame.empty()) return;
-        cv::flip(frame, frame, 1);
-=======
-        if (frame.empty()) {
-            qWarning() << "Read empty frame from camera!";
-            return;
-        }
-
-        // cv::flip(frame, frame, 1);
-
->>>>>>> 6ff16c41bcaa658ec1f1f139e1547569ba21556f
-        QImage image = cvMatToQImage(frame);
-        if (!image.isNull()) {
-            QPixmap pixmap = QPixmap::fromImage(image);
-
-            // FORCE the pixmap to fill the EXACT size of the widget
-            QSize widgetSize = this->size(); // Use main widget size, not videoLabel size
-            QPixmap scaledPixmap = pixmap.scaled(
-                widgetSize,
-                Qt::KeepAspectRatioByExpanding,
-                Qt::SmoothTransformation
-                );
-
-            // If the scaled pixmap is larger than the widget, crop it
-            if (scaledPixmap.size() != widgetSize) {
-                int x = (scaledPixmap.width() - widgetSize.width()) / 2;
-                int y = (scaledPixmap.height() - widgetSize.height()) / 2;
-                scaledPixmap = scaledPixmap.copy(x, y, widgetSize.width(), widgetSize.height());
-            }
-
-            ui->videoLabel->setPixmap(scaledPixmap);
-        }
+    if (!cap.read(frame) || frame.empty()) {
+        // Restart loopTimer even if frame read fails, to prevent it from running indefinitely
+        // before the next successful read.
+        loopTimer.restart();
+        isProcessingFrame = false;
+        return;
     }
+
+    cv::flip(frame, frame, 1); // Mirror
+
+    QImage image = cvMatToQImage(frame);
+    if (image.isNull()) {
+        loopTimer.restart(); // Restart for the next attempt
+        isProcessingFrame = false;
+        return;
+    }
+
+    QPixmap pixmap = QPixmap::fromImage(image);
+
+    // Force fill QLabel with NO aspect ratio
+    QSize labelSize = ui->videoLabel->size();
+
+    // ✅ FIX 2: Use FastTransformation for real-time video (much faster than SmoothTransformation)
+    QPixmap scaledPixmap = pixmap.scaled(
+        labelSize,
+        Qt::IgnoreAspectRatio,
+        Qt::FastTransformation  // ✅ Much faster for real-time video
+        );
+
+    ui->videoLabel->setPixmap(scaledPixmap);
+    ui->videoLabel->setAlignment(Qt::AlignTop | Qt::AlignLeft);
+    ui->videoLabel->update();
+
+    // --- Performance stats ---
+    // loopTime is the duration of the current frame processing
+    qint64 currentLoopTime = loopTimer.elapsed();
+    totalTime += currentLoopTime;
+    frameCount++;
+
+    // Print stats every 60 frames
+    if (frameCount % 60 == 0) {
+        double avgLoopTime = (double)totalTime / frameCount;
+        double measuredFPS = 1000.0 / ((double)frameTimer.elapsed() / frameCount);
+        qDebug() << "----------------------------------------";
+        qDebug() << "Avg loop time (last 60 frames):" << avgLoopTime << "ms";
+        qDebug() << "Current FPS (measured over 60 frames):" << measuredFPS << "FPS";
+        qDebug() << "Frame processing efficiency:" << (avgLoopTime < 16.67 ? "GOOD" : "NEEDS OPTIMIZATION");
+        qDebug() << "----------------------------------------";
+        // Reset timers for next batch
+        frameCount = 0;
+        totalTime = 0;
+        frameTimer.start(); // Restart frameTimer for the next 60-frame measurement
+    }
+
+    isProcessingFrame = false; // ✅ Mark frame processing as complete
 }
 
 void Capture::captureRecordingFrame()
