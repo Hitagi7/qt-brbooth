@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <ui version="4.0">
  <class>Dynamic</class>
- <widget class="QWidget" name="Dynamic">
+ <widget class="QWidget" name="dynamic"> <!-- CORRECTED: Changed name="Dynamic" to name="dynamic" -->
   <property name="enabled">
    <bool>true</bool>
   </property>
@@ -95,7 +95,7 @@
         <size>
          <width>40</width>
          <height>20</height>
-       </size>
+        </size>
        </property>
       </spacer>
      </item>
@@ -232,7 +232,7 @@
         <item>
          <layout class="QGridLayout" name="gridLayout_top_videos">
           <item row="0" column="0">
-           <widget class="QWidget" name="videoPlaceholder1" native="true">
+           <widget class="QPushButton" name="videoButton1">
             <property name="minimumSize">
              <size>
               <width>425</width>
@@ -248,32 +248,28 @@
             <property name="cursor">
              <cursorShape>PointingHandCursor</cursorShape>
             </property>
-            <property name="autoFillBackground">
-             <bool>false</bool>
-            </property>
             <property name="styleSheet">
              <string notr="true">
-/* The actual styling for the QVideoWidget inside will be applied dynamically in C++ or via a separate QSS rule targeting QVideoWidget. */
-/* However, you can set a default border for the placeholder if you wish */
-#videoPlaceholder1 {
-    border: 2px solid gray; /* Example default border */
+/* IMPORTANT: Background set to transparent here. GIF will be displayed by a child QLabel. */
+#videoButton1 {
+    background-color: transparent;
     border-radius: 8px;
-}
-/* This style below will be applied to the QVideoWidget itself, which is parented to videoPlaceholder1 */
-QVideoWidget#videoWidget1 { /* Use ID selector if you set objectName in C++ */
-    border: none;
-    background-color: black; /* Or transparent if you prefer */
+    border: 5px solid transparent; /* Default transparent border */
 }
 
-QVideoWidget#videoWidget1::hover {
-    border: 5px solid #FFC20F;
+#videoButton1::hover {
+    border: 5px solid #FFC20F; /* Yellow border on hover */
     border-radius: 8px;
 }
 
-QVideoWidget#videoWidget1[selected=&quot;true&quot;] {
-    border: 5px solid #0BC200;
+#videoButton1[selected=&quot;true&quot;] {
+    border: 5px solid #0BC200; /* Green border when selected */
     border-radius: 8px;
-}</string>
+}
+</string>
+            </property>
+            <property name="text">
+             <string/>
             </property>
            </widget>
           </item>
@@ -294,7 +290,7 @@ QVideoWidget#videoWidget1[selected=&quot;true&quot;] {
            </spacer>
           </item>
           <item row="0" column="2">
-           <widget class="QWidget" name="videoPlaceholder2" native="true">
+           <widget class="QPushButton" name="videoButton2">
             <property name="minimumSize">
              <size>
               <width>425</width>
@@ -311,24 +307,26 @@ QVideoWidget#videoWidget1[selected=&quot;true&quot;] {
              <cursorShape>PointingHandCursor</cursorShape>
             </property>
             <property name="styleSheet">
-             <string notr="true">#videoPlaceholder2 {
-    border: 2px solid gray;
+             <string notr="true">
+#videoButton2 {
+    background-color: transparent;
     border-radius: 8px;
-}
-QVideoWidget#videoWidget2 {
-    border: none;
-    background-color: black;
+    border: 5px solid transparent;
 }
 
-QVideoWidget#videoWidget2::hover {
+#videoButton2::hover {
     border: 5px solid #FFC20F;
     border-radius: 8px;
 }
 
-QVideoWidget#videoWidget2[selected=&quot;true&quot;] {
+#videoButton2[selected=&quot;true&quot;] {
     border: 5px solid #0BC200;
     border-radius: 8px;
-}</string>
+}
+</string>
+            </property>
+            <property name="text">
+             <string/>
             </property>
            </widget>
           </item>
@@ -349,7 +347,7 @@ QVideoWidget#videoWidget2[selected=&quot;true&quot;] {
            </spacer>
           </item>
           <item row="0" column="4">
-           <widget class="QWidget" name="videoPlaceholder3" native="true">
+           <widget class="QPushButton" name="videoButton3">
             <property name="minimumSize">
              <size>
               <width>425</width>
@@ -366,24 +364,26 @@ QVideoWidget#videoWidget2[selected=&quot;true&quot;] {
              <cursorShape>PointingHandCursor</cursorShape>
             </property>
             <property name="styleSheet">
-             <string notr="true">#videoPlaceholder3 {
-    border: 2px solid gray;
+             <string notr="true">
+#videoButton3 {
+    background-color: transparent;
     border-radius: 8px;
-}
-QVideoWidget#videoWidget3 {
-    border: none;
-    background-color: black;
+    border: 5px solid transparent;
 }
 
-QVideoWidget#videoWidget3::hover {
+#videoButton3::hover {
     border: 5px solid #FFC20F;
     border-radius: 8px;
 }
 
-QVideoWidget#videoWidget3[selected=&quot;true&quot;] {
+#videoButton3[selected=&quot;true&quot;] {
     border: 5px solid #0BC200;
     border-radius: 8px;
-}</string>
+}
+</string>
+            </property>
+            <property name="text">
+             <string/>
             </property>
            </widget>
           </item>
@@ -435,7 +435,7 @@ QVideoWidget#videoWidget3[selected=&quot;true&quot;] {
         <item>
          <layout class="QGridLayout" name="gridLayout_bottom_videos">
           <item row="0" column="0">
-           <widget class="QWidget" name="videoPlaceholder4" native="true">
+           <widget class="QPushButton" name="videoButton4">
             <property name="minimumSize">
              <size>
               <width>425</width>
@@ -452,24 +452,26 @@ QVideoWidget#videoWidget3[selected=&quot;true&quot;] {
              <cursorShape>PointingHandCursor</cursorShape>
             </property>
             <property name="styleSheet">
-             <string notr="true">#videoPlaceholder4 {
-    border: 2px solid gray;
+             <string notr="true">
+#videoButton4 {
+    background-color: transparent;
     border-radius: 8px;
-}
-QVideoWidget#videoWidget4 {
-    border: none;
-    background-color: black;
+    border: 5px solid transparent;
 }
 
-QVideoWidget#videoWidget4::hover {
+#videoButton4::hover {
     border: 5px solid #FFC20F;
     border-radius: 8px;
 }
 
-QVideoWidget#videoWidget4[selected=&quot;true&quot;] {
+#videoButton4[selected=&quot;true&quot;] {
     border: 5px solid #0BC200;
     border-radius: 8px;
-}</string>
+}
+</string>
+            </property>
+            <property name="text">
+             <string/>
             </property>
            </widget>
           </item>
@@ -490,7 +492,7 @@ QVideoWidget#videoWidget4[selected=&quot;true&quot;] {
            </spacer>
           </item>
           <item row="0" column="2">
-           <widget class="QWidget" name="videoPlaceholder5" native="true">
+           <widget class="QPushButton" name="videoButton5">
             <property name="minimumSize">
              <size>
               <width>425</width>
@@ -507,24 +509,26 @@ QVideoWidget#videoWidget4[selected=&quot;true&quot;] {
              <cursorShape>PointingHandCursor</cursorShape>
             </property>
             <property name="styleSheet">
-             <string notr="true">#videoPlaceholder5 {
-    border: 2px solid gray;
+             <string notr="true">
+#videoButton5 {
+    background-color: transparent;
     border-radius: 8px;
-}
-QVideoWidget#videoWidget5 {
-    border: none;
-    background-color: black;
+    border: 5px solid transparent;
 }
 
-QVideoWidget#videoWidget5::hover {
+#videoButton5::hover {
     border: 5px solid #FFC20F;
     border-radius: 8px;
 }
 
-QVideoWidget#videoWidget5[selected=&quot;true&quot;] {
+#videoButton5[selected=&quot;true&quot;] {
     border: 5px solid #0BC200;
     border-radius: 8px;
-}</string>
+}
+</string>
+            </property>
+            <property name="text">
+             <string/>
             </property>
            </widget>
           </item>

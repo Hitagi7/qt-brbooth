@@ -91,11 +91,10 @@ Capture::Capture(QWidget *parent)
 
         return; // Exit constructor if no camera is available
     }
-
     // --- If camera opened successfully, proceed with setup ---
 
     // Attempt to set camera resolution and FPS
-    qDebug() << "Attempting to set camera resolution to 1280x720.";
+     qDebug() << "Attempting to set camera resolution to 1280x720.";
     cap.set(cv::CAP_PROP_FRAME_WIDTH, 1280);
     cap.set(cv::CAP_PROP_FRAME_HEIGHT, 720);
     qDebug() << "Attempting to set camera FPS to 60.";

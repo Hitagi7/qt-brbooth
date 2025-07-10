@@ -8,15 +8,13 @@
 #include <QPushButton>
 #include <QTimer>
 #include <QWidget>
-#include <QLabel>
-#include <QMap>
+#include <QLabel>        // Still needed for QLabel
 #include <QMediaPlayer>
-#include <QVideoWidget> // Using QVideoWidget as per your last working code
-#include <QWidget>
-#include <QHash>
-#include <QStackedLayout>
+#include <QVideoWidget>
+#include <QMovie>        // Still needed for QMovie
+#include <QResizeEvent>
 
-
+// Forward declaration of the generated UI namespace
 namespace Ui {
 class Dynamic;
 }
@@ -31,12 +29,16 @@ public:
 
     void resetPage();
 
+public slots: // Re-introducing this as a public slot
+    void onDynamicPageShown();
+
 signals:
     void backtoLandingPage();
     void showCapturePage();
 
 protected:
     bool eventFilter(QObject *obj, QEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
 
 private slots:
     void on_back_clicked();
@@ -44,26 +46,25 @@ private slots:
     void onPlayerMediaStatusChanged(QMediaPlayer::MediaStatus status);
 
 private:
+    void updateGifLabelsGeometry();
     void setupVideoPlayers();
-    void processVideoClick(QObject *videoWidgetObj);
+    void processVideoClick(QObject *buttonObj);
     void applyHighlightStyle(QObject *obj, bool highlight);
     void showOverlayVideo(const QString& videoPath);
     void hideOverlayVideo();
-    void setPlaceholderHoverState(QWidget* placeholder, bool hovered);
 
-    QHash<QString, QWidget*> videoPlaceholders;
-    Ui::Dynamic *ui;
+    Ui::Dynamic *ui; // The pointer to the generated UI elements
 
-    QHash<QString, QMediaPlayer*> videoPlayers;
-    QHash<QString, QVideoWidget*> videoWidgets; // Using QVideoWidget as per your last working code
-    QHash<QString, QStackedLayout*> videoLayouts;
+    // REMOVED QHash for gifLabels and gifMovies
+    // QHash<QString, QLabel*> gifLabels;
+    // QHash<QString, QMovie*> gifMovies;
 
-    QVideoWidget* fullscreenVideoWidget; // Using QVideoWidget as per your last working code
+    QVideoWidget* fullscreenVideoWidget;
     QMediaPlayer* fullscreenPlayer;
 
     QTimer* debounceTimer;
     bool debounceActive;
-    QVideoWidget* currentSelectedVideoWidget; // Using QVideoWidget as per your last working code
+    QPushButton* currentSelectedVideoWidget; // Changed from QObject* to QPushButton* for type safety
 };
 
 #endif // DYNAMIC_H
