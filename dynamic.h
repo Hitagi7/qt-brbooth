@@ -1,5 +1,3 @@
-// dynamic.h
-
 #ifndef DYNAMIC_H
 #define DYNAMIC_H
 
@@ -8,13 +6,12 @@
 #include <QPushButton>
 #include <QTimer>
 #include <QWidget>
-#include <QLabel>        // Still needed for QLabel
+#include <QLabel>
 #include <QMediaPlayer>
 #include <QVideoWidget>
-#include <QMovie>        // Still needed for QMovie
+#include <QMovie>
 #include <QResizeEvent>
 
-// Forward declaration of the generated UI namespace
 namespace Ui {
 class Dynamic;
 }
@@ -29,7 +26,7 @@ public:
 
     void resetPage();
 
-public slots: // Re-introducing this as a public slot
+public slots:
     void onDynamicPageShown();
 
 signals:
@@ -53,18 +50,14 @@ private:
     void showOverlayVideo(const QString& videoPath);
     void hideOverlayVideo();
 
-    Ui::Dynamic *ui; // The pointer to the generated UI elements
-
-    // REMOVED QHash for gifLabels and gifMovies
-    // QHash<QString, QLabel*> gifLabels;
-    // QHash<QString, QMovie*> gifMovies;
+    Ui::Dynamic *ui;
 
     QVideoWidget* fullscreenVideoWidget;
     QMediaPlayer* fullscreenPlayer;
 
     QTimer* debounceTimer;
     bool debounceActive;
-    QPushButton* currentSelectedVideoWidget; // Changed from QObject* to QPushButton* for type safety
+    QPushButton* currentSelectedVideoWidget;
 };
 
 #endif // DYNAMIC_H
