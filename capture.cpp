@@ -164,6 +164,16 @@ Capture::Capture(QWidget *parent)
     countdownLabel->setFixedSize(200,200);
     countdownLabel->hide();
 
+    //QT Foreground Overlay
+    QLabel* overlayImageLabel = new QLabel(ui->overlayWidget);
+    QPixmap overlayPixmap(":/overlays/overlay.png"); // Replace with the correct path
+    overlayImageLabel->setPixmap(overlayPixmap);
+    overlayImageLabel->setScaledContents(true); // Make it scale with the window
+    overlayImageLabel->setAttribute(Qt::WA_TransparentForMouseEvents); // Don't block input
+    overlayImageLabel->resize(this->size());
+    overlayImageLabel->move(0, 0); // Align top-left
+    overlayImageLabel->show();
+
     // Setup timers
     countdownTimer = new QTimer(this);
     connect(countdownTimer, &QTimer::timeout, this, &Capture::updateCountdown);
@@ -321,6 +331,16 @@ void Capture::resizeEvent(QResizeEvent *event)
 
     ui->videoLabel->resize(size());
     ui->overlayWidget->resize(size());
+
+    // Resize the overlay image label too
+    for (QObject* child : ui->overlayWidget->children()) {
+        QLabel* label = qobject_cast<QLabel*>(child);
+        if (label && label != countdownLabel) {
+            label->resize(size());
+            label->move(0, 0);
+        }
+    }
+
 
     if (countdownLabel) {
         int x = (width() - countdownLabel->width()) / 2;
