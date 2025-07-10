@@ -1,4 +1,3 @@
-
 #include "capture.h"
 #include "ui_capture.h"
 #include <QDebug>
@@ -68,15 +67,10 @@ Capture::Capture(QWidget *parent)
         ui->capture->setEnabled(false);
         return;
     }
-<<<<<<< HEAD
     // --- If camera opened successfully, proceed with setup ---
-
     // Attempt to set camera resolution and FPS
      qDebug() << "Attempting to set camera resolution to 1280x720.";
-=======
-
     // Set camera properties
->>>>>>> 92d787398fcb88606a6f0f08ea24107b9f7b85e5
     cap.set(cv::CAP_PROP_FRAME_WIDTH, 1280);
     cap.set(cv::CAP_PROP_FRAME_HEIGHT, 720);
     cap.set(cv::CAP_PROP_FPS, 60.0);
@@ -284,18 +278,10 @@ void Capture::updateCameraFeed()
 
     cv::Mat frame;
     if (cap.read(frame)) {
-<<<<<<< HEAD
-        if (frame.empty()) return;
-        cv::flip(frame, frame, 1);
-=======
         if (frame.empty()) {
             qWarning() << "Read empty frame from camera!";
             return;
         }
-
-        // cv::flip(frame, frame, 1);
-
->>>>>>> 6ff16c41bcaa658ec1f1f139e1547569ba21556f
         QImage image = cvMatToQImage(frame);
         if (!image.isNull()) {
             QPixmap pixmap = QPixmap::fromImage(image);
