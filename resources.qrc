@@ -39,4 +39,16 @@
         <file>videos/video4.mp4</file>
         <file>videos/video5.mp4</file>
     </qresource>
+    <qresource prefix="/foreground">
+        <file>templates/foreground/1.png</file>
+        <file>templates/foreground/2.png</file>
+        <file>templates/foreground/3.png</file>
+        <file>templates/foreground/4.png</file>
+    </qresource>
+    <qresource prefix="/background">
+        <file>templates/background/bg1.png</file>
+        <file>templates/background/bg2.png</file>
+        <file>templates/background/bg3.png</file>
+        <file>templates/background/bg4.png</file>
+    </qresource>
 </RCC>
