@@ -280,7 +280,7 @@
     background-image: url(:/images/pics/bg2.png);
     background-repeat: no-repeat;
     background-position: center;
-        background-color: transparent;
+        background-color: black;
         width: 241px;
    height: 141px;
 }
@@ -331,17 +331,15 @@
     background-color: transparent;
 }
 
-#image1::hover{
-        border: 5px solid #FFC20F;
+#image1:hover{
+    border: 5px solid #FFC20F;
     border-radius: 8px;
 }
 
-/* NEW: Style for the 'selected' custom property */
-#image1[selected=&quot;true&quot;] { /* Use attribute selector for your custom property */
+#image1[selected=&quot;true&quot;] {
     border: 5px solid #0BC200;
     border-radius: 8px;
-}
-</string>
+}</string>
        </property>
        <property name="text">
         <string/>
