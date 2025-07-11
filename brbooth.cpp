@@ -1,11 +1,14 @@
 #include "brbooth.h"
 #include "background.h"
-#include "capture.h"
+#include "capture.h" // This now correctly brings in Capture::CaptureMode and VideoTemplate
 #include "dynamic.h"
 #include "final.h"
 #include "foreground.h"
 #include "ui_brbooth.h"
-#include "videotemplate.h"
+// #include "videotemplate.h" // REMOVED: No longer needed here, included via "capture.h"
+
+#include <QDebug>
+#include <opencv2/opencv.hpp> // Keep if CV_VERSION is directly used or other OpenCV types/functions are used in BRBooth::BRBooth
 
 // Boilerplate
 BRBooth::BRBooth(QWidget *parent)
@@ -16,9 +19,9 @@ BRBooth::BRBooth(QWidget *parent)
     ui->setupUi(this);
     qDebug() << "OpenCV Version: " << CV_VERSION;
     this->setStyleSheet("QMainWindow#BRBooth {"
-                        "    background-image: url(:/images/pics/bg.jpg);"
-                        "    background-repeat: no-repeat;"
-                        "    background-position: center;"
+                        "   background-image: url(:/images/pics/bg.jpg);"
+                        "   background-repeat: no-repeat;"
+                        "   background-position: center;"
                         "}");
 
     // Widgets are already added for static and dynamic
@@ -57,7 +60,7 @@ BRBooth::BRBooth(QWidget *parent)
         // Connect to capture interface, and store the previous page index
         connect(dynamicPage, &Dynamic::videoSelectedTwice, this, [this]() {
             previousPageIndex = dynamicPageIndex; // Store dynamic page as the previous
-            capturePage->setCaptureMode(Capture::VideoRecordMode);
+            capturePage->setCaptureMode(Capture::VideoRecordMode); // Corrected access to enum
 
             // ADDITION: Set a default video template for now (e.g., 10 seconds)
             // Replace this with actual template logic when you have it
@@ -77,7 +80,7 @@ BRBooth::BRBooth(QWidget *parent)
         // Connect to capture interface, and store the previous page index
         connect(backgroundPage, &Background::imageSelectedTwice, this, [this]() {
             previousPageIndex = backgroundPageIndex; // Store background page as the previous
-            capturePage->setCaptureMode(Capture::ImageCaptureMode);
+            capturePage->setCaptureMode(Capture::ImageCaptureMode); // Corrected access to enum
             showCapturePage();
         });
     }
@@ -161,4 +164,3 @@ void BRBooth::on_dynamicButton_clicked()
 {
     showDynamicPage();
 }
-
