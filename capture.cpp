@@ -2,6 +2,7 @@
 #include "capture.h"
 #include "ui_capture.h"
 #include "foreground.h" // Needed for Foreground class
+
 #include <QDebug>
 #include <QImage>
 #include <QPixmap>
@@ -14,8 +15,7 @@
 #include <QGridLayout>
 #include <QMessageBox>
 #include <QStackedLayout>
-#include <opencv2/opencv.hpp> // Removed extra 's'
-
+#include <opencv2/opencv.hpp>
 
 Capture::Capture(QWidget *parent, Foreground *fg)
     : QWidget(parent)
@@ -32,10 +32,9 @@ Capture::Capture(QWidget *parent, Foreground *fg)
     , m_currentVideoTemplate("Default", 5) // Using struct constructor
     , m_recordedSeconds(0)
     , stackedLayout(nullptr)
-    // Removed: , videoLabelFPS(nullptr) // This member is removed from capture.h
-    , totalTime(0)             // Only one initialization
-    , frameCount(0)            // Only one initialization
-    , isProcessingFrame(false) // Only one initialization
+    , totalTime(0)           // Only one initialization
+    , frameCount(0)          // Only one initialization
+    // REMOVED: , isProcessingFrame(false) // This flag is removed for the display pipeline
     , foreground(fg)
     , overlayImageLabel(nullptr) // Initialize here, then new in body
 {
@@ -72,7 +71,6 @@ Capture::Capture(QWidget *parent, Foreground *fg)
     if (overlayImageLabel) {
         overlayImageLabel->resize(this->size());
     }
-
 
     ui->videoLabel->show();
     ui->overlayWidget->show();
@@ -148,6 +146,8 @@ Capture::Capture(QWidget *parent, Foreground *fg)
     qDebug() << "Setting camera timer interval to" << timerInterval << "ms for" << actual_fps << "FPS";
 
     cameraTimer = new QTimer(this);
+    // FIX: Set cameraTimer to PreciseTimer for smoother updates
+    cameraTimer->setTimerType(Qt::PreciseTimer);
     connect(cameraTimer, &QTimer::timeout, this, &Capture::updateCameraFeed);
     cameraTimer->start(timerInterval);
 
@@ -212,17 +212,11 @@ void Capture::setupStackedLayoutHybrid()
     ui->overlayWidget->setMinimumSize(1, 1);
     ui->overlayWidget->setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
 
-    // Debug border (you can remove these after verifying layout)
-    // ui->videoLabel->setStyleSheet("background-color: black; border: 5px solid red;"); // Removed as per your style update, but uncomment if needed for debug
-    // ui->overlayWidget->setStyleSheet("background-color: transparent; border: 5px dashed green;"); // Removed as per your style update, but uncomment if needed for debug
-
-
     if (!stackedLayout) {
         stackedLayout = new QStackedLayout;
         stackedLayout->setStackingMode(QStackedLayout::StackAll);
         stackedLayout->setContentsMargins(0, 0, 0, 0);
         stackedLayout->setSpacing(0);
-
 
         stackedLayout->addWidget(ui->videoLabel);   // Background
         stackedLayout->addWidget(ui->overlayWidget); // Foreground (for buttons, countdown, etc.)
@@ -243,7 +237,6 @@ void Capture::setupStackedLayoutHybrid()
 
         setLayout(mainLayout); // Set this as the main layout for the Capture widget
     }
-
 
     ui->overlayWidget->raise();
     ui->back->raise();
@@ -329,16 +322,11 @@ void Capture::resizeEvent(QResizeEvent *event)
     ui->videoLabel->resize(size());
     ui->overlayWidget->resize(size());
 
-
     // Resize the overlay image label too
-    // Iterate through children of the Capture widget, not overlayWidget,
-    // as overlayImageLabel is directly added to the stackedLayout, not overlayWidget.
-    // Or, more simply, just resize overlayImageLabel directly if it's a member.
     if (overlayImageLabel) {
         overlayImageLabel->resize(size()); // Resize to Capture widget's size
-        overlayImageLabel->move(0, 0);     // Position at top-left of Capture widget
+        overlayImageLabel->move(0, 0);      // Position at top-left of Capture widget
     }
-
 
     // Reposition countdown label to center
     if (countdownLabel) {
@@ -346,11 +334,6 @@ void Capture::resizeEvent(QResizeEvent *event)
         int y = (height() - countdownLabel->height()) / 2;
         countdownLabel->move(x, y);
     }
-
-    // No need to call update() here explicitly, as resizeEvent typically triggers a repaint.
-    // The following two lines are redundant given the initial resize(size()) calls.
-    // if (ui->videoLabel) ui->videoLabel->resize(this->size());
-    // if (ui->overlayWidget) ui->overlayWidget->resize(this->size());
 }
 
 void Capture::setCaptureMode(CaptureMode mode) {
@@ -363,19 +346,14 @@ void Capture::setVideoTemplate(const VideoTemplate &templateData) {
 
 void Capture::updateCameraFeed()
 {
-    // Frame skipping logic - Skip if still processing previous frame
-    if (isProcessingFrame) {
-        // qDebug() << "Frame skipped - still processing previous frame"; // Uncomment for more detailed debug
-        return;
-    }
-
-    isProcessingFrame = true; // Mark as processing
+    // FIX: Removed isProcessingFrame flag. Relying on QTimer interval and cap.read()
+    //      to manage frame processing flow.
 
     // Start loopTimer at the very beginning of the function to measure total time for one frame update cycle.
     loopTimer.start();
 
     if (!ui->videoLabel || !cap.isOpened()) {
-        isProcessingFrame = false; // Reset flag even if camera is not open
+        loopTimer.restart(); // Restart loopTimer for the next attempt
         return;
     }
 
@@ -383,8 +361,7 @@ void Capture::updateCameraFeed()
 
     if (!cap.read(frame) || frame.empty()) {
         qWarning() << "Failed to read frame from camera or frame is empty.";
-        loopTimer.restart(); // Restart loopTimer for the next attempt
-        isProcessingFrame = false;
+        loopTimer.restart(); // Restart for the next attempt
         return;
     }
 
@@ -394,7 +371,6 @@ void Capture::updateCameraFeed()
     if (image.isNull()) {
         qWarning() << "Failed to convert cv::Mat to QImage.";
         loopTimer.restart(); // Restart for the next attempt
-        isProcessingFrame = false;
         return;
     }
 
@@ -412,7 +388,7 @@ void Capture::updateCameraFeed()
 
     ui->videoLabel->setPixmap(scaledPixmap);
     ui->videoLabel->setAlignment(Qt::AlignCenter); // Align the scaled pixmap center
-    ui->videoLabel->update();
+    ui->videoLabel->update(); // Explicitly request repaint
 
     // --- Performance stats ---
     qint64 currentLoopTime = loopTimer.elapsed();
@@ -435,8 +411,6 @@ void Capture::updateCameraFeed()
         totalTime = 0;
         frameTimer.start(); // Restart frameTimer for the next 60-frame measurement
     }
-
-    isProcessingFrame = false; // Mark frame processing as complete
 }
 
 void Capture::captureRecordingFrame()
