@@ -108,10 +108,26 @@ void Foreground::on_back_clicked()
 
 void Foreground::processImageButtonClick(QPushButton *button)
 {
-    if (!button) {
-        return;
+    if (!button) return;
+
+    // Set selected foreground based on objectName
+    QString name = button->objectName();  // e.g., "image1"
+    QString path;
+
+    if (name == "image1") path = ":/foreground/templates/foreground/1.png";
+    else if (name == "image2") path = ":/foreground/templates/foreground/2.png";
+    else if (name == "image3") path = ":/foreground/templates/foreground/3.png";
+    else if (name == "image4") path = ":/foreground/templates/foreground/4.png";
+    else if (name == "image5") path = ":/foreground/templates/foreground/5.png";
+    else if (name == "image6") path = ":/foreground/templates/foreground/6.png";
+
+    if (!path.isEmpty()) {
+        setSelectedForeground(path);
+        qDebug() << "Foreground selected:" << path;
+        emit foregroundChanged(getSelectedForeground());
     }
 
+    // Handle double click selection logic
     if (button == currentSelectedImageButton) {
         applyHighlightStyle(button, false);
         currentSelectedImageButton = nullptr;
@@ -120,15 +136,18 @@ void Foreground::processImageButtonClick(QPushButton *button)
         if (currentSelectedImageButton) {
             applyHighlightStyle(currentSelectedImageButton, false);
         }
-
         applyHighlightStyle(button, true);
         currentSelectedImageButton = button;
     }
 }
 
-void Foreground::on_image1_clicked() {}
-void Foreground::on_image2_clicked() {}
-void Foreground::on_image3_clicked() {}
-void Foreground::on_image4_clicked() {}
-void Foreground::on_image5_clicked() {}
-void Foreground::on_image6_clicked() {}
+
+void Foreground::setSelectedForeground(const QString &path)
+{
+    selectedForeground = path;
+}
+
+QString Foreground::getSelectedForeground() const
+{
+    return selectedForeground;
+}

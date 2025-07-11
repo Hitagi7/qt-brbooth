@@ -11,6 +11,7 @@
 #include <QList>
 #include <opencv2/opencv.hpp>
 #include "videotemplate.h"
+#include "foreground.h"
 
 QT_BEGIN_NAMESPACE
 namespace Ui { class Capture; }
@@ -26,7 +27,7 @@ public:
         VideoRecordMode
     };
 
-    explicit Capture(QWidget *parent = nullptr);
+    explicit Capture(QWidget *parent = nullptr, Foreground *fg = nullptr); //pass foreground class
     ~Capture();
 
     void setCaptureMode(CaptureMode mode);
@@ -43,6 +44,7 @@ private slots:
     void updateCountdown();
     void updateRecordTimer();
     void on_verticalSlider_valueChanged(int value);
+    void updateForegroundOverlay(const QString &path);
 
 private:
     Ui::Capture *ui;
@@ -77,6 +79,10 @@ private:
     int frameCount;
     QElapsedTimer frameTimer;
     bool isProcessingFrame;
+
+    // pass foreground
+    Foreground *foreground;
+    QLabel* overlayImageLabel = nullptr;
 
 signals:
     void backtoPreviousPage();

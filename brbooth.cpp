@@ -34,7 +34,7 @@ BRBooth::BRBooth(QWidget *parent)
     backgroundPageIndex = ui->stackedWidget->indexOf(backgroundPage);
 
     // Add widget for capture page
-    capturePage = new Capture(this);
+    capturePage = new Capture(this, foregroundPage);
     ui->stackedWidget->addWidget(capturePage);
     capturePageIndex = ui->stackedWidget->indexOf(capturePage);
 

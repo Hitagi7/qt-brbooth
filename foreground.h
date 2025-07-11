@@ -22,6 +22,9 @@ class Foreground : public QWidget
 public:
     explicit Foreground(QWidget *parent = nullptr);
     ~Foreground();
+    // setter & getters for foreground template selection
+    void setSelectedForeground(const QString &path);
+    QString getSelectedForeground() const;
 
 public slots:
     void resetPage();
@@ -29,6 +32,7 @@ public slots:
 signals:
     void backtoLandingPage();
     void imageSelectedTwice();
+    void foregroundChanged(const QString &newPath);
 
 protected:
     bool eventFilter(QObject *obj, QEvent *event) override;
@@ -36,13 +40,6 @@ protected:
 private slots:
     void on_back_clicked();
     void resetDebounce();
-
-    void on_image1_clicked();
-    void on_image2_clicked();
-    void on_image3_clicked();
-    void on_image4_clicked();
-    void on_image5_clicked();
-    void on_image6_clicked();
 
 private:
     Ui::Foreground *ui;
@@ -52,6 +49,8 @@ private:
 
     void applyHighlightStyle(QPushButton *button, bool highlight);
     void processImageButtonClick(QPushButton *button);
+
+    QString selectedForeground; // store user selected foreground template
 };
 
 #endif // FOREGROUND_H

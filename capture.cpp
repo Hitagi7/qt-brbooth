@@ -1,5 +1,6 @@
 #include "capture.h"
 #include "ui_capture.h"
+#include "foreground.h"
 #include <QDebug>
 #include <QImage>
 #include <QPixmap>
@@ -14,7 +15,7 @@
 
 // Removed: #include <QPainter> // No longer needed for debugging borders
 
-Capture::Capture(QWidget *parent)
+Capture::Capture(QWidget *parent, Foreground *fg)
     : QWidget(parent)
     , ui(new Ui::Capture)
     , cameraTimer(nullptr)
@@ -33,6 +34,7 @@ Capture::Capture(QWidget *parent)
     , totalTime(0)           // Initialize totalTime
     , frameCount(0)          // Initialize frameCount
     , isProcessingFrame(false) // Initialize frame processing flag
+    ,foreground(fg)
 {
     ui->setupUi(this);
 
@@ -43,6 +45,25 @@ Capture::Capture(QWidget *parent)
     QGridLayout* mainLayout = new QGridLayout(this);
     mainLayout->setContentsMargins(0, 0, 0, 0);
     mainLayout->setSpacing(0);
+
+    //QT Foreground Overlay ========================================================s
+    overlayImageLabel = new QLabel(ui->overlayWidget);
+    QString selectedOverlay;
+    if (foreground) {
+        selectedOverlay = foreground->getSelectedForeground();
+    } else {
+        qWarning() << "Error: foreground is nullptr!";
+    }
+    qDebug() << "Selected overlay path:" << selectedOverlay;
+    overlayImageLabel->setAttribute(Qt::WA_TranslucentBackground);
+    overlayImageLabel->setStyleSheet("background: transparent;");
+    overlayImageLabel->setScaledContents(true); // Optional: scale the pixmap
+    overlayImageLabel->resize(this->size());
+    overlayImageLabel->hide();
+    connect(foreground, &Foreground::foregroundChanged, this, &Capture::updateForegroundOverlay);
+    qDebug() << "Selected overlay path:" << selectedOverlay;
+    QPixmap overlayPixmap(selectedOverlay);
+    overlayImageLabel->setPixmap(overlayPixmap);
 
     // IMMEDIATELY setup stacked layout after UI setup
     setupStackedLayoutHybrid(); // This will now add stackedLayout to mainLayout
@@ -164,16 +185,6 @@ Capture::Capture(QWidget *parent)
     countdownLabel->setFixedSize(200,200);
     countdownLabel->hide();
 
-    //QT Foreground Overlay ========================================================s
-    QLabel* overlayImageLabel = new QLabel(ui->overlayWidget);
-    QPixmap overlayPixmap(":/foreground/templates/foreground/2.png"); // Replace with the correct path
-    overlayImageLabel->setPixmap(overlayPixmap);
-    overlayImageLabel->setScaledContents(true); // Make it scale with the window
-    overlayImageLabel->setAttribute(Qt::WA_TransparentForMouseEvents); // Don't block input
-    overlayImageLabel->resize(this->size());
-    overlayImageLabel->move(0, 0); // Align top-left
-    overlayImageLabel->show();
-
     // Setup timers
     countdownTimer = new QTimer(this);
     connect(countdownTimer, &QTimer::timeout, this, &Capture::updateCountdown);
@@ -222,6 +233,7 @@ void Capture::setupStackedLayoutHybrid()
 
         stackedLayout->addWidget(ui->videoLabel);      // Background
         stackedLayout->addWidget(ui->overlayWidget);  // Foreground
+        stackedLayout->addWidget(overlayImageLabel);
 
         // ⬇️ Replace existing layout if needed
         if (layout()) {
@@ -238,6 +250,7 @@ void Capture::setupStackedLayoutHybrid()
         setLayout(mainLayout);
     }
 
+    overlayImageLabel->raise();
     ui->overlayWidget->raise();
     ui->back->raise();
     ui->capture->raise();
@@ -590,4 +603,19 @@ void Capture::on_verticalSlider_valueChanged(int value)
     if (value != snappedValue) {
         ui->verticalSlider->setValue(snappedValue);
     }
+}
+
+void Capture::updateForegroundOverlay(const QString &path)
+{
+    qDebug() << "Foreground overlay updated to:" << path;
+
+    if (!overlayImageLabel) {
+        qWarning() << "overlayImageLabel is null!";
+        return;
+    }
+
+    QPixmap overlayPixmap(path);
+    overlayImageLabel->setPixmap(overlayPixmap);
+    overlayImageLabel->resize(this->size()); // Ensure it scales with window
+    overlayImageLabel->show();
 }
