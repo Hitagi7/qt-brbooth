@@ -31,9 +31,8 @@ Capture::Capture(QWidget *parent, Foreground *fg)
     , m_currentVideoTemplate("Default", 5) // Using struct constructor
     , m_recordedSeconds(0)
     , stackedLayout(nullptr)
-    , totalTime(0)           // Only one initialization
-    , frameCount(0)          // Only one initialization
-    // REMOVED: , isProcessingFrame(false) // This flag is removed for the display pipeline
+    , totalTime(0)            // Only one initialization
+    , frameCount(0)           // Only one initialization
     , foreground(fg)
     , overlayImageLabel(nullptr) // Initialize here, then new in body
 {
@@ -324,7 +323,7 @@ void Capture::resizeEvent(QResizeEvent *event)
     // Resize the overlay image label too
     if (overlayImageLabel) {
         overlayImageLabel->resize(size()); // Resize to Capture widget's size
-        overlayImageLabel->move(0, 0);      // Position at top-left of Capture widget
+        overlayImageLabel->move(0, 0);     // Position at top-left of Capture widget
     }
 
     // Reposition countdown label to center
