@@ -1,3 +1,4 @@
+// testing
 #include "capture.h"
 #include "ui_capture.h"
 #include "foreground.h" // Needed for Foreground class
