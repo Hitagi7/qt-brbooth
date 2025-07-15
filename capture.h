@@ -1,108 +1,103 @@
 #ifndef CAPTURE_H
 #define CAPTURE_H
 
-#include <QWidget>
-#include <QPixmap>
-#include <QVector>
-#include <QTimer>
-#include <QLabel>
-#include <QStackedLayout>
-#include <QGridLayout>
-#include <QElapsedTimer>
-#include <opencv2/opencv.hpp>
-#include "videotemplate.h"
-#include "foreground.h" // Include Foreground header as it's used in the constructor and as a member
+#include <QWidget>           // Required for QWidget base class
+#include <QTimer>            // Required for QTimer
+#include <QImage>            // Required for QImage
+#include <QPixmap>           // Required for QPixmap
+#include <QElapsedTimer>     // Required for QElapsedTimer
+#include <QThread>           // CRUCIAL: For QThread definition and usage
+#include <QMessageBox>       // Required for QMessageBox
+#include <QPropertyAnimation> // Required for QPropertyAnimation
 
+// Standard Qt Widget includes
+#include <QLabel>            // Required for QLabel
+#include <QStackedLayout>    // Required for QStackedLayout
+#include <QGridLayout>       // Required for QGridLayout, used in setupStackedLayoutHybrid
+#include <QPushButton>       // Required for QPushButton, used for ui->back, ui->capture
+#include <QSlider>           // Required for QSlider, used for ui->verticalSlider
 
-// Forward declarations for UI namespace
-namespace Ui {
-class Capture;
-}
+#include "videotemplate.h"   // Your custom VideoTemplate class
+#include "camera.h"          // Your custom Camera class
+
+// Forward declarations
+namespace Ui { class Capture; }
+class Foreground; // Forward declaration for Foreground
 
 class Capture : public QWidget
 {
     Q_OBJECT
 
 public:
-    // Moved enum inside the class to be a member type, making it accessible via Capture::
+    explicit Capture(QWidget *parent = nullptr, Foreground *fg = nullptr,
+                     Camera *existingCameraWorker = nullptr, QThread *existingCameraThread = nullptr);
+    ~Capture();
+
+    // Define CaptureMode enum here, inside the class (already correct)
     enum CaptureMode {
         ImageCaptureMode,
         VideoRecordMode
     };
 
-    explicit Capture(QWidget *parent = nullptr, Foreground *fg = nullptr); //pass foreground class
-    ~Capture();
-
     void setCaptureMode(CaptureMode mode);
     void setVideoTemplate(const VideoTemplate &templateData);
-
-signals:
-    void backtoPreviousPage();
-    void imageCaptured(const QPixmap &image);
-    void videoRecorded(const QVector<QPixmap> &frames);
-    void showFinalOutputPage(); // Signal to show the final output page
 
 protected:
     void resizeEvent(QResizeEvent *event) override;
 
+signals:
+    void backtoPreviousPage();
+    void imageCaptured(const QPixmap &image);
+    void videoRecorded(const QList<QPixmap> &frames);
+    void showFinalOutputPage();
+
 private slots:
-    void updateCameraFeed();
+    void updateCameraFeed(const QImage &frame);
+    void handleCameraOpened(bool success, double actual_width, double actual_height, double actual_fps);
+    void handleCameraError(const QString &msg);
+
     void updateCountdown();
     void updateRecordTimer();
     void captureRecordingFrame();
+
     void on_back_clicked();
     void on_capture_clicked();
     void on_verticalSlider_valueChanged(int value);
-    void updateForegroundOverlay(const QString &path); // New slot for overlay updates
+
+    void updateForegroundOverlay(const QString &path);
+    void setupStackedLayoutHybrid();
+    void updateOverlayStyles();
 
 private:
+    // Declare these private functions here (already correct)
+    void performImageCapture();
+    void startRecording();
+    void stopRecording();
+
     Ui::Capture *ui;
 
-    cv::VideoCapture cap;
+    // IMPORTANT: Reorder these to match constructor initializer list for 'initialized after' warning
+    Foreground *foreground;    // Declared first as it's initialized before cameraThread in Ctor
+    QThread *cameraThread;
+    Camera *cameraWorker;
 
-    QTimer *cameraTimer;
     QTimer *countdownTimer;
     QLabel *countdownLabel;
     int countdownValue;
 
-    CaptureMode m_currentCaptureMode; // Use the enum
-    VideoTemplate m_currentVideoTemplate; // Use the struct
-
+    CaptureMode m_currentCaptureMode;
     bool m_isRecording;
     QTimer *recordTimer;
     QTimer *recordingFrameTimer;
     int m_targetRecordingFPS;
+    VideoTemplate m_currentVideoTemplate;
     int m_recordedSeconds;
-    QVector<QPixmap> m_recordedFrames;
+    QList<QPixmap> m_recordedFrames;
     QPixmap m_capturedImage;
 
     QStackedLayout *stackedLayout;
-
-    QElapsedTimer loopTimer;
-    QElapsedTimer frameTimer;
-    qint64 totalTime;
-    int frameCount;
-    bool isProcessingFrame;
-
-    void setupStackedLayoutHybrid();
-    void updateOverlayStyles();
-    void startRecording();
-    void stopRecording();
-    void performImageCapture();
-
-    QImage cvMatToQImage(const cv::Mat &mat);
-
-
-    // pass foreground
-    Foreground *foreground;
-    QLabel* overlayImageLabel; // Initialized to nullptr in constructor, no need for = nullptr here.
-
-
+    QLabel *overlayImageLabel;
+    QLabel *loadingCameraLabel;
 };
-
-// FIX: Correctly scope the enum for Q_DECLARE_METATYPE
-// This must be outside the class definition, but after the enum's full definition.
-Q_DECLARE_METATYPE(Capture::CaptureMode)
-
 
 #endif // CAPTURE_H

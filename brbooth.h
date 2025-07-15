@@ -2,53 +2,69 @@
 #define BRBOOTH_H
 
 #include <QMainWindow>
+#include <QStackedWidget> // Make sure this is included for QStackedWidget members
+#include <QThread> // For cameraThread
 
-#include "opencv2/core/core.hpp"
+// Forward declarations to avoid circular dependencies and unnecessary includes
+class Background;
+class Capture;
+class Dynamic;
+class Final;
+class Foreground;
+class Camera; // Forward declare Camera worker
 
-#include "background.h"
-#include "capture.h"
-#include "dynamic.h"
-#include "final.h"
-#include "foreground.h"
-
-QT_BEGIN_NAMESPACE
 namespace Ui {
 class BRBooth;
 }
-
-QT_END_NAMESPACE
 
 class BRBooth : public QMainWindow
 {
     Q_OBJECT
 
 public:
-    BRBooth(QWidget *parent = nullptr);
+    explicit BRBooth(QWidget *parent = nullptr);
     ~BRBooth();
 
-private slots:
+public slots:
     void showLandingPage();
     void showForegroundPage();
     void showDynamicPage();
     void showBackgroundPage();
     void showCapturePage();
     void showFinalOutputPage();
+
+private slots:
     void on_staticButton_clicked();
     void on_dynamicButton_clicked();
 
+signals:
+    void startCameraWorker(); // Signal to start the camera worker's operations
+    void stopCameraWorker();  // Signal to stop the camera worker's operations
+
 private:
     Ui::BRBooth *ui;
+
+    // Pointers to your page widgets
     Foreground *foregroundPage;
-    int foregroundPageIndex;
-    int landingPageIndex;
-    Dynamic *dynamicPage;
-    int dynamicPageIndex;
     Background *backgroundPage;
-    int backgroundPageIndex;
     Capture *capturePage;
-    int capturePageIndex;
-    int previousPageIndex;
+    Dynamic *dynamicPage;
     Final *finalOutputPage;
+
+    // Page indices (stored for easy reference)
+    int landingPageIndex;
+    int foregroundPageIndex;
+    int dynamicPageIndex;
+    int backgroundPageIndex;
+    int capturePageIndex;
     int finalOutputPageIndex;
+
+    // This new variable will correctly track the page to return to
+    int lastVisitedPageIndex;
+
+    // Camera threading components
+    QThread *cameraThread;
+    Camera *cameraWorker;
 };
+
 #endif // BRBOOTH_H

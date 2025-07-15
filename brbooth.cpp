@@ -1,98 +1,107 @@
 #include "brbooth.h"
 #include "background.h"
-#include "capture.h" // This now correctly brings in Capture::CaptureMode and VideoTemplate
+#include "capture.h"
 #include "dynamic.h"
 #include "final.h"
 #include "foreground.h"
 #include "ui_brbooth.h"
 #include "videotemplate.h"
-
+#include "camera.h"
 #include <QDebug>
-#include <opencv2/opencv.hpp> // Keep if CV_VERSION is directly used or other OpenCV types/functions are used in BRBooth::BRBooth
+#include <opencv2/opencv.hpp> // Keep if CV_VERSION is directly used or other OpenCV types/functions are used
 
-// Boilerplate
 BRBooth::BRBooth(QWidget *parent)
     : QMainWindow(parent)
     , ui(new Ui::BRBooth)
+    , cameraThread(new QThread(this)) // Initialize cameraThread first
+    , cameraWorker(new Camera())      // Initialize cameraWorker second
+    , lastVisitedPageIndex(0)         // Initialize lastVisitedPageIndex (will be overwritten by initial showLandingPage)
 {
     qDebug() << "OpenCV Version: " << CV_VERSION;
     ui->setupUi(this);
     qDebug() << "OpenCV Version: " << CV_VERSION;
+
     this->setStyleSheet("QMainWindow#BRBooth {"
                         "   background-image: url(:/images/pics/bg.jpg);"
                         "   background-repeat: no-repeat;"
                         "   background-position: center;"
                         "}");
 
-    // Widgets are already added for static and dynamic
+    // ================== CAMERA THREADING SETUP ==================
+    cameraWorker->moveToThread(cameraThread);
+
+    connect(this, &BRBooth::startCameraWorker, cameraWorker, &Camera::startCamera);
+    connect(this, &BRBooth::stopCameraWorker, cameraWorker, &Camera::stopCamera);
+
+    connect(cameraThread, &QThread::started, this, [this]() {
+        cameraWorker->setDesiredCameraProperties(1280, 720, 60.0);
+        emit startCameraWorker();
+    });
+
+    cameraThread->start();
+    qDebug() << "BRBooth: Camera thread started.";
+    // ============================================================
+
+    // Get pointers to UI-defined pages (added in Qt Designer's stacked widget)
     foregroundPage = ui->forepage;
-    foregroundPageIndex = ui->stackedWidget->indexOf(foregroundPage);
-    landingPageIndex = ui->stackedWidget->indexOf(ui->landingpage);
     dynamicPage = ui->dynamicpage;
+
+    // Get indices of all pages
+    landingPageIndex = ui->stackedWidget->indexOf(ui->landingpage);
+    foregroundPageIndex = ui->stackedWidget->indexOf(foregroundPage);
     dynamicPageIndex = ui->stackedWidget->indexOf(dynamicPage);
 
-    // Add widget for background page
+    // Create new pages and add them to the stacked widget
     backgroundPage = new Background(this);
     ui->stackedWidget->addWidget(backgroundPage);
     backgroundPageIndex = ui->stackedWidget->indexOf(backgroundPage);
 
-    // Add widget for capture page
-    capturePage = new Capture(this, foregroundPage);
+    // Pass the camera worker and thread to Capture's constructor
+    capturePage = new Capture(this, foregroundPage, cameraWorker, cameraThread);
     ui->stackedWidget->addWidget(capturePage);
     capturePageIndex = ui->stackedWidget->indexOf(capturePage);
 
-    //Add widget for final output page
     finalOutputPage = new Final(this);
     ui->stackedWidget->addWidget(finalOutputPage);
     finalOutputPageIndex = ui->stackedWidget->indexOf(finalOutputPage);
 
-    // Static
-    // Show landing page upon pressing back button from foreground
-    ui->stackedWidget->setCurrentIndex(landingPageIndex);
-    connect(foregroundPage, &Foreground::backtoLandingPage, this, &BRBooth::showLandingPage);
+    // Set initial page - this uses the showLandingPage() slot to set the initial view
+    showLandingPage();
 
-    // Show background page upon double clicking a template
+    // Connect signals for page navigation and actions
+    connect(foregroundPage, &Foreground::backtoLandingPage, this, &BRBooth::showLandingPage);
     connect(foregroundPage, &Foreground::imageSelectedTwice, this, &BRBooth::showBackgroundPage);
 
-    // Dynamic back button
     if (dynamicPage) {
         connect(dynamicPage, &Dynamic::backtoLandingPage, this, &BRBooth::showLandingPage);
-        // Connect to capture interface, and store the previous page index
         connect(dynamicPage, &Dynamic::videoSelectedTwice, this, [this]() {
-            previousPageIndex = dynamicPageIndex; // Store dynamic page as the previous
-            capturePage->setCaptureMode(Capture::VideoRecordMode); // Corrected access to enum
-
-            // ADDITION: Set a default video template for now (e.g., 10 seconds)
-            // Replace this with actual template logic when you have it
-            VideoTemplate defaultVideoTemplate("Default Dynamic Template", 10); // 10 seconds for dynamic
+            capturePage->setCaptureMode(Capture::VideoRecordMode);
+            VideoTemplate defaultVideoTemplate("Default Dynamic Template", 10);
             capturePage->setVideoTemplate(defaultVideoTemplate);
-
-            showCapturePage();
+            showCapturePage(); // This call will now correctly store the dynamic page index as lastVisited
         });
     }
 
-    // Static background back button
     if (backgroundPage) {
-        connect(backgroundPage,
-                &Background::backtoForegroundPage,
-                this,
-                &BRBooth::showForegroundPage);
-        // Connect to capture interface, and store the previous page index
+        connect(backgroundPage, &Background::backtoForegroundPage, this, &BRBooth::showForegroundPage);
         connect(backgroundPage, &Background::imageSelectedTwice, this, [this]() {
-            previousPageIndex = backgroundPageIndex; // Store background page as the previous
-            capturePage->setCaptureMode(Capture::ImageCaptureMode); // Corrected access to enum
-            showCapturePage();
+            capturePage->setCaptureMode(Capture::ImageCaptureMode);
+            showCapturePage(); // This call will now correctly store the background page index as lastVisited
         });
     }
 
-    // Capture page back button logic
     if (capturePage) {
-        // Connect the back signal to a lambda that checks previousPageIndex
+        // Handle the 'back' action from the Capture page
         connect(capturePage, &Capture::backtoPreviousPage, this, [this]() {
-            if (previousPageIndex == backgroundPageIndex) {
+
+            // This is the core logic for the 'back' button from Capture
+            // lastVisitedPageIndex should correctly hold the index of the page *before* Capture.
+            if (lastVisitedPageIndex == backgroundPageIndex) {
                 showBackgroundPage();
-            } else if (previousPageIndex == dynamicPageIndex) {
-                showDynamicPage();
+            } else if (lastVisitedPageIndex == dynamicPageIndex) {
+                showDynamicPage(); // Will transition to the correct page
+            } else {
+                showLandingPage(); // Fallback if lastVisitedPageIndex is unexpected
             }
         });
         connect(capturePage, &Capture::showFinalOutputPage, this, &BRBooth::showFinalOutputPage);
@@ -100,14 +109,14 @@ BRBooth::BRBooth(QWidget *parent)
         connect(capturePage, &Capture::videoRecorded, finalOutputPage, &Final::setVideo);
     }
 
-    //Final Output Page
     if (finalOutputPage) {
         connect(finalOutputPage, &Final::backToCapturePage, this, &BRBooth::showCapturePage);
         connect(finalOutputPage, &Final::backToLandingPage, this, &BRBooth::showLandingPage);
     }
 
-    // Resets static foreground page everytime its loaded
+    // Resets pages when they are loaded (useful for clearing selections etc.)
     connect(ui->stackedWidget, &QStackedWidget::currentChanged, this, [this](int index) {
+        qDebug() << "DEBUG: Stacked widget current index changed to:" << index;
         if (index == foregroundPageIndex) {
             foregroundPage->resetPage();
         }
@@ -122,8 +131,19 @@ BRBooth::BRBooth(QWidget *parent)
 
 BRBooth::~BRBooth()
 {
+    // Clean up camera thread and worker in BRBooth destructor
+    emit stopCameraWorker(); // Signal to worker to stop
+    cameraThread->quit();    // Tell thread to exit event loop
+    cameraThread->wait();    // Wait for thread to finish
+    delete cameraWorker;
+    delete cameraThread;
     delete ui;
 }
+
+// =====================================================================
+// Navigation Slots - lastVisitedPageIndex is updated ONLY when moving
+// FORWARD to Capture or Final, right before setCurrentIndex.
+// =====================================================================
 
 void BRBooth::showLandingPage()
 {
@@ -147,13 +167,24 @@ void BRBooth::showBackgroundPage()
 
 void BRBooth::showCapturePage()
 {
+    // *** CRITICAL FIX HERE ***
+    // When we call showCapturePage(), the *current* page is the one we want to remember
+    // as the "last visited" (the page to go back to).
+    lastVisitedPageIndex = ui->stackedWidget->currentIndex();
+    qDebug() << "DEBUG: showCapturePage() called. Setting index to:" << capturePageIndex << ". SAVED lastVisitedPageIndex (page we just came from):" << lastVisitedPageIndex;
     ui->stackedWidget->setCurrentIndex(capturePageIndex);
 }
 
 void BRBooth::showFinalOutputPage()
 {
+    // *** CRITICAL FIX HERE ***
+    // Similar to Capture, when moving to Final, save the current page (Capture)
+    // as the last visited one to return to.
+    lastVisitedPageIndex = ui->stackedWidget->currentIndex();
     ui->stackedWidget->setCurrentIndex(finalOutputPageIndex);
 }
+
+
 
 void BRBooth::on_staticButton_clicked()
 {

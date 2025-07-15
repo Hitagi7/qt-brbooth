@@ -14,6 +14,7 @@ CONFIG += link_pkgconfig
 
 SOURCES += \
     background.cpp \
+    camera.cpp \
     capture.cpp \
     dynamic.cpp \
     final.cpp \
@@ -25,6 +26,7 @@ SOURCES += \
 HEADERS += \
     background.h \
     brbooth.h \
+    camera.h \
     capture.h \
     dynamic.h \
     final.h \
