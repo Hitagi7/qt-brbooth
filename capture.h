@@ -96,6 +96,8 @@ private:
     // pass foreground
     Foreground *foreground;
     QLabel* overlayImageLabel; // Initialized to nullptr in constructor, no need for = nullptr here.
+
+
 };
 
 // FIX: Correctly scope the enum for Q_DECLARE_METATYPE

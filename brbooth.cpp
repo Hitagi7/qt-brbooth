@@ -5,7 +5,7 @@
 #include "final.h"
 #include "foreground.h"
 #include "ui_brbooth.h"
-// #include "videotemplate.h" // REMOVED: No longer needed here, included via "capture.h"
+#include "videotemplate.h"
 
 #include <QDebug>
 #include <opencv2/opencv.hpp> // Keep if CV_VERSION is directly used or other OpenCV types/functions are used in BRBooth::BRBooth

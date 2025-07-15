@@ -237,14 +237,11 @@ void Capture::setupStackedLayoutHybrid()
         setLayout(mainLayout); // Set this as the main layout for the Capture widget
     }
 
+    overlayImageLabel->raise();
     ui->overlayWidget->raise();
     ui->back->raise();
     ui->capture->raise();
     ui->verticalSlider->raise();
-    // Ensure overlayImageLabel is on top of the video feed but below controls
-    if (overlayImageLabel) {
-        overlayImageLabel->raise();
-    }
 }
 
 void Capture::updateOverlayStyles()
