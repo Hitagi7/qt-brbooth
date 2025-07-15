@@ -13,6 +13,11 @@
 #include <QVBoxLayout> // Still needed for countdownLabel positioning, but not for main layout
 #include <QGridLayout> // New: For main layout
 #include <opencv2/opencv.hpp>
+#include <QProcess>
+#include <QJsonDocument>
+#include <QJsonArray>
+#include <QJsonObject>
+#include <QDir>
 
 // Removed: #include <QPainter> // No longer needed for debugging borders
 
@@ -375,6 +380,43 @@ void Capture::setVideoTemplate(const VideoTemplate &templateData) {
     m_currentVideoTemplate = templateData;
 }
 
+// Add this function to the Capture class
+bool Capture::detectPersonInImage(const QString& imagePath) {
+    QProcess process;
+    QString program = "python";
+    QStringList arguments;
+    arguments << "yolov5/detect.py"
+              << "--weights" << "yolov5/yolov5n.pt"
+              << "--source" << imagePath
+              << "--classes" << "0"
+              << "--nosave";
+
+    process.start(program, arguments);
+    process.waitForFinished(-1);
+
+    QByteArray output = process.readAllStandardOutput();
+    // Parse JSON output from detect.py
+    QJsonDocument doc = QJsonDocument::fromJson(output);
+    if (!doc.isArray()) {
+        qDebug() << "Detection output is not a JSON array.";
+        return false;
+    }
+    QJsonArray results = doc.array();
+    bool foundPerson = false;
+    for (const QJsonValue& imageResult : results) {
+        QJsonObject obj = imageResult.toObject();
+        QJsonArray detections = obj["detections"].toArray();
+        for (const QJsonValue& detVal : detections) {
+            QJsonObject det = detVal.toObject();
+            QJsonArray bbox = det["bbox"].toArray();
+            double conf = det["confidence"].toDouble();
+            qDebug() << "Person detected: bbox=" << bbox << ", confidence=" << conf;
+            foundPerson = true;
+        }
+    }
+    return foundPerson;
+}
+
 void Capture::updateCameraFeed()
 {
     // ✅ FIX 3: Frame skipping logic - Skip if still processing previous frame
@@ -404,6 +446,18 @@ void Capture::updateCameraFeed()
     }
 
     cv::flip(frame, frame, 1); // Mirror
+
+    // --- YOLOv5n Person Detection ---
+    QString tempImagePath = QDir::temp().filePath("yolo_temp.jpg");
+    cv::imwrite(tempImagePath.toStdString(), frame);
+    bool personDetected = detectPersonInImage(tempImagePath);
+    if (personDetected) {
+        qDebug() << "Person detected in frame!";
+        // You can trigger UI updates or other logic here
+    } else {
+        qDebug() << "No person detected in frame.";
+    }
+    // --- End YOLOv5n Person Detection ---
 
     QImage image = cvMatToQImage(frame);
     if (image.isNull()) {
