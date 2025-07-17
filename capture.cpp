@@ -377,15 +377,10 @@ void Capture::setVideoTemplate(const VideoTemplate &templateData) {
 
 void Capture::updateCameraFeed()
 {
-    // ✅ FIX 3: Frame skipping logic - Skip if still processing previous frame
     if (isProcessingFrame) {
-        qDebug() << "Frame skipped - still processing previous frame";
         return;
     }
-
     isProcessingFrame = true;
-
-    // Start loopTimer at the very beginning of the function to measure total time for one frame update cycle.
     loopTimer.start();
 
     if (!ui->videoLabel || !cap.isOpened()) {
@@ -394,62 +389,60 @@ void Capture::updateCameraFeed()
     }
 
     cv::Mat frame;
-
     if (!cap.read(frame) || frame.empty()) {
-        // Restart loopTimer even if frame read fails, to prevent it from running indefinitely
-        // before the next successful read.
+        loopTimer.restart();
+        isProcessingFrame = false;
+        return;
+    }
+    cv::flip(frame, frame, 1);
+
+    QImage image = cvMatToQImage(frame);
+    if (image.isNull()) {
         loopTimer.restart();
         isProcessingFrame = false;
         return;
     }
 
-    cv::flip(frame, frame, 1); // Mirror
-
-    QImage image = cvMatToQImage(frame);
-    if (image.isNull()) {
-        loopTimer.restart(); // Restart for the next attempt
-        isProcessingFrame = false;
-        return;
-    }
-
+    // ======= FIXED CODE START =======
     QPixmap pixmap = QPixmap::fromImage(image);
-
-    // Force fill QLabel with NO aspect ratio
     QSize labelSize = ui->videoLabel->size();
 
-    // ✅ FIX 2: Use FastTransformation for real-time video (much faster than SmoothTransformation)
+    // Scale and crop for perfect edge coverage
     QPixmap scaledPixmap = pixmap.scaled(
         labelSize,
-        Qt::IgnoreAspectRatio,
-        Qt::FastTransformation  // ✅ Much faster for real-time video
+        Qt::KeepAspectRatioByExpanding,
+        Qt::FastTransformation
         );
 
-    ui->videoLabel->setPixmap(scaledPixmap);
-    ui->videoLabel->setAlignment(Qt::AlignTop | Qt::AlignLeft);
-    ui->videoLabel->update();
+    int xOffset = (scaledPixmap.width() - labelSize.width()) / 2;
+    int yOffset = (scaledPixmap.height() - labelSize.height()) / 2;
+    scaledPixmap = scaledPixmap.copy(xOffset, yOffset, labelSize.width(), labelSize.height());
 
-    // --- Performance stats ---
-    // loopTime is the duration of the current frame processing
+    ui->videoLabel->setPixmap(scaledPixmap);
+
+    // Override .ui settings to prevent any white borders
+    ui->videoLabel->setScaledContents(false);
+    ui->videoLabel->setAlignment(Qt::AlignTop | Qt::AlignLeft);
+    ui->videoLabel->setStyleSheet("background-color: black; border: none; padding: 0px;");
+    ui->videoLabel->setContentsMargins(0, 0, 0, 0);
+
+    this->setContentsMargins(0, 0, 0, 0);
+    if (layout()) layout()->setContentsMargins(0, 0, 0, 0);
+    // ======= FIXED CODE END =======
+
     qint64 currentLoopTime = loopTimer.elapsed();
     totalTime += currentLoopTime;
     frameCount++;
-
-    // Print stats every 60 frames
     if (frameCount % 60 == 0) {
         double avgLoopTime = (double)totalTime / frameCount;
         double measuredFPS = 1000.0 / ((double)frameTimer.elapsed() / frameCount);
-        qDebug() << "----------------------------------------";
-        qDebug() << "Avg loop time (last 60 frames):" << avgLoopTime << "ms";
-        qDebug() << "Current FPS (measured over 60 frames):" << measuredFPS << "FPS";
-        qDebug() << "Frame processing efficiency:" << (avgLoopTime < 16.67 ? "GOOD" : "NEEDS OPTIMIZATION");
-        qDebug() << "----------------------------------------";
-        // Reset timers for next batch
+        qDebug() << "Avg loop time:" << avgLoopTime << "ms";
+        qDebug() << "FPS:" << measuredFPS << "FPS";
         frameCount = 0;
         totalTime = 0;
-        frameTimer.start(); // Restart frameTimer for the next 60-frame measurement
+        frameTimer.start();
     }
-
-    isProcessingFrame = false; // ✅ Mark frame processing as complete
+    isProcessingFrame = false;
 }
 
 void Capture::captureRecordingFrame()

@@ -2,6 +2,7 @@
 #define BRBOOTH_H
 
 #include <QMainWindow>
+#include <QStackedWidget>
 
 #include "opencv2/core/core.hpp"
 
@@ -50,5 +51,6 @@ private:
     int previousPageIndex;
     Final *finalOutputPage;
     int finalOutputPageIndex;
+    QStackedWidget *stackedWidget;
 };
 #endif // BRBOOTH_H
