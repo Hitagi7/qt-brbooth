@@ -9,32 +9,40 @@
 #include <QPushButton>
 #include <QThread>
 #include <QList>
+#include <QElapsedTimer>     // Required for QElapsedTimer
+#include <QMessageBox>       // Required for QMessageBox
+#include <QPropertyAnimation> // Required for QPropertyAnimation
+#include <QStackedLayout>    // Required for QStackedLayout
+#include <QGridLayout>       // Required for QGridLayout, used in setupStackedLayoutHybrid
+#include <QSlider>           // Required for QSlider, used for ui->verticalSlider
 #include "videotemplate.h"
 #include "persondetector.h"
+#include "camera.h"          // Your custom Camera class
 
-// Required for OpenCV types (cv::VideoCapture and cv::Mat) used as members
-#include <opencv2/opencv.hpp>
-
-QT_BEGIN_NAMESPACE
-namespace Ui {
-class Capture;
-}
-QT_END_NAMESPACE
+// Forward declarations
+namespace Ui { class Capture; }
+class Foreground; // Forward declaration for Foreground
 
 class Capture : public QWidget
 {
-    Q_OBJECT // Required for signals and slots
+    Q_OBJECT
 
 public:
-    enum CaptureMode{
-        ImageCaptureMode, //for taking a single capture
-        VideoRecordMode   //for recording a video
-    };
-    explicit Capture(QWidget *parent = nullptr);
+    explicit Capture(QWidget *parent = nullptr, Foreground *fg = nullptr,
+                     Camera *existingCameraWorker = nullptr, QThread *existingCameraThread = nullptr);
     ~Capture();
+
+    // Define CaptureMode enum here, inside the class (already correct)
+    enum CaptureMode {
+        ImageCaptureMode,
+        VideoRecordMode
+    };
 
     void setCaptureMode(CaptureMode mode);
     void setVideoTemplate(const VideoTemplate& templateData);
+
+protected:
+    void resizeEvent(QResizeEvent *event) override;
 
 signals:
     void backtoPreviousPage();
@@ -42,21 +50,57 @@ signals:
     void imageCaptured(const QPixmap &image);
     void videoRecorded(const QList<QPixmap> &frames);
 
-protected:
-    void resizeEvent(QResizeEvent *event) override;
-
 private slots:
+    void updateCameraFeed(const QImage &frame);
+    void handleCameraOpened(bool success, double actual_width, double actual_height, double actual_fps);
+    void handleCameraError(const QString &msg);
+
+    void updateCountdown();
+    void updateRecordTimer();
+    void captureRecordingFrame();
+
     void on_back_clicked();
     void on_capture_clicked();
-    void updateCameraFeed(); // Declaration for the slot used to update camera feed
-    void updateCountdown();
-    void performImageCapture();
-    void updateRecordTimer();
+    void on_verticalSlider_valueChanged(int value);
+
     void onPeopleDetected(int count);
     void processCurrentFrame();
 
+    void updateForegroundOverlay(const QString &path);
+    void setupStackedLayoutHybrid();
+    void updateOverlayStyles();
+
+
 private:
+    void performImageCapture();
+    void startRecording();
+    void stopRecording();
+
     Ui::Capture *ui;
+
+    // IMPORTANT: Reorder these to match constructor initializer list for 'initialized after' warning
+    Foreground *foreground;    // Declared first as it's initialized before cameraThread in Ctor
+    QThread *cameraThread;
+    Camera *cameraWorker;
+
+    //Countdown Timers;
+    QTimer *countdownTimer; //Timer for the 5-second countdown
+    QLabel *countdownLabel; //Label to display the countdown
+    int countdownValue; //current value of the countdown
+
+    CaptureMode m_currentCaptureMode;
+    bool m_isRecording;
+    QTimer *recordTimer;
+    QTimer *recordingFrameTimer;
+    int m_targetRecordingFPS;
+    VideoTemplate m_currentVideoTemplate;
+    int m_recordedSeconds;
+    QList<QPixmap> m_recordedFrames;
+    QPixmap m_capturedImage;
+
+    QStackedLayout *stackedLayout;
+    QLabel *overlayImageLabel;
+    QLabel *loadingCameraLabel;
 
     // Member variables for OpenCV camera and video display
     QTimer *cameraTimer;  // QTimer object to trigger frame updates
@@ -64,28 +108,7 @@ private:
     QLabel *yoloLabel;    // QLabel to display YOLO detection results
     cv::VideoCapture cap; // OpenCV VideoCapture object for camera access
 
-    // Helper function declarations
-    QImage cvMatToQImage(const cv::Mat &mat); // Helper to convert OpenCV Mat to QImage
-    QImage getCurrentCameraFrame(); // Helper to get current camera frame
-    QPixmap m_capturedImage; //stores the last captured image
-    void startRecording();
-    void stopRecording();
-
-    //Countdown Timers;
-    QTimer *countdownTimer; //Timer for the 5-second countdown
-    QLabel *countdownLabel; //Label to display the countdown
-    int countdownValue; //current value of the countdown
-
-    CaptureMode m_currentCaptureMode; //stores current mode of operation for Capture page
-
     bool m_cameraFullyReady;
-
-    //Video Recording
-    QList<QPixmap> m_recordedFrames; //Stores frames as QPixmaps
-    bool m_isRecording; //indicates if recording is active
-    QTimer *recordTimer; //Timer for recording duration
-    VideoTemplate m_currentVideoTemplate;
-    int m_recordedSeconds;
 
     //Yolov5
     PersonDetector* personDetector;

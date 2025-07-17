@@ -4,13 +4,13 @@
 #include <QWidget>
 #include <QPixmap>
 #include <QList>
-#include <QTimer> // Forward declaration for QTimer
-#include <QLabel> // Forward declaration for QLabel
+#include <QTimer>
+#include <QLabel>
+#include <QStackedLayout> // For the stacked layout to layer widgets
+#include <QGridLayout>   // For the main layout of the Final widget
 
-// Forward declare OpenCV classes to avoid including heavy headers in .h if possible
-// This is good practice for minimizing compile times, but for cv::Mat and cv::VideoWriter
-// it's often simpler to just include <opencv2/opencv.hpp> in the .cpp file where they are used.
-// For now, we'll keep it simple and include in the .cpp.
+// Forward declare OpenCV classes (good practice if only used in .cpp)
+// You typically include <opencv2/opencv.hpp> in the .cpp file where these are used.
 
 QT_BEGIN_NAMESPACE
 namespace Ui { class Final; }
@@ -36,16 +36,23 @@ private slots:
     void on_save_clicked();
     void playNextFrame(); // Slot to advance video playback
 
+protected:
+    void resizeEvent(QResizeEvent *event) override; // Override for handling widget resizing
+
 private:
     Ui::Final *ui;
-    QLabel *imageDisplayLabel; // Used for both image and video display
 
     QTimer *videoPlaybackTimer;
     QList<QPixmap> m_videoFrames; // Stores frames for video playback/saving
     int m_currentFrameIndex;
 
-    // New private helper function for saving video
-    void saveVideoToFile();
+    QStackedLayout* m_stackedLayout = nullptr; // Member for the stacked layout
+
+    QPixmap m_lastLoadedImage; // To store the original image for resizing
+
+    void saveVideoToFile(); // Helper function for saving video
+
+    void refreshDisplay(); // Helper function to scale and display content
 };
 
 #endif // FINAL_H

@@ -25,6 +25,7 @@ public:
 
     // Load the YOLOv5n model
     bool loadModel(const QString& modelPath);
+    bool isModelLoaded() const { return modelLoaded; }
 
     // Detect people in image (returns only person detections)
     std::vector<PersonDetection> detectPeople(const QImage& image, float confThreshold = 0.5f);

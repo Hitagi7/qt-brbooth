@@ -1,9 +1,9 @@
 #include "capture.h"
 #include "ui_capture.h"
-#include "videotemplate.h"
-#include "iconhover.h"
-#include <QVBoxLayout>
-#include <QLabel>
+#include "foreground.h"
+#include "camera.h"
+#include "persondetector.h"
+#include <QThread>
 #include <QDebug>
 #include <QImage>
 #include <QPixmap>
@@ -11,17 +11,16 @@
 #include <QPropertyAnimation>
 #include <QFont>
 #include <QResizeEvent>
-#include <QThread> // Still needed for QThread::msleep, even if minimal
 #include <QElapsedTimer>
-#include "persondetector.h"
-
+#include <QVBoxLayout>
+#include <QGridLayout>
+#include <QMessageBox>
+#include <QStackedLayout>
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
 
-#include <opencv2/opencv.hpp>
-
-Capture::Capture(QWidget *parent)
+Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, QThread *existingCameraThread)
     : QWidget(parent)
     , ui(new Ui::Capture)
     , cameraTimer(nullptr)
@@ -30,20 +29,97 @@ Capture::Capture(QWidget *parent)
     , countdownTimer(nullptr)
     , countdownLabel(nullptr)
     , countdownValue(0)
-    , m_currentCaptureMode (ImageCaptureMode)
+    , m_currentCaptureMode(ImageCaptureMode)
     , m_isRecording(false)
     , recordTimer(nullptr)
-    , m_currentVideoTemplate("Default", 5)
+    , recordingFrameTimer(nullptr)
+    , m_targetRecordingFPS(60)
+    , m_currentVideoTemplate("Default", 5) // Assuming a constructor for VideoTemplate
     , m_recordedSeconds(0)
+    , stackedLayout(nullptr)
+    , foreground(fg)
+    , cameraThread(existingCameraThread)
+    , cameraWorker(existingCameraWorker)
+    , overlayImageLabel(nullptr)
+    , loadingCameraLabel(nullptr)
 {
     ui->setupUi(this);
 
+    setContentsMargins(0, 0, 0, 0);
+
+    overlayImageLabel = new QLabel(ui->overlayWidget);
+    QString selectedOverlay;
+    if (foreground) {
+        selectedOverlay = foreground->getSelectedForeground();
+    } else {
+        qWarning() << "Error: foreground is nullptr!";
+    }
+    qDebug() << "Selected overlay path:" << selectedOverlay;
+    overlayImageLabel->setAttribute(Qt::WA_TranslucentBackground);
+    overlayImageLabel->setStyleSheet("background: transparent;");
+    overlayImageLabel->setScaledContents(true);
+    overlayImageLabel->resize(this->size());
+    overlayImageLabel->hide();
+
+    loadingCameraLabel = new QLabel("Loading Camera...", this); // Set text here
+    // --- FIX for "oading Camera." - Increased size and added padding for robustness ---
+    loadingCameraLabel->setAlignment(Qt::AlignCenter);
+    QFont loadingFont = loadingCameraLabel->font();
+    loadingFont.setPointSize(36);
+    loadingFont.setBold(true);
+    loadingCameraLabel->setFont(loadingFont);
+    // Increased horizontal padding in stylesheet to give text more room
+    loadingCameraLabel->setStyleSheet(
+        "color: white; "
+        "background-color: rgba(0, 0, 0, 150); "
+        "border-radius: 15px; "
+        "padding: 10px 20px; " // Added padding (top/bottom 10px, left/right 20px)
+        );
+    // Adjusted fixed size to accommodate padding and ensure text fits
+    // A rough estimate: "Loading Camera." at 36pt bold might need more than 350px width.
+    // Let's try to calculate a safer size or rely on sizeHint if not fixed.
+    // For fixed size, let's just make it generously larger.
+    loadingCameraLabel->setFixedSize(450, 120); // Increased size (from 350, 100)
+    // ---------------------------------------------------------------------------------
+    loadingCameraLabel->show();
+
+    ui->videoLabel->hide();
+
+    connect(foreground, &Foreground::foregroundChanged, this, &Capture::updateForegroundOverlay);
+    QPixmap overlayPixmap(selectedOverlay);
+    overlayImageLabel->setPixmap(overlayPixmap);
+
+    setupStackedLayoutHybrid();
+    updateOverlayStyles();
+
+    ui->videoLabel->resize(this->size());
+    ui->overlayWidget->resize(this->size());
+    if (overlayImageLabel) {
+        overlayImageLabel->resize(this->size());
+    }
+
+    ui->videoLabel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    ui->videoLabel->setMinimumSize(1, 1);
+    ui->videoLabel->setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+    ui->videoLabel->setStyleSheet("background-color: black;");
+    ui->videoLabel->setScaledContents(false);
+    ui->videoLabel->setAlignment(Qt::AlignCenter);
+
+    ui->overlayWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    ui->overlayWidget->setMinimumSize(1, 1);
+    ui->overlayWidget->setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+    ui->overlayWidget->setStyleSheet("background-color: transparent;");
+
+    ui->verticalSlider->setMinimum(0);
+    ui->verticalSlider->setMaximum(100);
+    int tickStep = 10;
+    ui->verticalSlider->setTickPosition(QSlider::TicksBothSides);
+    ui->verticalSlider->setTickInterval(tickStep);
+    ui->verticalSlider->setSingleStep(tickStep);
+    ui->verticalSlider->setValue(0);
+
     ui->back->setIcon(QIcon(":/icons/Icons/normal.svg"));
     ui->back->setIconSize(QSize(100, 100));
-    Iconhover *backButtonHover = new Iconhover(this);
-    ui->back->installEventFilter(backButtonHover);
-
-    // Disable capture button by default (will be enabled if camera opens)
     ui->capture->setEnabled(false);
 
     //Yolov5
@@ -100,93 +176,37 @@ Capture::Capture(QWidget *parent)
     connect(personDetector, &PersonDetector::peopleDetected,
             this, &Capture::onPeopleDetected);
 
-    // Timer for periodic detection (every 100ms)
-    detectionTimer = new QTimer(this);
-    connect(detectionTimer, &QTimer::timeout, this, &Capture::processCurrentFrame);
-    detectionTimer->start(100); // 10 FPS detection
 
     // Creation of YOLO label for person detection display
-    yoloLabel = new QLabel(ui->videoFeedWidget);
-    yoloLabel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    yoloLabel->setAlignment(Qt::AlignCenter);
-    yoloLabel->setScaledContents(true);
+    //yoloLabel = new QLabel(ui->videoLabel);
+    //yoloLabel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    //yoloLabel->setAlignment(Qt::AlignCenter);
+    //yoloLabel->setScaledContents(true);
 
-    // --- Corrected Camera Opening Logic ---
-    bool cameraOpenedSuccessfully = false;
-    if (!cap.open(1)) {
-        qWarning() << "Error: Could not open camera with index 1. Trying index 0...";
-        if (cap.open(0)) { // Only try index 0 if index 1 failed
-            cameraOpenedSuccessfully = true;
-        } else {
-            qWarning() << "Error: Could not open camera with index 0 either. Please check camera connection and drivers.";
-        }
-    } else {
-        cameraOpenedSuccessfully = true; // Camera 1 opened successfully
-    }
-
-    if (!cameraOpenedSuccessfully) {
-        // Handle no camera found scenario
-        qWarning() << "No camera found or could not be opened. Disabling capture.";
-
-        // Display error message in the video feed area
-        ui->videoFeedWidget->setStyleSheet("background-color: #333; color: white; border-radius: 10px;"); // Darker grey
-        QLabel *errorLabel = new QLabel("Camera not available.\nCheck connection and drivers.", ui->videoFeedWidget);
-        errorLabel->setAlignment(Qt::AlignCenter);
-        QFont errorFont = errorLabel->font();
-        errorFont.setPointSize(18);
-        errorFont.setBold(true);
-        errorLabel->setFont(errorFont);
-        errorLabel->setStyleSheet("color: #FF5555;"); // Red text for error
-
-        QVBoxLayout *errorLayout = new QVBoxLayout(ui->videoFeedWidget);
-        errorLayout->addWidget(errorLabel);
-        errorLayout->setContentsMargins(20, 20, 20, 20); // Add some padding
-
-        return; // Exit constructor if no camera is available
-    }
-
-    // --- If camera opened successfully, proceed with setup ---
-
-    // Attempt to set camera resolution and FPS
-    qDebug() << "Attempting to set camera resolution to 1280x720.";
-    cap.set(cv::CAP_PROP_FRAME_WIDTH, 1280);
-    cap.set(cv::CAP_PROP_FRAME_HEIGHT, 720);
-    qDebug() << "Attempting to set camera FPS to 60.";
-    cap.set(cv::CAP_PROP_FPS, 60.0);
-
-    // --- DIAGNOSTIC: CHECK ACTUAL CAMERA SETTINGS ---
-    double actual_fps = cap.get(cv::CAP_PROP_FPS);
-    double actual_width = cap.get(cv::CAP_PROP_FRAME_WIDTH);
-    double actual_height = cap.get(cv::CAP_PROP_FRAME_HEIGHT);
-    qDebug() << "========================================";
-    qDebug() << "Camera settings REQUESTED: 1280x720 @ 60 FPS";
-    qDebug() << "Camera settings ACTUAL: " << actual_width << "x" << actual_height << " @ " << actual_fps << " FPS";
-    qDebug() << "========================================";
-    if (actual_fps < 59) {
-        qWarning() << "WARNING: Camera did not accept 60 FPS request. Actual FPS is" << actual_fps;
-    }
-
-    // Video feed label setup
-    videoLabel = new QLabel(ui->videoFeedWidget);
-    videoLabel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    videoLabel->setAlignment(Qt::AlignCenter);
-    videoLabel->setScaledContents(true);
 
     // Layout for video feed widget - using yoloLabel for detection display
-    QVBoxLayout *videoLayout = new QVBoxLayout(ui->videoFeedWidget);
-    videoLayout->addWidget(yoloLabel); // Use yoloLabel instead of videoLabel for detection overlay
-    videoLayout->setContentsMargins(0, 0, 0, 0);
+    //QVBoxLayout *videoLayout = new QVBoxLayout(ui->videoLabel);
+    //videoLayout->addWidget(yoloLabel); // Use yoloLabel instead of videoLabel for detection overlay
+    //videoLayout->setContentsMargins(0, 0, 0, 0);
 
-    // Camera timer for continuous feed updates
-    cameraTimer = new QTimer(this);
-    connect(cameraTimer, &QTimer::timeout, this, &Capture::updateCameraFeed);
-    cameraTimer->start(1000 / 60); // Target 60 FPS updates
 
-    // Enable capture button immediately after camera is opened and stream starts
-    ui->capture->setEnabled(true);
+    ui->capture->setEnabled(false);
+
+    if (cameraWorker) {
+        connect(cameraWorker, &Camera::frameReady, this, &Capture::updateCameraFeed);
+        connect(cameraWorker, &Camera::cameraOpened, this, &Capture::handleCameraOpened);
+        connect(cameraWorker, &Camera::error, this, &Capture::handleCameraError);
+    } else {
+        qCritical() << "Capture: ERROR: cameraWorker is NULL! Camera features will not function.";
+        loadingCameraLabel->hide();
+        ui->videoLabel->show();
+        ui->videoLabel->setStyleSheet("background-color: #333; color: white; border-radius: 10px;");
+        ui->videoLabel->setText("Camera worker not provided or is NULL.\nCannot initialize camera.");
+        ui->videoLabel->setAlignment(Qt::AlignCenter);
+    }
 
     // CountdownTimer Setup
-    countdownLabel = new QLabel(ui->videoFeedWidget);
+    countdownLabel = new QLabel(ui->overlayWidget);
     countdownLabel->setAlignment(Qt::AlignCenter);
     QFont font = countdownLabel->font();
     font.setPointSize(100);
@@ -199,159 +219,325 @@ Capture::Capture(QWidget *parent)
     countdownTimer = new QTimer(this);
     connect(countdownTimer, &QTimer::timeout, this, &Capture::updateCountdown);
 
-    //Record Timer Setup
     recordTimer = new QTimer(this);
     connect(recordTimer, &QTimer::timeout, this, &Capture::updateRecordTimer);
 
-    qDebug() << "OpenCV Camera started successfully!";
-    qDebug() << "OpenCV Camera display timer started for 60 FPS.";
+    recordingFrameTimer = new QTimer(this);
+    recordingFrameTimer->setTimerType(Qt::PreciseTimer);
+    connect(recordingFrameTimer, &QTimer::timeout, this, &Capture::captureRecordingFrame);
+
+    connect(ui->back, &QPushButton::clicked, this, &Capture::on_back_clicked);
+    connect(ui->capture, &QPushButton::clicked, this, &Capture::on_capture_clicked);
+    connect(ui->verticalSlider, &QSlider::valueChanged, this, &Capture::on_verticalSlider_valueChanged);
+
+
+    qDebug() << "Capture UI initialized. Loading Camera...";
+
 }
 
 Capture::~Capture()
 {
-    // Stop and delete the timers
-    if (cameraTimer){
-        cameraTimer->stop();
-        delete cameraTimer;
-        cameraTimer = nullptr;
-    }
-
-    if (countdownTimer){
-        countdownTimer->stop();
-        delete countdownTimer;
-        countdownTimer = nullptr;
-    }
-
-    if(recordTimer){
-        recordTimer->stop();
-        delete recordTimer;
-        recordTimer = nullptr;
-    }
-
-    if(detectionTimer){
-        detectionTimer->stop();
-        delete detectionTimer;
-        detectionTimer = nullptr;
-    }
-
-    // Clean up labels
-    if (yoloLabel) {
-        delete yoloLabel;
-        yoloLabel = nullptr;
-    }
-
-    // Release the camera resource
-    if (cap.isOpened()) {
-        cap.release();
-    }
-
-    delete ui; // Deletes the UI components, including videoFeedWidget and its children like videoLabel
+    if (countdownTimer){ countdownTimer->stop(); delete countdownTimer; countdownTimer = nullptr; }
+    if (recordTimer){ recordTimer->stop(); delete recordTimer; recordTimer = nullptr; }
+    if (recordingFrameTimer){ recordingFrameTimer->stop(); delete recordingFrameTimer; recordingFrameTimer = nullptr; }
+    if (overlayImageLabel){ delete overlayImageLabel; overlayImageLabel = nullptr; }
+    if (loadingCameraLabel){ delete loadingCameraLabel; loadingCameraLabel = nullptr; }
+    delete ui;
 }
 
-void Capture::resizeEvent(QResizeEvent *event){
-    //Ensures countdownLabel is centered when widget resizes
-    if(countdownLabel){
-        int x = (ui->videoFeedWidget->width() - countdownLabel->width())/2;
-        int y = (ui->videoFeedWidget->height() - countdownLabel->height())/2;
-        countdownLabel->move(x,y);
-    }
-    QWidget::resizeEvent(event);
-}
-
-void Capture::setCaptureMode(CaptureMode mode){
-    m_currentCaptureMode = mode;
-    qDebug() << "Capture mode set to: " << (mode == ImageCaptureMode ? "Image Capture Mode" : "Video Record Mode");
-}
-
-void Capture::setVideoTemplate(const VideoTemplate &templateData)
+void Capture::handleCameraOpened(bool success, double actual_width, double actual_height, double actual_fps)
 {
-    m_currentVideoTemplate = templateData;
+    Q_UNUSED(actual_width);
+    Q_UNUSED(actual_height);
+    Q_UNUSED(actual_fps);
+
+    qDebug() << "Capture: handleCameraOpened received. Success:" << success;
+
+    if (success) {
+        qDebug() << "Capture: Camera worker reported open success. Enabling capture button.";
+        // Ensure that the parent widget of loadingCameraLabel (centeringWidget) is hidden
+        if (loadingCameraLabel->parentWidget()) {
+            loadingCameraLabel->parentWidget()->hide();
+            qDebug() << "Capture: Hiding centeringWidget.";
+        } else {
+            loadingCameraLabel->hide(); // Fallback
+            qDebug() << "Capture: Hiding loadingCameraLabel (no parentWidget).";
+        }
+        ui->videoLabel->show();
+        ui->capture->setEnabled(true);
+        qDebug() << "Capture: videoLabel shown, capture button enabled.";
+    } else {
+        qWarning() << "Capture: Camera worker reported open failure.";
+        if (loadingCameraLabel->parentWidget()) {
+            loadingCameraLabel->parentWidget()->hide();
+        } else {
+            loadingCameraLabel->hide(); // Fallback
+        }
+        ui->videoLabel->show(); // Show videoLabel to display the error message
+        ui->videoLabel->setStyleSheet("background-color: #333; color: white; border-radius: 10px;");
+        ui->videoLabel->setText("Camera failed to open.\nCheck connection and drivers.");
+        ui->videoLabel->setAlignment(Qt::AlignCenter);
+        ui->capture->setEnabled(false);
+    }
 }
 
-void Capture::updateCameraFeed()
+void Capture::handleCameraError(const QString &msg)
 {
-    static QElapsedTimer frameTimer;
-    static qint64 frameCount = 0;
-    static qint64 totalTime = 0;
-
-    if (frameCount == 0) {
-        frameTimer.start();
+    QMessageBox::critical(this, "Camera Error", msg);
+    ui->capture->setEnabled(false);
+    qWarning() << "Capture: Camera error received:" << msg;
+    if (loadingCameraLabel->parentWidget()) {
+        loadingCameraLabel->parentWidget()->hide();
+    } else {
+        loadingCameraLabel->hide();
     }
+    ui->videoLabel->show();
+    ui->videoLabel->setStyleSheet("background-color: #333; color: white; border-radius: 10px;");
+    ui->videoLabel->setText(QString("Error: %1").arg(msg));
+    ui->videoLabel->setAlignment(Qt::AlignCenter);
+}
 
-    QElapsedTimer loopTimer;
-    loopTimer.start();
-
-    if (!yoloLabel || !cap.isOpened()) {
+void Capture::updateCameraFeed(const QImage &image)
+{
+    if (image.isNull()) {
         return;
     }
 
-    cv::Mat frame;
-    if (cap.read(frame)) {
-        if (frame.empty()) { return; }
-
-        cv::flip(frame, frame, 1); // keep as before
-
-        QImage image = cvMatToQImage(frame);
-        if (!image.isNull()) {
-            QPixmap pixmap = QPixmap::fromImage(image);
-            // Update yoloLabel instead of videoLabel for consistency
-            yoloLabel->setPixmap(pixmap.scaled(yoloLabel->size(), Qt::KeepAspectRatio, Qt::FastTransformation));
-        }
-    } else {
-        qWarning() << "Failed to read frame from camera! Stopping timer.";
-        cameraTimer->stop();
-        ui->capture->setEnabled(false); // Also disable capture button if stream fails
-        if (m_isRecording){
-            stopRecording();
-        }
+    if (loadingCameraLabel->parentWidget() && !loadingCameraLabel->parentWidget()->isHidden()) {
+        loadingCameraLabel->parentWidget()->hide();
+        ui->videoLabel->show();
+        qDebug() << "Capture: First frame arrived, hiding loading and showing videoLabel.";
+    } else if (!loadingCameraLabel->isHidden()) { // Fallback if no parent widget found
+        loadingCameraLabel->hide();
+        ui->videoLabel->show();
+        qDebug() << "Capture: First frame arrived (fallback), hiding loading and showing videoLabel.";
     }
 
-    qint64 loopTime = loopTimer.elapsed();
-    totalTime += loopTime;
-    frameCount++;
+    QPixmap pixmap = QPixmap::fromImage(image);
+    if (pixmap.isNull()) {
+        qWarning() << "Capture: QPixmap conversion from QImage failed.";
+        return;
+    }
 
-    if (frameCount % 60 == 0) {
-        qDebug() << "----------------------------------------";
-        qDebug() << "Avg loop time (last 60 frames):" << (double)totalTime / frameCount << "ms";
-        qDebug() << "Current FPS (measured over 60 frames):" << 1000.0 / ((double)frameTimer.elapsed() / frameCount) << "FPS";
-        qDebug() << "----------------------------------------";
-        frameCount = 0;
-        totalTime = 0;
-        frameTimer.start();
+    QSize labelSize = ui->videoLabel->size();
+    if (labelSize.isEmpty() || labelSize.width() <= 0 || labelSize.height() <= 0) {
+        qWarning() << "Capture: videoLabel size is invalid:" << labelSize << ". Cannot scale pixmap.";
+        return;
+    }
+
+    QPixmap scaledPixmap = pixmap.scaled(
+        labelSize,
+        Qt::KeepAspectRatioByExpanding,
+        Qt::FastTransformation
+        );
+
+    ui->videoLabel->setPixmap(scaledPixmap);
+    ui->videoLabel->setAlignment(Qt::AlignCenter);
+}
+
+void Capture::setupStackedLayoutHybrid()
+{
+    qDebug() << "Setting up hybrid stacked layout...";
+
+    ui->videoLabel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    ui->videoLabel->setMinimumSize(1, 1);
+
+    ui->overlayWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    ui->overlayWidget->setMinimumSize(1, 1);
+    ui->overlayWidget->setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+
+    if (!stackedLayout) {
+        stackedLayout = new QStackedLayout;
+        stackedLayout->setStackingMode(QStackedLayout::StackAll);
+        stackedLayout->setContentsMargins(0, 0, 0, 0);
+        stackedLayout->setSpacing(0);
+
+        stackedLayout->addWidget(ui->videoLabel);       // Layer 0: Camera feed (background)
+
+        // --- FIX for Centering "Loading Camera" ---
+        // Create a layout to center the fixed-size loadingCameraLabel
+        QVBoxLayout* centeringLayout = new QVBoxLayout();
+        centeringLayout->addStretch(); // Top stretch
+        QHBoxLayout* hCenteringLayout = new QHBoxLayout();
+        hCenteringLayout->addStretch(); // Left stretch
+        hCenteringLayout->addWidget(loadingCameraLabel); // Add the fixed-size label
+        hCenteringLayout->addStretch(); // Right stretch
+        centeringLayout->addLayout(hCenteringLayout); // Add horizontal layout to vertical
+        centeringLayout->addStretch(); // Bottom stretch
+
+        QWidget* centeringWidget = new QWidget(this); // Create a wrapper widget
+        centeringWidget->setLayout(centeringLayout);
+        centeringWidget->setContentsMargins(0,0,0,0); // Ensure no extra margins
+        centeringWidget->setAttribute(Qt::WA_TranslucentBackground); // Keep background transparent
+        // Initially show the centeringWidget, as loadingCameraLabel is shown by default
+        centeringWidget->show();
+
+
+        stackedLayout->addWidget(centeringWidget);      // Layer 1: Loading text (now centered)
+        // ------------------------------------------
+
+        stackedLayout->addWidget(ui->overlayWidget);    // Layer 2: UI elements (buttons, slider)
+        if (overlayImageLabel) {
+            stackedLayout->addWidget(overlayImageLabel); // Layer 3: Foreground image (top)
+        }
+
+        if (layout()) {
+            delete layout();
+        }
+
+        QGridLayout* mainLayout = new QGridLayout(this);
+        mainLayout->setContentsMargins(0, 0, 0, 0);
+        mainLayout->setSpacing(0);
+        mainLayout->addLayout(stackedLayout, 0, 0);
+        mainLayout->setRowStretch(0, 1);
+        mainLayout->setColumnStretch(0, 1);
+
+        setLayout(mainLayout);
+    }
+
+    if (overlayImageLabel) {
+        overlayImageLabel->raise();
+    }
+    ui->overlayWidget->raise();
+    if (ui->back) ui->back->raise();
+    if (ui->capture) ui->capture->raise();
+    if (ui->verticalSlider) ui->verticalSlider->raise();
+    if (countdownLabel) countdownLabel->raise();
+
+    // Now, instead of raising loadingCameraLabel, raise its parent centeringWidget
+    if (loadingCameraLabel->parentWidget()) {
+        loadingCameraLabel->parentWidget()->raise();
+    } else {
+        loadingCameraLabel->raise(); // Fallback, though should be within centeringWidget now
+    }
+
+    qDebug() << "Hybrid stacked layout setup complete.";
+}
+
+void Capture::updateOverlayStyles()
+{
+    qDebug() << "Updating overlay styles with clean professional appearance...";
+    ui->back->setStyleSheet(
+        "QPushButton {"
+        "   background: transparent;"
+        "   border: none;"
+        "   color: white;"
+        "}"
+        );
+
+    ui->capture->setStyleSheet(
+        "QPushButton {"
+        "   border-radius: 9px;"
+        "   border-bottom: 3px solid rgba(2, 2, 2, 200);"
+        "   background: rgba(11, 194, 0, 200);"
+        "   color: white;"
+        "   font-size: 16px;"
+        "   font-weight: bold;"
+        "}"
+        "QPushButton:hover {"
+        "   background: rgba(8, 154, 0, 230);"
+        "}"
+        "QPushButton:disabled {"
+        "   background: rgba(100, 100, 100, 150);"
+        "   color: rgba(200, 200, 200, 150);"
+        "   border-bottom: 3px solid rgba(50, 50, 50, 150);"
+        "}"
+        );
+
+    ui->verticalSlider->setStyleSheet(
+        "QSlider::groove:vertical {"
+        "   background: rgba(0, 0, 0, 80);"
+        "   width: 30px;"
+        "   border-radius: 15px;"
+        "   border: none;"
+        "}"
+        "QSlider::handle:vertical {"
+        "   background: rgba(13, 77, 38, 220);"
+        "   border: 1px solid rgba(30, 144, 255, 180);"
+        "   width: 60px;"
+        "   height: 13px;"
+        "   border-radius: 7px;"
+        "   margin: 0 -15px;"
+        "}"
+        "QSlider::sub-page:vertical {"
+        "   background: rgba(0, 0, 0, 60);"
+        "   border-top-left-radius: 15px;"
+        "   border-top-right-radius: 15px;"
+        "   border-bottom-left-radius: 0px;"
+        "   border-bottom-right-radius: 0px;"
+        "}"
+        "QSlider::add-page:vertical {"
+        "   background: rgba(11, 194, 0, 180);"
+        "   border-bottom-left-radius: 15px;"
+        "   border-bottom-right-radius: 15px;"
+        "   border-top-left-radius: 0px;"
+        "   border-top-right-radius: 0px;"
+        "}"
+        );
+
+    ui->overlayWidget->setStyleSheet("background: transparent;");
+    qDebug() << "Clean professional overlay styles applied";
+}
+
+void Capture::resizeEvent(QResizeEvent *event)
+{
+    QWidget::resizeEvent(event);
+    ui->videoLabel->resize(size());
+    ui->overlayWidget->resize(size());
+    if (overlayImageLabel) {
+        overlayImageLabel->resize(size());
+        overlayImageLabel->move(0, 0);
+    }
+    if (countdownLabel) {
+        int x = (width() - countdownLabel->width()) / 2;
+        int y = (height() - countdownLabel->height()) / 2;
+        countdownLabel->move(x, y);
     }
 }
 
+void Capture::setCaptureMode(CaptureMode mode) {
+    m_currentCaptureMode = mode;
+    qDebug() << "Capture mode set to:" << static_cast<int>(mode);
+}
+
+void Capture::setVideoTemplate(const VideoTemplate &templateData) {
+    m_currentVideoTemplate = templateData;
+}
+
+void Capture::captureRecordingFrame()
+{
+    if (!m_isRecording) return;
+
+    if (!ui->videoLabel->pixmap().isNull()) {
+        QPixmap frame = ui->videoLabel->pixmap();
+        m_recordedFrames.append(frame);
+        yoloLabel->setPixmap(frame.scaled(yoloLabel->size(), Qt::KeepAspectRatio, Qt::FastTransformation));
+    }
+}
 void Capture::on_back_clicked()
 {
-    // 1. Stop and hide the countdown timer/label if active
+    qDebug() << "DEBUG: Back button clicked in Capture! Emitting backtoPreviousPage.";
     if (countdownTimer->isActive()) {
         countdownTimer->stop();
         countdownLabel->hide();
-        // Reset countdown value for the next time
         countdownValue = 0;
-        qDebug() << "Countdown stopped by back button.";
     }
-
-    // 2. Stop any ongoing video recording
     if (m_isRecording) {
         stopRecording();
-        qDebug() << "Recording stopped by back button.";
     }
-    // else if the capture button is disabled (e.g., during photo countdown or just after capture start)
-    // ensure it's re-enabled and reset for a potential next photo capture
-    else if (!ui->capture->isEnabled()) {
-        ui->capture->setEnabled(true);
-        qDebug() << "Capture button reset by back button.";
-    }
-
-    // 3. Emit the signal to go back to the previous page
+    ui->capture->setEnabled(true);
     emit backtoPreviousPage();
 }
 
 void Capture::on_capture_clicked()
 {
-    ui->capture->setEnabled(false);
 
+    if (!cameraWorker || !cameraWorker->isCameraOpen()) {
+        QMessageBox::warning(this, "Camera Not Ready", "Camera is not open. Please ensure it's connected and drivers are installed.");
+        return;
+    }
+
+    ui->capture->setEnabled(false);
     countdownValue = 5;
     countdownLabel->setText(QString::number(countdownValue));
     countdownLabel->show();
@@ -386,18 +572,17 @@ void Capture::updateCountdown()
 void Capture::updateRecordTimer()
 {
     m_recordedSeconds++;
-    qDebug() << "Recording: " << m_recordedSeconds << " / " << m_currentVideoTemplate.durationSeconds << " seconds";
 
-    //Stop automatically after m_currentVideoTemplate.durationSeconds
     if (m_recordedSeconds >= m_currentVideoTemplate.durationSeconds) {
         stopRecording();
     }
+    qDebug() << "Recording: " + QString::number(m_recordedSeconds) + " / " + QString::number(m_currentVideoTemplate.durationSeconds) + "s";
 }
 
 void Capture::startRecording()
 {
-    if(!cap.isOpened()){
-        qWarning() << "Cannot start recording: Camera not open!";
+    if(!cameraWorker->isCameraOpen()){
+        qWarning() << "Cannot start recording: Camera not opened by worker.";
         ui->capture->setEnabled(true);
         return;
     }
@@ -405,131 +590,51 @@ void Capture::startRecording()
     m_recordedFrames.clear();
     m_isRecording = true;
     m_recordedSeconds = 0;
+
+    int frameIntervalMs = 1000 / m_targetRecordingFPS;
+
     recordTimer->start(1000);
+    recordingFrameTimer->start(frameIntervalMs);
+    qDebug() << "Recording started at target FPS: " + QString::number(m_targetRecordingFPS) + " frames/sec";
 }
 
 void Capture::stopRecording()
 {
-    if (!m_isRecording)
-    {
-        return;
-    }
+    if (!m_isRecording) return;
 
     recordTimer->stop();
+    recordingFrameTimer->stop();
     m_isRecording = false;
+    qDebug() << "Recording stopped. Captured " + QString::number(m_recordedFrames.size()) + " frames.";
 
-    qDebug() << "Recording stopped. Captured " << m_recordedFrames.size() << " frames.";
     if (!m_recordedFrames.isEmpty()) {
-        // MODIFIED: Emit the list of QPixmaps
         emit videoRecorded(m_recordedFrames);
-    } else {
-        qWarning() << "No frames recorded for video!";
     }
-
-    emit showFinalOutputPage(); // Transition to final page
+    emit showFinalOutputPage();
     ui->capture->setEnabled(true);
 }
 
 void Capture::performImageCapture()
 {
-    cv::Mat frameToCapture; // The actual frame we want to keep
-
-    // --- Actual capture of the final frame ---
-    if (cap.read(frameToCapture)){
-        if(frameToCapture.empty()){
-            qWarning() << "Captured an empty frame!";
-            return;
-        }
-
-        qDebug() << "Captured frame size: "
-                 << frameToCapture.cols << "x" << frameToCapture.rows;
-
-        cv::flip(frameToCapture, frameToCapture, 1);
-
-        QImage capturedImageQ = cvMatToQImage(frameToCapture);
-
-        if(!capturedImageQ.isNull()){
-            m_capturedImage = QPixmap::fromImage(capturedImageQ);
-            qDebug() << "Image captured successfully! Size: " << m_capturedImage.size();
-            emit imageCaptured(m_capturedImage);
-        }
-        else{
-            qWarning() << "Failed to convert captured cv::Mat to QImage!";
-        }
-    } else{
-        qWarning() << "Failed to read frame from camera for actual capture!";
+    if (!ui->videoLabel->pixmap().isNull()) {
+        m_capturedImage = ui->videoLabel->pixmap();
+        emit imageCaptured(m_capturedImage);
+        qDebug() << "Image captured successfully from videoLabel.";
+    } else {
+        qWarning() << "Failed to capture image: videoLabel pixmap is empty.";
+        QMessageBox::warning(this, "Capture Failed", "No camera feed available to capture an image.");
     }
     emit showFinalOutputPage();
 }
 
-QImage Capture::getCurrentCameraFrame()
+void Capture::on_verticalSlider_valueChanged(int value)
 {
-    if (!cap.isOpened()) {
-        return QImage();
-    }
-
-    cv::Mat frame;
-    if (cap.read(frame)) {
-        if (!frame.empty()) {
-            cv::flip(frame, frame, 1); // Mirror the frame like in updateCameraFeed
-            return cvMatToQImage(frame);
-        }
-    }
-    return QImage();
-}
-
-QImage Capture::cvMatToQImage(const cv::Mat &mat)
-{
-    switch (mat.type()) {
-    case CV_8UC4:
-    {
-        cv::Mat rgb;
-        cv::cvtColor(mat, rgb, cv::COLOR_BGRA2RGB);
-        return QImage(rgb.data, rgb.cols, rgb.rows, rgb.step, QImage::Format_RGB888);
-    }
-    case CV_8UC3:
-    {
-        QImage image(mat.data, mat.cols, mat.rows, mat.step, QImage::Format_RGB888);
-        return image.rgbSwapped();
-    }
-    case CV_8UC1:
-    {
-        static QVector<QRgb> sColorTable;
-        if (sColorTable.isEmpty())
-        {
-            for (int i = 0; i < 256; ++i)
-                sColorTable.push_back(qRgb(i, i, i));
-        }
-        QImage image(mat.data, mat.cols, mat.rows, mat.step, QImage::Format_Indexed8);
-        image.setColorTable(sColorTable);
-        return image;
-    }
-    default:
-        qWarning() << "cvMatToQImage - Mat type not handled: " << mat.type();
-        return QImage();
-    }
-}
-
-void Capture::processCurrentFrame()
-{
-    // Get current frame from camera
-    QImage currentFrame = getCurrentCameraFrame();
-
-    if (!currentFrame.isNull()) {
-        // Detect people
-        auto detections = personDetector->detectPeople(currentFrame, 0.5f);
-
-        // Draw detections on frame
-        QImage frameWithDetections = personDetector->drawDetections(currentFrame, detections);
-
-        // Display the result on the programmatically created yoloLabel
-        if (yoloLabel) {
-            QPixmap pixmap = QPixmap::fromImage(frameWithDetections);
-            yoloLabel->setPixmap(pixmap.scaled(yoloLabel->size(), Qt::KeepAspectRatio, Qt::FastTransformation));
-        }
-
-        // Log person count
-        qDebug() << "People detected:" << detections.size();
+    int tickInterval = ui->verticalSlider->tickInterval();
+    if (tickInterval == 0) return;
+    int snappedValue = qRound((double)value / tickInterval) * tickInterval;
+    snappedValue = qBound(ui->verticalSlider->minimum(), snappedValue, ui->verticalSlider->maximum());
+    if (value != snappedValue) {
+        ui->verticalSlider->setValue(snappedValue);
     }
 }
 
@@ -545,4 +650,48 @@ void Capture::onPeopleDetected(int count)
     }
 
     lastPersonCount = count;
+}
+void Capture::updateForegroundOverlay(const QString &path)
+{
+    qDebug() << "Foreground overlay updated to:" << path;
+
+    if (!overlayImageLabel) {
+        qWarning() << "overlayImageLabel is null! Cannot update overlay.";
+        return;
+    }
+
+    QPixmap overlayPixmap(path);
+    if (overlayPixmap.isNull()) {
+        qWarning() << "Failed to load overlay image from path:" << path;
+        overlayImageLabel->hide();
+        return;
+    }
+    overlayImageLabel->setPixmap(overlayPixmap);
+    overlayImageLabel->show();
+
+}
+
+void Capture::processCurrentFrame()
+{
+    if (!ui->videoLabel->pixmap() || ui->videoLabel->pixmap().isNull())
+        return;
+
+    QPixmap pixmap = ui->videoLabel->pixmap();
+    QImage qimg = pixmap.toImage();
+
+    // Debug: Check if model is loaded
+    if (personDetector->isModelLoaded()) {
+        qDebug() << "[YOLO] Model is loaded. Running detection...";
+    } else {
+        qDebug() << "[YOLO] Model is NOT loaded!";
+        return;
+    }
+
+    // Call detectPeople with QImage
+    float threshold = 0.5f; // or whatever threshold you use
+    auto detections = personDetector->detectPeople(qimg, threshold);
+    int count = static_cast<int>(detections.size());
+    qDebug() << "[YOLO] People detected:" << count;
+
+    emit onPeopleDetected(count); // If you want to use your slot
 }
