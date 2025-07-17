@@ -19,10 +19,10 @@ BRBooth::BRBooth(QWidget *parent)
 {
     qDebug() << "OpenCV Version: " << CV_VERSION;
     ui->setupUi(this);
-    qDebug() << "OpenCV Version: " << CV_VERSION;
+    setCentralWidget(ui->stackedWidget);
 
     this->setStyleSheet("QMainWindow#BRBooth {"
-                        "   background-image: url(:/images/pics/bg.jpg);"
+                        "   background-color: white);"
                         "   background-repeat: no-repeat;"
                         "   background-position: center;"
                         "}");

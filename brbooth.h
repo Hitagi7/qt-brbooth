@@ -65,6 +65,8 @@ private:
     // Camera threading components
     QThread *cameraThread;
     Camera *cameraWorker;
+
+    QStackedWidget *stackedWidget;
 };
 
 #endif // BRBOOTH_H
