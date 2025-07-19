@@ -1,4 +1,3 @@
-// testing
 #include "capture.h"
 #include "ui_capture.h"
 #include "foreground.h"
@@ -13,13 +12,6 @@
 #include <QVBoxLayout> // Still needed for countdownLabel positioning, but not for main layout
 #include <QGridLayout> // New: For main layout
 #include <opencv2/opencv.hpp>
-#include <QProcess>
-#include <QJsonDocument>
-#include <QJsonArray>
-#include <QJsonObject>
-#include <QDir>
-
-// Removed: #include <QPainter> // No longer needed for debugging borders
 
 Capture::Capture(QWidget *parent, Foreground *fg)
     : QWidget(parent)
@@ -40,7 +32,8 @@ Capture::Capture(QWidget *parent, Foreground *fg)
     , totalTime(0)           // Initialize totalTime
     , frameCount(0)          // Initialize frameCount
     , isProcessingFrame(false) // Initialize frame processing flag
-    ,foreground(fg)
+    , foreground(fg)
+    , yoloProcess(new QProcess(this)) // Initialize QProcess here!
 {
     ui->setupUi(this);
 
@@ -107,7 +100,6 @@ Capture::Capture(QWidget *parent, Foreground *fg)
     ui->overlayWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     ui->overlayWidget->setMinimumSize(1, 1);
     ui->overlayWidget->setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
-    // Corrected: ui->videoLabel->setStyleSheet was applied twice, this one is for overlayWidget
     ui->overlayWidget->setStyleSheet("background-color: transparent;"); // Ensure overlay is transparent
 
     // Setup slider
@@ -174,7 +166,6 @@ Capture::Capture(QWidget *parent, Foreground *fg)
     cameraTimer->start(timerInterval); // ✅ Use actual camera FPS
 
     // Initialize and start performance timers
-    // These should be started here to ensure valid elapsed times from the first frame.
     loopTimer.start();
     frameTimer.start();
 
@@ -207,6 +198,13 @@ Capture::Capture(QWidget *parent, Foreground *fg)
     connect(ui->back, &QPushButton::clicked, this, &Capture::on_back_clicked);
     connect(ui->capture, &QPushButton::clicked, this, &Capture::on_capture_clicked);
     connect(ui->verticalSlider, &QSlider::valueChanged, this, &Capture::on_verticalSlider_valueChanged);
+
+    // --- CONNECT QPROCESS SIGNALS HERE ---
+    connect(yoloProcess, &QProcess::readyReadStandardOutput, this, &Capture::handleYoloOutput);
+    connect(yoloProcess, &QProcess::readyReadStandardError, this, &Capture::handleYoloError);
+    connect(yoloProcess, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this, &Capture::handleYoloFinished);
+    connect(yoloProcess, &QProcess::errorOccurred, this, &Capture::handleYoloErrorOccurred);
+    // --- END CONNECT QPROCESS SIGNALS ---
 
     qDebug() << "OpenCV Camera started successfully with hybrid stacked layout and optimized FPS!";
 }
@@ -336,11 +334,31 @@ void Capture::updateOverlayStyles()
 
 Capture::~Capture()
 {
+    // === FIX FOR "Destroyed while process running" ASSERTION ===
+    // Disconnect signals from yoloProcess FIRST to prevent calls to a dying Capture object
+    disconnect(yoloProcess, &QProcess::readyReadStandardOutput, this, &Capture::handleYoloOutput);
+    disconnect(yoloProcess, &QProcess::readyReadStandardError, this, &Capture::handleYoloError);
+    disconnect(yoloProcess, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this, &Capture::handleYoloFinished);
+    disconnect(yoloProcess, &QProcess::errorOccurred, this, &Capture::handleYoloErrorOccurred);
+    // ==========================================================
+
     if (cameraTimer){ cameraTimer->stop(); delete cameraTimer; }
     if (countdownTimer){ countdownTimer->stop(); delete countdownTimer; }
     if (recordTimer){ recordTimer->stop(); delete recordTimer; }
     if (recordingFrameTimer){ recordingFrameTimer->stop(); delete recordingFrameTimer; }
     if (cap.isOpened()) { cap.release(); }
+
+    // --- Terminate YOLO process on exit ---
+    if (yoloProcess->state() == QProcess::Running) {
+        yoloProcess->terminate();
+        yoloProcess->waitForFinished(1000); // Give it a moment to finish
+        if (yoloProcess->state() == QProcess::Running) {
+            yoloProcess->kill();
+        }
+    }
+    // yoloProcess will be deleted by QObject parent mechanism because 'this' is its parent.
+    // --- END Terminate YOLO process ---
+
     delete ui;
 }
 
@@ -359,7 +377,6 @@ void Capture::resizeEvent(QResizeEvent *event)
             label->move(0, 0);
         }
     }
-
 
     if (countdownLabel) {
         int x = (width() - countdownLabel->width()) / 2;
@@ -380,130 +397,194 @@ void Capture::setVideoTemplate(const VideoTemplate &templateData) {
     m_currentVideoTemplate = templateData;
 }
 
-// Add this function to the Capture class
-bool Capture::detectPersonInImage(const QString& imagePath) {
-    QProcess process;
+void Capture::detectPersonInImage(const QString& imagePath) {
+    // This check is now mostly handled by the caller (updateCameraFeed),
+    // but remains as a safeguard.
+    if (yoloProcess->state() == QProcess::Running) {
+        qDebug() << "YOLO process already running (from detectPersonInImage), skipping start.";
+        return;
+    }
+
+    currentTempImagePath = imagePath; // Store the path for deletion later
+
     QString program = "python";
     QStringList arguments;
     arguments << "yolov5/detect.py"
               << "--weights" << "yolov5/yolov5n.pt"
               << "--source" << imagePath
-              << "--classes" << "0"
-              << "--nosave";
+              << "--classes" << "0" // Class ID for 'person'
+              << "--nosave"; // CRUCIAL: ensures output is to stdout, not saved to file
 
-    process.start(program, arguments);
-    process.waitForFinished(-1);
+    yoloProcess->setWorkingDirectory(QCoreApplication::applicationDirPath() + "/../../../"); // Corrected path
 
-    QByteArray output = process.readAllStandardOutput();
-    // Parse JSON output from detect.py
-    QJsonDocument doc = QJsonDocument::fromJson(output);
-    if (!doc.isArray()) {
-        qDebug() << "Detection output is not a JSON array.";
-        return false;
-    }
-    QJsonArray results = doc.array();
-    bool foundPerson = false;
-    for (const QJsonValue& imageResult : results) {
-        QJsonObject obj = imageResult.toObject();
-        QJsonArray detections = obj["detections"].toArray();
-        for (const QJsonValue& detVal : detections) {
-            QJsonObject det = detVal.toObject();
-            QJsonArray bbox = det["bbox"].toArray();
-            double conf = det["confidence"].toDouble();
-            qDebug() << "Person detected: bbox=" << bbox << ", confidence=" << conf;
-            foundPerson = true;
-        }
-    }
-    return foundPerson;
+    qDebug() << "Starting YOLOv5 process for frame detection...";
+    qDebug() << "Program:" << program;
+    qDebug() << "Arguments:" << arguments.join(" ");
+    qDebug() << "Working Directory:" << yoloProcess->workingDirectory();
+    qDebug() << "Source Image Path:" << imagePath;
+
+    yoloProcess->start(program, arguments);
 }
 
 void Capture::updateCameraFeed()
 {
-    // ✅ FIX 3: Frame skipping logic - Skip if still processing previous frame
-    if (isProcessingFrame) {
-        qDebug() << "Frame skipped - still processing previous frame";
-        return;
-    }
-
-    isProcessingFrame = true;
-
-    // Start loopTimer at the very beginning of the function to measure total time for one frame update cycle.
-    loopTimer.start();
+    // Start loopTimer at the very beginning of the function to measure total time for one update cycle.
+    loopTimer.start(); // Measure time for this entire call
 
     if (!ui->videoLabel || !cap.isOpened()) {
-        isProcessingFrame = false;
+        isProcessingFrame = false; // Ensure flag is reset if camera fails
         return;
     }
 
     cv::Mat frame;
-
     if (!cap.read(frame) || frame.empty()) {
-        // Restart loopTimer even if frame read fails, to prevent it from running indefinitely
-        // before the next successful read.
-        loopTimer.restart();
-        isProcessingFrame = false;
+        isProcessingFrame = false; // Ensure flag is reset if frame read fails
         return;
     }
 
     cv::flip(frame, frame, 1); // Mirror
 
-    // --- YOLOv5n Person Detection ---
-    QString tempImagePath = QDir::temp().filePath("yolo_temp.jpg");
-    cv::imwrite(tempImagePath.toStdString(), frame);
-    bool personDetected = detectPersonInImage(tempImagePath);
-    if (personDetected) {
-        qDebug() << "Person detected in frame!";
-        // You can trigger UI updates or other logic here
-    } else {
-        qDebug() << "No person detected in frame.";
-    }
-    // --- End YOLOv5n Person Detection ---
-
+    // Display the frame immediately
     QImage image = cvMatToQImage(frame);
-    if (image.isNull()) {
-        loopTimer.restart(); // Restart for the next attempt
-        isProcessingFrame = false;
-        return;
+    if (!image.isNull()) {
+        QPixmap pixmap = QPixmap::fromImage(image);
+        QSize labelSize = ui->videoLabel->size();
+        QPixmap scaledPixmap = pixmap.scaled(labelSize, Qt::IgnoreAspectRatio, Qt::FastTransformation);
+        ui->videoLabel->setPixmap(scaledPixmap);
+        ui->videoLabel->setAlignment(Qt::AlignTop | Qt::AlignLeft);
+        ui->videoLabel->update();
+    } else {
+        // If image conversion failed, no display, so skip YOLO for this frame.
+        isProcessingFrame = false; // Ensure it's false as we can't proceed with YOLO
+        qWarning() << "Failed to convert OpenCV frame to QImage.";
+        // Fall through to performance stats to account for this frame
     }
 
-    QPixmap pixmap = QPixmap::fromImage(image);
+    // Now, handle YOLO processing only if not already busy
+    if (!isProcessingFrame) { // Proceed with YOLO if free
+        // --- YOLOv5n Person Detection Trigger ---
+        QString tempImagePath = QDir::temp().filePath(
+            "yolo_temp_" + QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss_zzz") + ".jpg"
+            );
+        if (!cv::imwrite(tempImagePath.toStdString(), frame)) { // Save the original (flipped) frame
+            qWarning() << "Failed to save temporary image:" << tempImagePath;
+            // No YOLO for this frame, but still count the frame for display FPS
+            // isProcessingFrame remains false.
+            // Fall through to performance stats.
+        } else {
+            isProcessingFrame = true; // Set flag when starting YOLO
+            detectPersonInImage(tempImagePath); // This starts the async process
+        }
+    } else {
+        // qDebug() << "YOLO processing skipped for this frame due to busy state."; // Uncomment for verbose skipping
+        // Fall through to performance stats.
+    }
 
-    // Force fill QLabel with NO aspect ratio
-    QSize labelSize = ui->videoLabel->size();
-
-    // ✅ FIX 2: Use FastTransformation for real-time video (much faster than SmoothTransformation)
-    QPixmap scaledPixmap = pixmap.scaled(
-        labelSize,
-        Qt::IgnoreAspectRatio,
-        Qt::FastTransformation  // ✅ Much faster for real-time video
-        );
-
-    ui->videoLabel->setPixmap(scaledPixmap);
-    ui->videoLabel->setAlignment(Qt::AlignTop | Qt::AlignLeft);
-    ui->videoLabel->update();
-
-    // --- Performance stats ---
-    // loopTime is the duration of the current frame processing
-    qint64 currentLoopTime = loopTimer.elapsed();
+    // --- Performance stats (always run for every valid frame received) ---
+    qint64 currentLoopTime = loopTimer.elapsed(); // Time taken for this entire updateCameraFeed call
     totalTime += currentLoopTime;
     frameCount++;
 
     // Print stats every 60 frames
     if (frameCount % 60 == 0) {
-        double avgLoopTime = (double)totalTime / frameCount;
-        double measuredFPS = 1000.0 / ((double)frameTimer.elapsed() / frameCount);
-        qDebug() << "----------------------------------------";
-        qDebug() << "Avg loop time (last 60 frames):" << avgLoopTime << "ms";
-        qDebug() << "Current FPS (measured over 60 frames):" << measuredFPS << "FPS";
-        qDebug() << "Frame processing efficiency:" << (avgLoopTime < 16.67 ? "GOOD" : "NEEDS OPTIMIZATION");
-        qDebug() << "----------------------------------------";
-        // Reset timers for next batch
-        frameCount = 0;
-        totalTime = 0;
-        frameTimer.start(); // Restart frameTimer for the next 60-frame measurement
+        printPerformanceStats();
     }
+}
 
-    isProcessingFrame = false; // ✅ Mark frame processing as complete
+void Capture::printPerformanceStats() {
+    if (frameCount == 0) return; // Avoid division by zero
+
+    double avgLoopTime = (double)totalTime / frameCount; // Average time per updateCameraFeed call
+
+    // Calculate FPS based on the total time elapsed for the batch
+    double batchDurationSeconds = (double)frameTimer.elapsed() / 1000.0;
+    if (batchDurationSeconds == 0) return; // Avoid division by zero
+
+    double measuredFPS = (double)frameCount / batchDurationSeconds;
+
+
+    qDebug() << "----------------------------------------";
+    qDebug() << "Avg loop time per frame (measured over " << frameCount << " frames):" << avgLoopTime << "ms";
+    qDebug() << "Camera/Display FPS (measured over " << frameCount << " frames):" << measuredFPS << "FPS";
+    qDebug() << "Frame processing efficiency:" << (avgLoopTime < 16.67 ? "GOOD" : "NEEDS OPTIMIZATION");
+    qDebug() << "----------------------------------------";
+    // Reset timers for next batch
+    frameCount = 0;
+    totalTime = 0;
+    frameTimer.start(); // Restart frameTimer for the next measurement period
+}
+
+void Capture::handleYoloOutput() {
+    QByteArray output = yoloProcess->readAllStandardOutput();
+    // qDebug() << "YOLOv5 StdOut (Raw):" << output; // Uncomment for verbose output
+
+    QJsonDocument doc = QJsonDocument::fromJson(output);
+
+    if (!doc.isNull() && doc.isArray()) {
+        QJsonArray results = doc.array();
+        bool personDetected = false;
+        for (const QJsonValue& imageResult : results) {
+            QJsonObject obj = imageResult.toObject();
+            QJsonArray detections = obj["detections"].toArray();
+            if (!detections.isEmpty()) {
+                personDetected = true;
+                qDebug() << "Person(s) detected! Number of detections:" << detections.size();
+                for (const QJsonValue& detectionValue : detections) {
+                    QJsonObject detection = detectionValue.toObject();
+                    QJsonArray bbox = detection["bbox"].toArray();
+                    double confidence = detection["confidence"].toDouble();
+                    qDebug() << "  BBox:" << bbox.at(0).toInt() << bbox.at(1).toInt()
+                             << bbox.at(2).toInt() << bbox.at(3).toInt()
+                             << "Confidence:" << confidence;
+                    // TODO: Emit a signal here with the bbox data to update your UI (e.g., draw rects)
+                }
+            }
+        }
+        if (personDetected) {
+            emit personDetectedInFrame(); // Emit signal if any person was found
+        } else {
+            qDebug() << "No person detected in frame.";
+        }
+    } else {
+        qDebug() << "Detection output is not a valid JSON array or is null. Raw output was:" << output;
+    }
+}
+
+void Capture::handleYoloError() {
+    QByteArray errorOutput = yoloProcess->readAllStandardError();
+    if (!errorOutput.isEmpty()) {
+        qWarning() << "YOLOv5 Python Script Errors/Warnings (stderr):" << errorOutput;
+    }
+}
+
+void Capture::handleYoloFinished(int exitCode, QProcess::ExitStatus exitStatus) {
+    qDebug() << "YOLOv5 process finished with exit code:" << exitCode << "and status:" << exitStatus;
+    if (exitCode != 0) {
+        qWarning() << "YOLOv5 script exited with an error. Check stderr for details.";
+        qWarning() << "Final Stderr (if any):" << yoloProcess->readAllStandardError();
+    }
+    isProcessingFrame = false; // Always reset the flag when the process finishes
+
+    // Ensure any remaining output is read (edge case)
+    yoloProcess->readAllStandardOutput();
+    yoloProcess->readAllStandardError();
+
+    // Delete the temporary image file
+    if (!currentTempImagePath.isEmpty()) {
+        QFile::remove(currentTempImagePath);
+        currentTempImagePath.clear();
+    }
+}
+
+void Capture::handleYoloErrorOccurred(QProcess::ProcessError error) {
+    qWarning() << "QProcess experienced an internal error:" << error << yoloProcess->errorString();
+    isProcessingFrame = false; // Always reset the flag when an internal QProcess error occurs
+
+    // Delete the temporary image file
+    if (!currentTempImagePath.isEmpty()) {
+        QFile::remove(currentTempImagePath);
+        currentTempImagePath.clear();
+    }
 }
 
 void Capture::captureRecordingFrame()
@@ -629,7 +710,7 @@ QImage Capture::cvMatToQImage(const cv::Mat &mat)
     case CV_8UC4: {
         cv::Mat rgb;
         cv::cvtColor(mat, rgb, cv::COLOR_BGRA2RGB);
-        return QImage(rgb.data, rgb.cols, rgb.rows, rgb.step, QImage::Format_RGB888);
+        return QImage(rgb.data, rgb.cols, mat.rows, mat.step, QImage::Format_RGB888);
     }
     case CV_8UC3: {
         QImage image(mat.data, mat.cols, mat.rows, mat.step, QImage::Format_RGB888);

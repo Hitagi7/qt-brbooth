@@ -37,6 +37,10 @@ from pathlib import Path
 
 import torch
 
+# --- ADD THESE IMPORTS ---
+import json # For JSON serialization
+# --- END ADD THESE IMPORTS ---
+
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]  # YOLOv5 root directory
 if str(ROOT) not in sys.path:
@@ -131,7 +135,7 @@ def run(
         hide_labels (bool): If True, do not display labels on bounding boxes. Default is False.
         hide_conf (bool): If True, do not display confidence scores on bounding boxes. Default is False.
         half (bool): If True, use FP16 half-precision inference. Default is False.
-        dnn (bool): If True, use OpenCV DNN backend for ONNX inference. Default is False.
+        dnn (bool): If True, use OpenCV DNN for ONNX inference. Default is False.
         vid_stride (int): Stride for processing video frames, to skip frames between processing. Default is 1.
 
     Returns:
@@ -227,8 +231,12 @@ def run(
                 writer.writerow(data)
 
         # Process predictions
-        for i, det in enumerate(pred):  # per image
-            seen += 1
+        # --- START MODIFIED JSON EXPORT LOGIC ---
+        json_output_list = []
+        # Loop through each detection 'det' for the current image 'im0s' (from pred)
+        for i, det in enumerate(pred): # 'pred' contains predictions for the batch. 'det' is for current image
+            seen += 1 # Increment 'seen' for each image processed
+
             if webcam:  # batch_size >= 1
                 p, im0, frame = path[i], im0s[i].copy(), dataset.count
                 s += f"{i}: "
@@ -242,11 +250,12 @@ def run(
             gn = torch.tensor(im0.shape)[[1, 0, 1, 0]]  # normalization gain whwh
             imc = im0.copy() if save_crop else im0  # for save_crop
             annotator = Annotator(im0, line_width=line_thickness, example=str(names))
+
             if len(det):
                 # Rescale boxes from img_size to im0 size
                 det[:, :4] = scale_boxes(im.shape[2:], det[:, :4], im0.shape).round()
 
-                # Print results
+                # Print results (summary string)
                 for c in det[:, 5].unique():
                     n = (det[:, 5] == c).sum()  # detections per class
                     s += f"{n} {names[int(c)]}{'s' * (n > 1)}, "  # add to string
@@ -257,6 +266,15 @@ def run(
                     label = names[c] if hide_conf else f"{names[c]}"
                     confidence = float(conf)
                     confidence_str = f"{confidence:.2f}"
+
+                    # --- Collect data for JSON output ---
+                    if int(cls) == 0: # Only include 'person' detections (class 0 in COCO)
+                        x1, y1, x2, y2 = [int(val) for val in xyxy] # Convert tensor coords to int for JSON bbox
+                        json_output_list.append({
+                            "bbox": [x1, y1, x2, y2],
+                            "confidence": round(confidence, 2) # Get rounded confidence
+                        })
+                    # --- End Collect data for JSON output ---
 
                     if save_csv:
                         write_to_csv(p.name, label, confidence_str)
@@ -308,10 +326,21 @@ def run(
                         vid_writer[i] = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h))
                     vid_writer[i].write(im0)
 
-        # Print time (inference-only)
-        LOGGER.info(f"{s}{'' if len(det) else '(no detections), '}{dt[1].dt * 1e3:.1f}ms")
+        # Print JSON to stdout for the current image's detections
+        # This is placed *after* processing all detections for the current image (per loop iteration)
+        output_data = [{
+            "image": Path(path).name, # Get just the filename from the source path
+            "detections": json_output_list # Use the collected detections
+        }]
+        print(json.dumps(output_data, indent=2), file=sys.stdout)
+        sys.stdout.flush() # Crucial: ensures output is sent immediately to QProcess
 
-    # Print results
+        # Print time (inference-only) - This line is usually already there
+        LOGGER.info(f"{s}{'' if len(det) else '(no detections), '}{dt[1].dt * 1e3:.1f}ms")
+    # --- END MODIFIED JSON EXPORT LOGIC ---
+
+
+    # Print results (summary for the entire run, not per-image)
     t = tuple(x.t / seen * 1e3 for x in dt)  # speeds per image
     LOGGER.info(f"Speed: %.1fms pre-process, %.1fms inference, %.1fms NMS per image at shape {(1, 3, *imgsz)}" % t)
     if save_txt or save_img:

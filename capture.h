@@ -13,6 +13,17 @@
 #include "videotemplate.h"
 #include "foreground.h"
 
+// --- NEW INCLUDES FOR QPROCESS AND JSON ---
+#include <QProcess>
+#include <QJsonDocument>
+#include <QJsonArray>
+#include <QJsonObject>
+#include <QDir>
+#include <QDateTime>
+#include <QCoreApplication> // For applicationDirPath()
+#include <QElapsedTimer> // Include for QElapsedTimer
+// --- END NEW INCLUDES ---
+
 QT_BEGIN_NAMESPACE
 namespace Ui { class Capture; }
 QT_END_NAMESPACE
@@ -46,6 +57,14 @@ private slots:
     void on_verticalSlider_valueChanged(int value);
     void updateForegroundOverlay(const QString &path);
 
+    // --- NEW SLOTS FOR ASYNCHRONOUS QPROCESS ---
+    void handleYoloOutput();
+    void handleYoloError();
+    void handleYoloFinished(int exitCode, QProcess::ExitStatus exitStatus);
+    void handleYoloErrorOccurred(QProcess::ProcessError error);
+    void printPerformanceStats(); // <-- ADDED THIS DECLARATION
+    // --- END NEW SLOTS ---
+
 private:
     Ui::Capture *ui;
     cv::VideoCapture cap;
@@ -73,22 +92,32 @@ private:
     // Hybrid stacked layout components
     QStackedLayout *stackedLayout;
 
+    // Performance tracking members
     QLabel *videoLabelFPS;
     QElapsedTimer loopTimer;
     qint64 totalTime;
     int frameCount;
     QElapsedTimer frameTimer;
-    bool isProcessingFrame;
+
+    // --- MODIFIED/NEW MEMBERS FOR ASYNCHRONOUS YOLO ---
+    QProcess *yoloProcess; // QProcess member
+    bool isProcessingFrame; // Flag to manage concurrent detection calls
+    QString currentTempImagePath; // To keep track of the temp image being processed
+    // --- END MODIFIED/NEW MEMBERS ---
 
     // pass foreground
     Foreground *foreground;
     QLabel* overlayImageLabel = nullptr;
+    // --- MODIFIED: detectPersonInImage now returns void, processing done in slot ---
+    void detectPersonInImage(const QString& imagePath);
 
 signals:
     void backtoPreviousPage();
     void imageCaptured(const QPixmap &image);
     void videoRecorded(const QList<QPixmap> &frames);
     void showFinalOutputPage();
+    // --- NEW SIGNAL (optional) to notify UI of person detection ---
+    void personDetectedInFrame();
 };
 
 #endif // CAPTURE_H
