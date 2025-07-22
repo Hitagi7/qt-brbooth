@@ -16,6 +16,7 @@
 #include <QGridLayout>
 #include <QMessageBox>
 #include <QStackedLayout>
+#include <QPainter>
 
 Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, QThread *existingCameraThread)
     : QWidget(parent)
@@ -525,9 +526,33 @@ void Capture::stopRecording()
 void Capture::performImageCapture()
 {
     if (!ui->videoLabel->pixmap().isNull()) {
-        m_capturedImage = ui->videoLabel->pixmap();
+        QPixmap cameraPixmap = ui->videoLabel->pixmap();
+        QPixmap compositedPixmap = cameraPixmap.copy();
+
+        // Get the selected overlay/template path
+        QString overlayPath;
+        if (foreground) {
+            overlayPath = foreground->getSelectedForeground();
+        }
+        if (!overlayPath.isEmpty()) {
+            QPixmap overlayPixmap(overlayPath);
+            if (!overlayPixmap.isNull()) {
+                // Scale overlay to match camera image size
+                QPixmap scaledOverlay = overlayPixmap.scaled(
+                    compositedPixmap.size(),
+                    Qt::KeepAspectRatioByExpanding,
+                    Qt::SmoothTransformation
+                );
+                // Composite overlay onto camera image
+                QPainter painter(&compositedPixmap);
+                painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+                painter.drawPixmap(0, 0, scaledOverlay);
+                painter.end();
+            }
+        }
+        m_capturedImage = compositedPixmap;
         emit imageCaptured(m_capturedImage);
-        qDebug() << "Image captured successfully from videoLabel.";
+        qDebug() << "Image captured and composited with overlay.";
     } else {
         qWarning() << "Failed to capture image: videoLabel pixmap is empty.";
         QMessageBox::warning(this, "Capture Failed", "No camera feed available to capture an image.");
