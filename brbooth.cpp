@@ -24,7 +24,14 @@ BRBooth::BRBooth(QWidget *parent)
     this->setStyleSheet("QMainWindow#BRBooth {"
                         "   background-color: white);"
                         "   background-repeat: no-repeat;"
-                        "   background-position: center;"
+                        "   background-position: center;");
+
+    qDebug() << "OpenCV Version: " << CV_VERSION;
+    this->setStyleSheet("QMainWindow#BRBooth {"
+                        "    background-color: white;"
+                        "    background-repeat: no-repeat;"
+                        "    background-position: center;"
+
                         "}");
 
     // ================== CAMERA THREADING SETUP ==================

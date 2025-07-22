@@ -410,7 +410,6 @@ void Capture::setCaptureMode(CaptureMode mode) {
 
 void Capture::setVideoTemplate(const VideoTemplate &templateData) {
     m_currentVideoTemplate = templateData;
-
 }
 
 void Capture::captureRecordingFrame()
