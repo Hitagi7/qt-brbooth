@@ -5,10 +5,14 @@
 #include "final.h"
 #include "foreground.h"
 #include "ui_brbooth.h"
-#include "videotemplate.h"
-#include "camera.h"
+#include "videotemplate.h" // Needed for VideoTemplate object creation
+#include "camera.h"        // Needed for Camera worker class
 #include <QDebug>
-#include <opencv2/opencv.hpp> // Keep if CV_VERSION is directly used or other OpenCV types/functions are used
+#include <opencv2/opencv.hpp> // Using CV_VERSION for debug
+#include <QMovie>   // For GIF animation
+#include <QLabel>   // To display QMovie
+#include <QStyle>   // For QStyle::polish
+#include <QResizeEvent> // For resizeEvent override
 
 BRBooth::BRBooth(QWidget *parent)
     : QMainWindow(parent)
@@ -19,20 +23,72 @@ BRBooth::BRBooth(QWidget *parent)
 {
     qDebug() << "OpenCV Version: " << CV_VERSION;
     ui->setupUi(this);
-    setCentralWidget(ui->stackedWidget);
+    setCentralWidget(ui->stackedWidget); // Set the stacked widget as the central widget
 
-    this->setStyleSheet("QMainWindow#BRBooth {"
-                        "   background-color: white);"
-                        "   background-repeat: no-repeat;"
-                        "   background-position: center;");
-
-    qDebug() << "OpenCV Version: " << CV_VERSION;
+    // Set the main window background style
     this->setStyleSheet("QMainWindow#BRBooth {"
                         "    background-color: white;"
                         "    background-repeat: no-repeat;"
                         "    background-position: center;"
-
                         "}");
+
+    // ================== GIF Implementation for dynamicButton on Landing Page ==================
+    QPushButton* dynamicButton = ui->landingpage->findChild<QPushButton*>("dynamicButton");
+
+    if (!dynamicButton) {
+        qWarning() << "CRITICAL ERROR: dynamicButton not found in UI.";
+        // You might want to disable dynamic features or show an error message gracefully here
+    } else {
+        // Create a QLabel to display the GIF as the button's background
+        QLabel* gifLabel = new QLabel(dynamicButton);
+        // IMPORTANT: Make the GIF label slightly smaller to allow button's border to show
+        const int margin = 5;
+        gifLabel->setGeometry(margin, margin, dynamicButton->width() - 2 * margin, dynamicButton->height() - 2 * margin);
+        gifLabel->setScaledContents(true);
+        // Make the GIF label transparent to mouse events so the button can still be clicked
+        gifLabel->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+        gifLabel->setMouseTracking(false); // Not needed for the GIF label itself
+        gifLabel->lower(); // Put it behind the button's text
+
+        // Load and play the GIF from resources (assuming :/gif/test.gif is in your Qt resource file)
+        QMovie* gifMovie = new QMovie(":/gif/test.gif", QByteArray(), gifLabel);
+        if (!gifMovie->isValid()) {
+            qWarning() << "Failed to load GIF: :/gif/test.gif" << gifMovie->lastErrorString();
+            delete gifMovie; // Clean up if GIF is invalid
+            gifMovie = nullptr;
+        } else {
+            gifLabel->setMovie(gifMovie);
+            gifMovie->start();
+            qDebug() << "GIF loaded and started for dynamicButton.";
+        }
+
+        // Ensure the button itself can receive hover events
+        dynamicButton->setMouseTracking(true);
+        dynamicButton->setAttribute(Qt::WA_Hover, true);
+
+        // Style the button with text on top - using a more explicit approach
+        dynamicButton->setText("CHILL"); // Set the text for the button
+        dynamicButton->setStyleSheet(
+            "QPushButton#dynamicButton {"
+            "  font-family: 'Arial Black';"
+            "  font-size: 80px;"
+            "  font-weight: bold;"
+            "  color: white;"
+            "  background-color: transparent;" // Make button background transparent to show GIF
+            "  border: 5px solid transparent;"  // Always have a border, just transparent normally
+            "  border-radius: 8px;"
+            "}"
+            "QPushButton#dynamicButton:hover {"
+            "  border: 5px solid #FFC20F;" // Yellow border on hover
+            "  border-radius: 8px;"
+            "  background-color: rgba(255, 194, 15, 0.1);" // Slight background tint on hover
+            "}"
+            );
+
+        // Force the button to update its style immediately
+        dynamicButton->style()->polish(dynamicButton);
+    }
+    // ==========================================================================
 
     // ================== CAMERA THREADING SETUP ==================
     cameraWorker->moveToThread(cameraThread);
@@ -47,11 +103,11 @@ BRBooth::BRBooth(QWidget *parent)
 
     cameraThread->start();
     qDebug() << "BRBooth: Camera thread started.";
-    // ============================================================
+    // =============================================================================
 
     // Get pointers to UI-defined pages (added in Qt Designer's stacked widget)
     foregroundPage = ui->forepage;
-    dynamicPage = ui->dynamicpage;
+    dynamicPage = ui->dynamicpage; // Assuming ui->dynamicpage is already of type Dynamic* or compatible
 
     // Get indices of all pages
     landingPageIndex = ui->stackedWidget->indexOf(ui->landingpage);
@@ -72,7 +128,7 @@ BRBooth::BRBooth(QWidget *parent)
     ui->stackedWidget->addWidget(finalOutputPage);
     finalOutputPageIndex = ui->stackedWidget->indexOf(finalOutputPage);
 
-    // Set initial page - this uses the showLandingPage() slot to set the initial view
+    // Set initial page
     showLandingPage();
 
     // Connect signals for page navigation and actions
@@ -81,11 +137,20 @@ BRBooth::BRBooth(QWidget *parent)
 
     if (dynamicPage) {
         connect(dynamicPage, &Dynamic::backtoLandingPage, this, &BRBooth::showLandingPage);
-        connect(dynamicPage, &Dynamic::videoSelectedTwice, this, [this]() {
+        // CRITICAL CHANGE: Connect to the new signal 'videoSelectedAndConfirmed' from Dynamic
+        connect(dynamicPage, &Dynamic::videoSelectedAndConfirmed, this, [this]() {
             capturePage->setCaptureMode(Capture::VideoRecordMode);
+            // You might want to pass the actual selected video template information from Dynamic here
+            // For now, using a default placeholder if Dynamic doesn't pass specific template info back.
             VideoTemplate defaultVideoTemplate("Default Dynamic Template", 10);
             capturePage->setVideoTemplate(defaultVideoTemplate);
             showCapturePage(); // This call will now correctly store the dynamic page index as lastVisited
+        });
+        // Call this slot when the dynamic page is shown to ensure GIFs start
+        connect(ui->stackedWidget, &QStackedWidget::currentChanged, this, [this](int index){
+            if (index == dynamicPageIndex) {
+                dynamicPage->onDynamicPageShown();
+            }
         });
     }
 
@@ -100,8 +165,6 @@ BRBooth::BRBooth(QWidget *parent)
     if (capturePage) {
         // Handle the 'back' action from the Capture page
         connect(capturePage, &Capture::backtoPreviousPage, this, [this]() {
-
-            // This is the core logic for the 'back' button from Capture
             // lastVisitedPageIndex should correctly hold the index of the page *before* Capture.
             if (lastVisitedPageIndex == backgroundPageIndex) {
                 showBackgroundPage();
@@ -131,7 +194,7 @@ BRBooth::BRBooth(QWidget *parent)
             backgroundPage->resetPage();
         }
         if (index == dynamicPageIndex) {
-            dynamicPage->resetPage();
+            dynamicPage->resetPage(); // Dynamic page reset will also hide overlay and restart GIFs
         }
     });
 }
@@ -145,6 +208,22 @@ BRBooth::~BRBooth()
     delete cameraWorker;
     delete cameraThread;
     delete ui;
+}
+
+// Override resizeEvent to handle GIF label resizing for the landing page button
+void BRBooth::resizeEvent(QResizeEvent *event)
+{
+    QMainWindow::resizeEvent(event); // Call base class implementation
+
+    // Update the GIF label size when the window resizes
+    QPushButton* dynamicButton = ui->landingpage->findChild<QPushButton*>("dynamicButton");
+    if (dynamicButton) {
+        QLabel* gifLabel = dynamicButton->findChild<QLabel*>(); // Find the QLabel child
+        if (gifLabel) {
+            const int margin = 5;
+            gifLabel->setGeometry(margin, margin, dynamicButton->width() - 2 * margin, dynamicButton->height() - 2 * margin);
+        }
+    }
 }
 
 // =====================================================================
@@ -174,8 +253,7 @@ void BRBooth::showBackgroundPage()
 
 void BRBooth::showCapturePage()
 {
-    // *** CRITICAL FIX HERE ***
-    // When we call showCapturePage(), the *current* page is the one we want to remember
+    // CRITICAL FIX: When we call showCapturePage(), the *current* page is the one we want to remember
     // as the "last visited" (the page to go back to).
     lastVisitedPageIndex = ui->stackedWidget->currentIndex();
     qDebug() << "DEBUG: showCapturePage() called. Setting index to:" << capturePageIndex << ". SAVED lastVisitedPageIndex (page we just came from):" << lastVisitedPageIndex;
@@ -184,13 +262,11 @@ void BRBooth::showCapturePage()
 
 void BRBooth::showFinalOutputPage()
 {
-    // *** CRITICAL FIX HERE ***
-    // Similar to Capture, when moving to Final, save the current page (Capture)
+    // CRITICAL FIX: Similar to Capture, when moving to Final, save the current page (Capture)
     // as the last visited one to return to.
     lastVisitedPageIndex = ui->stackedWidget->currentIndex();
     ui->stackedWidget->setCurrentIndex(finalOutputPageIndex);
 }
-
 
 
 void BRBooth::on_staticButton_clicked()

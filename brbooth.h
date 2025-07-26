@@ -2,30 +2,34 @@
 #define BRBOOTH_H
 
 #include <QMainWindow>
-#include <QStackedWidget> // Make sure this is included for QStackedWidget members
-#include <QThread> // For cameraThread
+#include <QStackedWidget> // Make sure this is included for QStackedWidget
+#include <QThread> // For camera threading
 
-// Forward declarations to avoid circular dependencies and unnecessary includes
+// Forward declarations to avoid circular includes and speed up compilation
+class Foreground;
 class Background;
 class Capture;
 class Dynamic;
 class Final;
-class Foreground;
-class Camera; // Forward declare Camera worker
+class Camera; // Forward declare Camera worker class
 
-namespace Ui {
-class BRBooth;
-}
+QT_BEGIN_NAMESPACE
+namespace Ui { class BRBooth; }
+QT_END_NAMESPACE
 
 class BRBooth : public QMainWindow
 {
     Q_OBJECT
 
 public:
-    explicit BRBooth(QWidget *parent = nullptr);
+    BRBooth(QWidget *parent = nullptr);
     ~BRBooth();
 
-public slots:
+protected:
+    void resizeEvent(QResizeEvent *event) override;
+
+private slots:
+    // Slots for page transitions
     void showLandingPage();
     void showForegroundPage();
     void showDynamicPage();
@@ -33,25 +37,30 @@ public slots:
     void showCapturePage();
     void showFinalOutputPage();
 
-private slots:
+    // Slots for button clicks on the landing page
     void on_staticButton_clicked();
     void on_dynamicButton_clicked();
 
 signals:
-    void startCameraWorker(); // Signal to start the camera worker's operations
-    void stopCameraWorker();  // Signal to stop the camera worker's operations
+    // Signals to control the camera worker
+    void startCameraWorker();
+    void stopCameraWorker();
 
 private:
     Ui::BRBooth *ui;
 
-    // Pointers to your page widgets
+    // Camera threading components
+    QThread *cameraThread;
+    Camera *cameraWorker;
+
+    // Pointers to the different pages
     Foreground *foregroundPage;
     Background *backgroundPage;
-    Capture *capturePage;
     Dynamic *dynamicPage;
+    Capture *capturePage;
     Final *finalOutputPage;
 
-    // Page indices (stored for easy reference)
+    // Indices for the stacked widget pages
     int landingPageIndex;
     int foregroundPageIndex;
     int dynamicPageIndex;
@@ -59,14 +68,7 @@ private:
     int capturePageIndex;
     int finalOutputPageIndex;
 
-    // This new variable will correctly track the page to return to
+    // To keep track of the page visited before going to Capture or Final, for "back" navigation
     int lastVisitedPageIndex;
-
-    // Camera threading components
-    QThread *cameraThread;
-    Camera *cameraWorker;
-
-    QStackedWidget *stackedWidget;
 };
-
 #endif // BRBOOTH_H

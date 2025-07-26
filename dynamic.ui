@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <ui version="4.0">
  <class>Dynamic</class>
- <widget class="QWidget" name="Dynamic">
+ <widget class="QWidget" name="dynamic"> <!-- CORRECTED: Changed name="Dynamic" to name="dynamic" -->
   <property name="enabled">
    <bool>true</bool>
   </property>
@@ -196,379 +196,374 @@
     </layout>
    </item>
    <item>
-    <spacer name="verticalSpacer_top">
-     <property name="orientation">
-      <enum>Qt::Orientation::Vertical</enum>
-     </property>
-     <property name="sizeType">
-      <enum>QSizePolicy::Policy::MinimumExpanding</enum>
-     </property>
-     <property name="sizeHint" stdset="0">
-      <size>
-       <width>20</width>
-       <height>40</height>
-      </size>
-     </property>
-    </spacer>
-   </item>
-   <item>
-    <layout class="QHBoxLayout" name="topVideosHorizontalLayout">
-     <item>
-      <spacer name="horizontalSpacer_left1">
-       <property name="orientation">
-        <enum>Qt::Orientation::Horizontal</enum>
-       </property>
-       <property name="sizeType">
-        <enum>QSizePolicy::Policy::Minimum</enum>
-       </property>
-       <property name="sizeHint" stdset="0">
-        <size>
-         <width>40</width>
-         <height>20</height>
-        </size>
-       </property>
-      </spacer>
-     </item>
-     <item>
-      <layout class="QGridLayout" name="gridLayout_top_videos">
-       <item row="0" column="0">
-        <widget class="QWidget" name="videoPlaceholder1" native="true">
-         <property name="minimumSize">
-          <size>
-           <width>425</width>
-           <height>305</height>
-          </size>
-         </property>
-         <property name="maximumSize">
-          <size>
-           <width>425</width>
-           <height>305</height>
-          </size>
-         </property>
-         <property name="cursor">
-          <cursorShape>PointingHandCursor</cursorShape>
-         </property>
-         <property name="autoFillBackground">
-          <bool>false</bool>
-         </property>
-         <property name="styleSheet">
-          <string notr="true">/* This QWidget acts as a container for QVideoWidget */
-/* The actual styling for the QVideoWidget inside will be applied dynamically in C++ or via a separate QSS rule targeting QVideoWidget. */
-/* However, you can set a default border for the placeholder if you wish */
-#videoPlaceholder1 {
-    border: 2px solid gray; /* Example default border */
+    <widget class="QWidget" name="videoGridContent">
+     <layout class="QVBoxLayout" name="videoGridContentLayout">
+      <property name="contentsMargins">
+       <set>QMargins(0, 0, 0, 0)</set>
+      </property>
+      <item>
+       <spacer name="verticalSpacer_top">
+        <property name="orientation">
+         <enum>Qt::Orientation::Vertical</enum>
+        </property>
+        <property name="sizeHint" stdset="0">
+         <size>
+          <width>20</width>
+          <height>40</height>
+         </size>
+        </property>
+       </spacer>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="topVideosHorizontalLayout">
+        <item>
+         <spacer name="horizontalSpacer_left1">
+          <property name="orientation">
+           <enum>Qt::Orientation::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+        <item>
+         <layout class="QGridLayout" name="gridLayout_top_videos">
+          <item row="0" column="0">
+           <widget class="QPushButton" name="videoButton1">
+            <property name="minimumSize">
+             <size>
+              <width>425</width>
+              <height>305</height>
+             </size>
+            </property>
+            <property name="maximumSize">
+             <size>
+              <width>425</width>
+              <height>305</height>
+             </size>
+            </property>
+            <property name="cursor">
+             <cursorShape>PointingHandCursor</cursorShape>
+            </property>
+            <property name="styleSheet">
+             <string notr="true">
+/* IMPORTANT: Background set to transparent here. GIF will be displayed by a child QLabel. */
+#videoButton1 {
+    background-color: transparent;
     border-radius: 8px;
-}
-/* This style below will be applied to the QVideoWidget itself, which is parented to videoPlaceholder1 */
-QVideoWidget#videoWidget1 { /* Use ID selector if you set objectName in C++ */
-    border: none;
-    background-color: black; /* Or transparent if you prefer */
+    border: 5px solid transparent; /* Default transparent border */
 }
 
-QVideoWidget#videoWidget1::hover {
+#videoButton1::hover {
+    border: 5px solid #FFC20F; /* Yellow border on hover */
+    border-radius: 8px;
+}
+
+#videoButton1[selected=&quot;true&quot;] {
+    border: 5px solid #0BC200; /* Green border when selected */
+    border-radius: 8px;
+}
+</string>
+            </property>
+            <property name="text">
+             <string/>
+            </property>
+           </widget>
+          </item>
+          <item row="0" column="1">
+           <spacer name="horizontalSpacer_between1_2">
+            <property name="orientation">
+             <enum>Qt::Orientation::Horizontal</enum>
+            </property>
+            <property name="sizeType">
+             <enum>QSizePolicy::Policy::Expanding</enum>
+            </property>
+            <property name="sizeHint" stdset="0">
+             <size>
+              <width>40</width>
+              <height>20</height>
+             </size>
+            </property>
+           </spacer>
+          </item>
+          <item row="0" column="2">
+           <widget class="QPushButton" name="videoButton2">
+            <property name="minimumSize">
+             <size>
+              <width>425</width>
+              <height>305</height>
+             </size>
+            </property>
+            <property name="maximumSize">
+             <size>
+              <width>425</width>
+              <height>305</height>
+             </size>
+            </property>
+            <property name="cursor">
+             <cursorShape>PointingHandCursor</cursorShape>
+            </property>
+            <property name="styleSheet">
+             <string notr="true">
+#videoButton2 {
+    background-color: transparent;
+    border-radius: 8px;
+    border: 5px solid transparent;
+}
+
+#videoButton2::hover {
     border: 5px solid #FFC20F;
     border-radius: 8px;
 }
 
-QVideoWidget#videoWidget1[selected=&quot;true&quot;] {
+#videoButton2[selected=&quot;true&quot;] {
     border: 5px solid #0BC200;
     border-radius: 8px;
-}</string>
-         </property>
-        </widget>
-       </item>
-       <item row="0" column="1">
-        <spacer name="horizontalSpacer_between1_2">
-         <property name="orientation">
-          <enum>Qt::Orientation::Horizontal</enum>
-         </property>
-         <property name="sizeType">
-          <enum>QSizePolicy::Policy::Minimum</enum>
-         </property>
-         <property name="sizeHint" stdset="0">
-          <size>
-           <width>80</width>
-           <height>20</height>
-          </size>
-         </property>
-        </spacer>
-       </item>
-       <item row="0" column="2">
-        <widget class="QWidget" name="videoPlaceholder2" native="true">
-         <property name="minimumSize">
-          <size>
-           <width>425</width>
-           <height>305</height>
-          </size>
-         </property>
-         <property name="maximumSize">
-          <size>
-           <width>425</width>
-           <height>305</height>
-          </size>
-         </property>
-         <property name="cursor">
-          <cursorShape>PointingHandCursor</cursorShape>
-         </property>
-         <property name="styleSheet">
-          <string notr="true">#videoPlaceholder2 {
-    border: 2px solid gray;
-    border-radius: 8px;
 }
-QVideoWidget#videoWidget2 {
-    border: none;
-    background-color: black;
+</string>
+            </property>
+            <property name="text">
+             <string/>
+            </property>
+           </widget>
+          </item>
+          <item row="0" column="3">
+           <spacer name="horizontalSpacer_between2_3">
+            <property name="orientation">
+             <enum>Qt::Orientation::Horizontal</enum>
+            </property>
+            <property name="sizeType">
+             <enum>QSizePolicy::Policy::Expanding</enum>
+            </property>
+            <property name="sizeHint" stdset="0">
+             <size>
+              <width>40</width>
+              <height>20</height>
+             </size>
+            </property>
+           </spacer>
+          </item>
+          <item row="0" column="4">
+           <widget class="QPushButton" name="videoButton3">
+            <property name="minimumSize">
+             <size>
+              <width>425</width>
+              <height>305</height>
+             </size>
+            </property>
+            <property name="maximumSize">
+             <size>
+              <width>425</width>
+              <height>305</height>
+             </size>
+            </property>
+            <property name="cursor">
+             <cursorShape>PointingHandCursor</cursorShape>
+            </property>
+            <property name="styleSheet">
+             <string notr="true">
+#videoButton3 {
+    background-color: transparent;
+    border-radius: 8px;
+    border: 5px solid transparent;
 }
 
-QVideoWidget#videoWidget2::hover {
+#videoButton3::hover {
     border: 5px solid #FFC20F;
     border-radius: 8px;
 }
 
-QVideoWidget#videoWidget2[selected=&quot;true&quot;] {
+#videoButton3[selected=&quot;true&quot;] {
     border: 5px solid #0BC200;
     border-radius: 8px;
-}</string>
-         </property>
-        </widget>
-       </item>
-       <item row="0" column="3">
-        <spacer name="horizontalSpacer_between2_3">
-         <property name="orientation">
-          <enum>Qt::Orientation::Horizontal</enum>
-         </property>
-         <property name="sizeType">
-          <enum>QSizePolicy::Policy::Minimum</enum>
-         </property>
-         <property name="sizeHint" stdset="0">
-          <size>
-           <width>80</width>
-           <height>20</height>
-          </size>
-         </property>
-        </spacer>
-       </item>
-       <item row="0" column="4">
-        <widget class="QWidget" name="videoPlaceholder3" native="true">
-         <property name="minimumSize">
-          <size>
-           <width>425</width>
-           <height>305</height>
-          </size>
-         </property>
-         <property name="maximumSize">
-          <size>
-           <width>425</width>
-           <height>305</height>
-          </size>
-         </property>
-         <property name="cursor">
-          <cursorShape>PointingHandCursor</cursorShape>
-         </property>
-         <property name="styleSheet">
-          <string notr="true">#videoPlaceholder3 {
-    border: 2px solid gray;
-    border-radius: 8px;
 }
-QVideoWidget#videoWidget3 {
-    border: none;
-    background-color: black;
+</string>
+            </property>
+            <property name="text">
+             <string/>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </item>
+        <item>
+         <spacer name="horizontalSpacer_right1">
+          <property name="orientation">
+           <enum>Qt::Orientation::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <spacer name="verticalSpacer_middle">
+        <property name="orientation">
+         <enum>Qt::Orientation::Vertical</enum>
+        </property>
+        <property name="sizeHint" stdset="0">
+         <size>
+          <width>20</width>
+          <height>40</height>
+         </size>
+        </property>
+       </spacer>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="bottomVideosHorizontalLayout">
+        <item>
+         <spacer name="horizontalSpacer_left2">
+          <property name="orientation">
+           <enum>Qt::Orientation::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+        <item>
+         <layout class="QGridLayout" name="gridLayout_bottom_videos">
+          <item row="0" column="0">
+           <widget class="QPushButton" name="videoButton4">
+            <property name="minimumSize">
+             <size>
+              <width>425</width>
+              <height>305</height>
+             </size>
+            </property>
+            <property name="maximumSize">
+             <size>
+              <width>425</width>
+              <height>305</height>
+             </size>
+            </property>
+            <property name="cursor">
+             <cursorShape>PointingHandCursor</cursorShape>
+            </property>
+            <property name="styleSheet">
+             <string notr="true">
+#videoButton4 {
+    background-color: transparent;
+    border-radius: 8px;
+    border: 5px solid transparent;
 }
 
-QVideoWidget#videoWidget3::hover {
+#videoButton4::hover {
     border: 5px solid #FFC20F;
     border-radius: 8px;
 }
 
-QVideoWidget#videoWidget3[selected=&quot;true&quot;] {
+#videoButton4[selected=&quot;true&quot;] {
     border: 5px solid #0BC200;
     border-radius: 8px;
-}</string>
-         </property>
-        </widget>
-       </item>
-      </layout>
-     </item>
-     <item>
-      <spacer name="horizontalSpacer_right1">
-       <property name="orientation">
-        <enum>Qt::Orientation::Horizontal</enum>
-       </property>
-       <property name="sizeType">
-        <enum>QSizePolicy::Policy::Minimum</enum>
-       </property>
-       <property name="sizeHint" stdset="0">
-        <size>
-         <width>40</width>
-         <height>20</height>
-        </size>
-       </property>
-      </spacer>
-     </item>
-    </layout>
-   </item>
-   <item>
-    <spacer name="verticalSpacer_middle">
-     <property name="orientation">
-      <enum>Qt::Orientation::Vertical</enum>
-     </property>
-     <property name="sizeHint" stdset="0">
-      <size>
-       <width>20</width>
-       <height>40</height>
-      </size>
-     </property>
-    </spacer>
-   </item>
-   <item>
-    <layout class="QHBoxLayout" name="bottomVideosHorizontalLayout">
-     <item>
-      <spacer name="horizontalSpacer_left2">
-       <property name="orientation">
-        <enum>Qt::Orientation::Horizontal</enum>
-       </property>
-       <property name="sizeType">
-        <enum>QSizePolicy::Policy::MinimumExpanding</enum>
-       </property>
-       <property name="sizeHint" stdset="0">
-        <size>
-         <width>40</width>
-         <height>20</height>
-        </size>
-       </property>
-      </spacer>
-     </item>
-     <item>
-      <layout class="QGridLayout" name="gridLayout_bottom_videos">
-       <item row="0" column="0">
-        <widget class="QWidget" name="videoPlaceholder4" native="true">
-         <property name="minimumSize">
-          <size>
-           <width>425</width>
-           <height>305</height>
-          </size>
-         </property>
-         <property name="maximumSize">
-          <size>
-           <width>425</width>
-           <height>305</height>
-          </size>
-         </property>
-         <property name="cursor">
-          <cursorShape>PointingHandCursor</cursorShape>
-         </property>
-         <property name="styleSheet">
-          <string notr="true">#videoPlaceholder4 {
-    border: 2px solid gray;
-    border-radius: 8px;
 }
-QVideoWidget#videoWidget4 {
-    border: none;
-    background-color: black;
+</string>
+            </property>
+            <property name="text">
+             <string/>
+            </property>
+           </widget>
+          </item>
+          <item row="0" column="1">
+           <spacer name="horizontalSpacer_between4_5">
+            <property name="orientation">
+             <enum>Qt::Orientation::Horizontal</enum>
+            </property>
+            <property name="sizeType">
+             <enum>QSizePolicy::Policy::Expanding</enum>
+            </property>
+            <property name="sizeHint" stdset="0">
+             <size>
+              <width>40</width>
+              <height>20</height>
+             </size>
+            </property>
+           </spacer>
+          </item>
+          <item row="0" column="2">
+           <widget class="QPushButton" name="videoButton5">
+            <property name="minimumSize">
+             <size>
+              <width>425</width>
+              <height>305</height>
+             </size>
+            </property>
+            <property name="maximumSize">
+             <size>
+              <width>425</width>
+              <height>305</height>
+             </size>
+            </property>
+            <property name="cursor">
+             <cursorShape>PointingHandCursor</cursorShape>
+            </property>
+            <property name="styleSheet">
+             <string notr="true">
+#videoButton5 {
+    background-color: transparent;
+    border-radius: 8px;
+    border: 5px solid transparent;
 }
 
-QVideoWidget#videoWidget4::hover {
+#videoButton5::hover {
     border: 5px solid #FFC20F;
     border-radius: 8px;
 }
 
-QVideoWidget#videoWidget4[selected=&quot;true&quot;] {
+#videoButton5[selected=&quot;true&quot;] {
     border: 5px solid #0BC200;
     border-radius: 8px;
-}</string>
-         </property>
-        </widget>
-       </item>
-       <item row="0" column="1">
-        <spacer name="horizontalSpacer_between4_5">
-         <property name="orientation">
-          <enum>Qt::Orientation::Horizontal</enum>
-         </property>
-         <property name="sizeType">
-          <enum>QSizePolicy::Policy::Minimum</enum>
-         </property>
-         <property name="sizeHint" stdset="0">
-          <size>
-           <width>180</width>
-           <height>20</height>
-          </size>
-         </property>
-        </spacer>
-       </item>
-       <item row="0" column="2">
-        <widget class="QWidget" name="videoPlaceholder5" native="true">
-         <property name="minimumSize">
-          <size>
-           <width>425</width>
-           <height>305</height>
-          </size>
-         </property>
-         <property name="maximumSize">
-          <size>
-           <width>425</width>
-           <height>305</height>
-          </size>
-         </property>
-         <property name="cursor">
-          <cursorShape>PointingHandCursor</cursorShape>
-         </property>
-         <property name="styleSheet">
-          <string notr="true">#videoPlaceholder5 {
-    border: 2px solid gray;
-    border-radius: 8px;
 }
-QVideoWidget#videoWidget5 {
-    border: none;
-    background-color: black;
-}
-
-QVideoWidget#videoWidget5::hover {
-    border: 5px solid #FFC20F;
-    border-radius: 8px;
-}
-
-QVideoWidget#videoWidget5[selected=&quot;true&quot;] {
-    border: 5px solid #0BC200;
-    border-radius: 8px;
-}</string>
-         </property>
-        </widget>
-       </item>
-      </layout>
-     </item>
-     <item>
-      <spacer name="horizontalSpacer_right2">
-       <property name="orientation">
-        <enum>Qt::Orientation::Horizontal</enum>
-       </property>
-       <property name="sizeType">
-        <enum>QSizePolicy::Policy::MinimumExpanding</enum>
-       </property>
-       <property name="sizeHint" stdset="0">
-        <size>
-         <width>40</width>
-         <height>20</height>
-        </size>
-       </property>
-      </spacer>
-     </item>
-    </layout>
-   </item>
-   <item>
-    <spacer name="verticalSpacer_bottom">
-     <property name="orientation">
-      <enum>Qt::Orientation::Vertical</enum>
-     </property>
-     <property name="sizeType">
-      <enum>QSizePolicy::Policy::Minimum</enum>
-     </property>
-     <property name="sizeHint" stdset="0">
-      <size>
-       <width>20</width>
-       <height>150</height>
-      </size>
-     </property>
-    </spacer>
+</string>
+            </property>
+            <property name="text">
+             <string/>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </item>
+        <item>
+         <spacer name="horizontalSpacer_right2">
+          <property name="orientation">
+           <enum>Qt::Orientation::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <spacer name="verticalSpacer_bottom">
+        <property name="orientation">
+         <enum>Qt::Orientation::Vertical</enum>
+        </property>
+        <property name="sizeHint" stdset="0">
+         <size>
+          <width>20</width>
+          <height>40</height>
+         </size>
+        </property>
+       </spacer>
+      </item>
+     </layout>
+    </widget>
    </item>
   </layout>
  </widget>

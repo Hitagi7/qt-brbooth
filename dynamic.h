@@ -1,62 +1,67 @@
 #ifndef DYNAMIC_H
 #define DYNAMIC_H
 
-#include <QEvent>
-#include <QMouseEvent> // Included for Icon Hover for Back Button
-#include <QPushButton> // Keep QPushButton for your 'back' button
-#include <QTimer>
 #include <QWidget>
-
-#include <QLabel> // New: Include QLabel for displaying thumbnails
-#include <QMap>   // To store multiple video
+// All these includes are fine for forward declarations or if directly used in header for members
+#include <QLabel>
 #include <QMediaPlayer>
 #include <QVideoWidget>
+#include <QMovie>
+#include <QPushButton> // Required for QPushButton* member
+#include <QTimer> // Required for QTimer* member
 
-QT_BEGIN_NAMESPACE
+// Forward declaration for Ui::Dynamic
 namespace Ui {
 class Dynamic;
 }
-QT_END_NAMESPACE
 
-// Forward declaration of Iconhover if it's used
-class Iconhover;
+class Iconhover; // Forward declaration if you use Iconhover in the .h (e.g., as a member)
+// If only used in .cpp, it's fine to just include there.
 
 class Dynamic : public QWidget
 {
     Q_OBJECT
 
 public:
-    explicit Dynamic(QWidget *parent = nullptr);
+    explicit Dynamic(QWidget* parent = nullptr);
     ~Dynamic();
 
-public slots:
     void resetPage();
+    void onDynamicPageShown(); // Slot to call when this page becomes visible
 
 signals:
     void backtoLandingPage();
-    void videoSelectedTwice(); // Changed signal name to reflect video selection
+    // Renamed from showCapturePage() to more clearly indicate a confirmed selection for capture
+    void videoSelectedAndConfirmed();
 
 protected:
+    // Event filter to handle clicks on the fullscreen video and background
     bool eventFilter(QObject *obj, QEvent *event) override;
+    // Overridden to update GIF label geometry on resize
+    void resizeEvent(QResizeEvent *event) override;
 
 private slots:
     void on_back_clicked();
     void resetDebounce();
-    void processVideoClick(QObject *videoWIdgetObj);
+    void onPlayerMediaStatusChanged(QMediaPlayer::MediaStatus status);
+    void processVideoClick(QObject *buttonObj); // Handles clicks on individual video buttons
 
 private:
     Ui::Dynamic *ui;
-    QObject *currentSelectedVideoWidget;
-    QTimer *debounceTimer;
+
+    QVideoWidget* fullscreenVideoWidget;
+    QMediaPlayer* fullscreenPlayer;
+
+    QTimer* debounceTimer;
     bool debounceActive;
+    QPushButton* currentSelectedVideoWidget; // Stores the button that was last clicked (for highlighting)
 
-    QMap<QString, QMediaPlayer *> videoPlayers;
-    QMap<QString, QVideoWidget *> videoWidgets;
-    QMap<QString, QLabel *> thumbnailLabels; // New: To store QLabel for thumbnails
-
-    void applyHighlightStyle(QObject *obj, bool highlight);
+    // Helper functions
+    void updateGifLabelsGeometry();
     void setupVideoPlayers();
-    void showThumbnail(QObject *videoWidgetObj, bool show); // New: Helper to show/hide thumbnail
+    void applyHighlightStyle(QObject *obj, bool highlight);
+    void showOverlayVideo(const QString& videoPath);
+    void hideOverlayVideo();
 };
 
 #endif // DYNAMIC_H

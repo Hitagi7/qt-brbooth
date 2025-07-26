@@ -51,4 +51,12 @@
         <file>templates/background/bg3.png</file>
         <file>templates/background/bg4.png</file>
     </qresource>
+    <qresource prefix="/gif">
+        <file>test.gif</file>
+        <file>test1.gif</file>
+        <file>test2.gif</file>
+        <file>test3.gif</file>
+        <file>test4.gif</file>
+        <file>test5.gif</file>
+    </qresource>
 </RCC>
