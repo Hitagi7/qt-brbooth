@@ -42,4 +42,36 @@
 ## Notes
 - Only the "person" class (class 0) is detected.
 - You can train your own model or use the pre-trained YOLOv5n weights.
-- For custom training, see the YOLOv5 documentation. 
+- For custom training, see the YOLOv5 documentation.
+
+## Bounding Box Features
+
+The application now includes real-time bounding box visualization for detected persons:
+
+### Features:
+- **Real-time Detection**: Bounding boxes are drawn around detected persons in real-time
+- **Confidence-based Colors**: 
+  - 🟢 Green: High confidence (>80%)
+  - 🟡 Yellow: Medium confidence (60-80%)
+  - 🔴 Red: Low confidence (<60%)
+- **Person Numbering**: Each detected person is numbered (Person 1, Person 2, etc.)
+- **Confidence Display**: Shows confidence percentage for each detection
+- **Box Dimensions**: Displays the width x height of each bounding box
+- **Toggle Control**: Checkbox to enable/disable bounding box display
+- **Auto-cleanup**: Old detections are automatically cleared after 0.5 seconds
+
+### Usage:
+1. Start the camera feed
+2. **Press 'B' key** or check "Show Bounding Boxes (B)" to enable visualization
+3. Stand in front of the camera to see bounding boxes appear
+4. **Press 'B' key** again or uncheck to hide bounding boxes
+
+### Keyboard Shortcuts:
+- **B** - Toggle bounding boxes on/off
+- Shows on-screen notification when toggled
+
+### Technical Details:
+- Uses Qt's QPainter for efficient drawing
+- Thread-safe detection storage with QMutex
+- Asynchronous YOLO processing to maintain UI responsiveness
+- Automatic scaling with camera resolution 

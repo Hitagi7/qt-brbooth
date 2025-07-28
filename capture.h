@@ -22,7 +22,18 @@
 #include <QDateTime>
 #include <QCoreApplication> // For applicationDirPath()
 #include <QElapsedTimer> // Include for QElapsedTimer
+#include <QMutex> // Include for thread-safe detection access
 // --- END NEW INCLUDES ---
+
+// --- NEW: Bounding Box Structure ---
+struct BoundingBox {
+    int x1, y1, x2, y2;  // Top-left and bottom-right coordinates
+    double confidence;
+    
+    BoundingBox(int x1, int y1, int x2, int y2, double conf) 
+        : x1(x1), y1(y1), x2(x2), y2(y2), confidence(conf) {}
+};
+// --- END NEW ---
 
 QT_BEGIN_NAMESPACE
 namespace Ui { class Capture; }
@@ -43,9 +54,18 @@ public:
 
     void setCaptureMode(CaptureMode mode);
     void setVideoTemplate(const VideoTemplate &templateData);
+    
+    // --- NEW: Bounding Box Control Methods ---
+    void setShowBoundingBoxes(bool show);
+    bool getShowBoundingBoxes() const;
+    int getDetectionCount() const;
+    double getAverageConfidence() const;
+    // --- END NEW ---
 
 protected:
     void resizeEvent(QResizeEvent *event) override;
+    void keyPressEvent(QKeyEvent *event) override;
+    void showEvent(QShowEvent *event) override;
 
 private slots:
     void updateCameraFeed();
@@ -64,7 +84,7 @@ private slots:
     void handleYoloErrorOccurred(QProcess::ProcessError error);
     void printPerformanceStats(); // <-- ADDED THIS DECLARATION
     // --- END NEW SLOTS ---
-
+    
 private:
     Ui::Capture *ui;
     cv::VideoCapture cap;
@@ -105,11 +125,23 @@ private:
     QString currentTempImagePath; // To keep track of the temp image being processed
     // --- END MODIFIED/NEW MEMBERS ---
 
+    // --- NEW: Bounding Box Members ---
+    QList<BoundingBox> m_currentDetections; // Store current frame detections
+    mutable QMutex m_detectionMutex; // Thread-safe access to detections
+    bool m_showBoundingBoxes; // Toggle for showing/hiding boxes
+    // --- END NEW ---
+
     // pass foreground
     Foreground *foreground;
     QLabel* overlayImageLabel = nullptr;
     // --- MODIFIED: detectPersonInImage now returns void, processing done in slot ---
     void detectPersonInImage(const QString& imagePath);
+
+    // --- NEW: Bounding Box Drawing Methods ---
+    void drawBoundingBoxes(QPixmap& pixmap, const QList<BoundingBox>& detections);
+    void updateDetectionResults(const QList<BoundingBox>& detections);
+    void showBoundingBoxNotification();
+    // --- END NEW ---
 
 signals:
     void backtoPreviousPage();

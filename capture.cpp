@@ -11,6 +11,8 @@
 #include <QElapsedTimer>
 #include <QVBoxLayout> // Still needed for countdownLabel positioning, but not for main layout
 #include <QGridLayout> // New: For main layout
+#include <QPainter> // For drawing bounding boxes
+#include <QKeyEvent> // For keyboard event handling
 #include <opencv2/opencv.hpp>
 
 Capture::Capture(QWidget *parent, Foreground *fg)
@@ -34,11 +36,16 @@ Capture::Capture(QWidget *parent, Foreground *fg)
     , isProcessingFrame(false) // Initialize frame processing flag
     , foreground(fg)
     , yoloProcess(new QProcess(this)) // Initialize QProcess here!
+    , m_showBoundingBoxes(true) // Initialize bounding box display to true
 {
     ui->setupUi(this);
 
     // Ensure no margins or spacing for the Capture widget itself
     setContentsMargins(0, 0, 0, 0);
+    
+    // Enable keyboard focus for this widget
+    setFocusPolicy(Qt::StrongFocus);
+    setFocus(); // Set initial focus
 
     // Setup the main grid layout for the Capture widget
     QGridLayout* mainLayout = new QGridLayout(this);
@@ -198,6 +205,8 @@ Capture::Capture(QWidget *parent, Foreground *fg)
     connect(ui->back, &QPushButton::clicked, this, &Capture::on_back_clicked);
     connect(ui->capture, &QPushButton::clicked, this, &Capture::on_capture_clicked);
     connect(ui->verticalSlider, &QSlider::valueChanged, this, &Capture::on_verticalSlider_valueChanged);
+    
+
 
     // --- CONNECT QPROCESS SIGNALS HERE ---
     connect(yoloProcess, &QProcess::readyReadStandardOutput, this, &Capture::handleYoloOutput);
@@ -397,6 +406,44 @@ void Capture::setVideoTemplate(const VideoTemplate &templateData) {
     m_currentVideoTemplate = templateData;
 }
 
+// --- NEW: Bounding Box Control Methods Implementation ---
+
+void Capture::setShowBoundingBoxes(bool show)
+{
+    m_showBoundingBoxes = show;
+    qDebug() << "Bounding boxes display" << (show ? "enabled" : "disabled");
+}
+
+bool Capture::getShowBoundingBoxes() const
+{
+    return m_showBoundingBoxes;
+}
+
+int Capture::getDetectionCount() const
+{
+    QMutexLocker locker(&m_detectionMutex);
+    int count = m_currentDetections.size();
+    locker.unlock();
+    return count;
+}
+
+double Capture::getAverageConfidence() const
+{
+    QMutexLocker locker(&m_detectionMutex);
+    QList<BoundingBox> detections = m_currentDetections; // Copy for thread safety
+    locker.unlock();
+    
+    if (detections.isEmpty()) {
+        return 0.0;
+    }
+    
+    double totalConfidence = 0.0;
+    for (const BoundingBox& box : detections) {
+        totalConfidence += box.confidence;
+    }
+    return totalConfidence / detections.size();
+}
+
 void Capture::detectPersonInImage(const QString& imagePath) {
     // This check is now mostly handled by the caller (updateCameraFeed),
     // but remains as a safeguard.
@@ -448,6 +495,18 @@ void Capture::updateCameraFeed()
     QImage image = cvMatToQImage(frame);
     if (!image.isNull()) {
         QPixmap pixmap = QPixmap::fromImage(image);
+        
+        // Draw bounding boxes if enabled and detections exist
+        if (m_showBoundingBoxes) {
+            QMutexLocker locker(&m_detectionMutex);
+            QList<BoundingBox> detections = m_currentDetections; // Copy for thread safety
+            locker.unlock();
+            
+            if (!detections.isEmpty()) {
+                drawBoundingBoxes(pixmap, detections);
+            }
+        }
+        
         QSize labelSize = ui->videoLabel->size();
         QPixmap scaledPixmap = pixmap.scaled(labelSize, Qt::IgnoreAspectRatio, Qt::FastTransformation);
         ui->videoLabel->setPixmap(scaledPixmap);
@@ -478,6 +537,24 @@ void Capture::updateCameraFeed()
     } else {
         // qDebug() << "YOLO processing skipped for this frame due to busy state."; // Uncomment for verbose skipping
         // Fall through to performance stats.
+    }
+    
+    // Clear old detections if YOLO is not processing (to avoid stale boxes)
+    static int frameCounter = 0;
+    {
+        QMutexLocker locker(&m_detectionMutex);
+        if (!isProcessingFrame && !m_currentDetections.isEmpty()) {
+            frameCounter++;
+            // Clear detections after 30 frames (about 0.5 seconds at 60 FPS) if no new detection
+            if (frameCounter > 30) {
+                m_currentDetections.clear();
+                frameCounter = 0;
+            }
+        } else if (isProcessingFrame) {
+            // Reset counter when YOLO is processing
+            frameCounter = 0;
+        }
+        locker.unlock();
     }
 
     // --- Performance stats (always run for every valid frame received) ---
@@ -523,23 +600,38 @@ void Capture::handleYoloOutput() {
     if (!doc.isNull() && doc.isArray()) {
         QJsonArray results = doc.array();
         bool personDetected = false;
+        QList<BoundingBox> detections;
+        
         for (const QJsonValue& imageResult : results) {
             QJsonObject obj = imageResult.toObject();
-            QJsonArray detections = obj["detections"].toArray();
-            if (!detections.isEmpty()) {
+            QJsonArray detectionArray = obj["detections"].toArray();
+            if (!detectionArray.isEmpty()) {
                 personDetected = true;
-                qDebug() << "Person(s) detected! Number of detections:" << detections.size();
-                for (const QJsonValue& detectionValue : detections) {
+                qDebug() << "Person(s) detected! Number of detections:" << detectionArray.size();
+                for (const QJsonValue& detectionValue : detectionArray) {
                     QJsonObject detection = detectionValue.toObject();
                     QJsonArray bbox = detection["bbox"].toArray();
                     double confidence = detection["confidence"].toDouble();
-                    qDebug() << "  BBox:" << bbox.at(0).toInt() << bbox.at(1).toInt()
-                             << bbox.at(2).toInt() << bbox.at(3).toInt()
-                             << "Confidence:" << confidence;
-                    // TODO: Emit a signal here with the bbox data to update your UI (e.g., draw rects)
+                    
+                    // Create bounding box object
+                    BoundingBox box(
+                        bbox.at(0).toInt(), // x1
+                        bbox.at(1).toInt(), // y1
+                        bbox.at(2).toInt(), // x2
+                        bbox.at(3).toInt(), // y2
+                        confidence
+                    );
+                    detections.append(box);
+                    
+                    qDebug() << "  BBox:" << box.x1 << box.y1 << box.x2 << box.y2
+                             << "Confidence:" << box.confidence;
                 }
             }
         }
+        
+        // Update detection results for drawing
+        updateDetectionResults(detections);
+        
         if (personDetected) {
             emit personDetectedInFrame(); // Emit signal if any person was found
         } else {
@@ -547,6 +639,8 @@ void Capture::handleYoloOutput() {
         }
     } else {
         qDebug() << "Detection output is not a valid JSON array or is null. Raw output was:" << output;
+        // Clear detections if no valid output
+        updateDetectionResults(QList<BoundingBox>());
     }
 }
 
@@ -562,6 +656,8 @@ void Capture::handleYoloFinished(int exitCode, QProcess::ExitStatus exitStatus) 
     if (exitCode != 0) {
         qWarning() << "YOLOv5 script exited with an error. Check stderr for details.";
         qWarning() << "Final Stderr (if any):" << yoloProcess->readAllStandardError();
+        // Clear detections on error
+        updateDetectionResults(QList<BoundingBox>());
     }
     isProcessingFrame = false; // Always reset the flag when the process finishes
 
@@ -579,6 +675,9 @@ void Capture::handleYoloFinished(int exitCode, QProcess::ExitStatus exitStatus) 
 void Capture::handleYoloErrorOccurred(QProcess::ProcessError error) {
     qWarning() << "QProcess experienced an internal error:" << error << yoloProcess->errorString();
     isProcessingFrame = false; // Always reset the flag when an internal QProcess error occurs
+
+    // Clear detections on error
+    updateDetectionResults(QList<BoundingBox>());
 
     // Delete the temporary image file
     if (!currentTempImagePath.isEmpty()) {
@@ -754,4 +853,173 @@ void Capture::updateForegroundOverlay(const QString &path)
     overlayImageLabel->setPixmap(overlayPixmap);
     overlayImageLabel->resize(this->size()); // Ensure it scales with window
     overlayImageLabel->show();
+}
+
+
+
+void Capture::keyPressEvent(QKeyEvent *event)
+{
+    switch (event->key()) {
+    case Qt::Key_B:
+        // Toggle bounding boxes
+        m_showBoundingBoxes = !m_showBoundingBoxes;
+        
+        qDebug() << "Bounding boxes toggled via keyboard to:" << m_showBoundingBoxes;
+        
+        // Show a brief on-screen notification
+        showBoundingBoxNotification();
+        break;
+        
+    default:
+        // Call parent class for other keys
+        QWidget::keyPressEvent(event);
+        break;
+    }
+}
+
+void Capture::showEvent(QShowEvent *event)
+{
+    QWidget::showEvent(event);
+    // Ensure this widget has focus when shown
+    setFocus();
+}
+
+// --- NEW: Bounding Box Drawing Methods Implementation ---
+
+void Capture::updateDetectionResults(const QList<BoundingBox>& detections)
+{
+    QMutexLocker locker(&m_detectionMutex);
+    m_currentDetections = detections;
+    locker.unlock();
+    
+    // Reset frame counter when new detections arrive
+    static int frameCounter = 0;
+    frameCounter = 0;
+}
+
+void Capture::drawBoundingBoxes(QPixmap& pixmap, const QList<BoundingBox>& detections)
+{
+    QPainter painter(&pixmap);
+    
+    // Set up the painter for drawing
+    painter.setRenderHint(QPainter::Antialiasing);
+    
+    for (int i = 0; i < detections.size(); ++i) {
+        const BoundingBox& box = detections[i];
+        
+        // Calculate box dimensions
+        int width = box.x2 - box.x1;
+        int height = box.y2 - box.y1;
+        
+        // Create rectangle
+        QRect rect(box.x1, box.y1, width, height);
+        
+        // Set up colors based on confidence
+        QColor boxColor;
+        if (box.confidence > 0.8) {
+            boxColor = QColor(0, 255, 0); // Green for high confidence
+        } else if (box.confidence > 0.6) {
+            boxColor = QColor(255, 255, 0); // Yellow for medium confidence
+        } else {
+            boxColor = QColor(255, 0, 0); // Red for low confidence
+        }
+        
+        // Draw the bounding box with rounded corners
+        QPen pen(boxColor, 3); // 3 pixel thick line
+        painter.setPen(pen);
+        painter.drawRoundedRect(rect, 5, 5); // Rounded corners
+        
+        // Draw corner indicators
+        int cornerSize = 10;
+        painter.setPen(QPen(boxColor, 2));
+        
+        // Top-left corner
+        painter.drawLine(box.x1, box.y1, box.x1 + cornerSize, box.y1);
+        painter.drawLine(box.x1, box.y1, box.x1, box.y1 + cornerSize);
+        
+        // Top-right corner
+        painter.drawLine(box.x2 - cornerSize, box.y1, box.x2, box.y1);
+        painter.drawLine(box.x2, box.y1, box.x2, box.y1 + cornerSize);
+        
+        // Bottom-left corner
+        painter.drawLine(box.x1, box.y2 - cornerSize, box.x1, box.y2);
+        painter.drawLine(box.x1, box.y2, box.x1 + cornerSize, box.y2);
+        
+        // Bottom-right corner
+        painter.drawLine(box.x2 - cornerSize, box.y2, box.x2, box.y2);
+        painter.drawLine(box.x2, box.y2 - cornerSize, box.x2, box.y2);
+        
+        // Draw confidence text with person number
+        QString confidenceText = QString("Person %1: %2%").arg(i + 1).arg(static_cast<int>(box.confidence * 100));
+        QFont font = painter.font();
+        font.setPointSize(12);
+        font.setBold(true);
+        painter.setFont(font);
+        
+        // Set up text background
+        QRect textRect = painter.fontMetrics().boundingRect(confidenceText);
+        textRect.moveTopLeft(QPoint(box.x1, box.y1 - textRect.height() - 5));
+        textRect.adjust(-5, -2, 5, 2);
+        
+        // Draw text background with rounded corners
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(0, 0, 0, 200)); // More opaque black
+        painter.drawRoundedRect(textRect, 3, 3);
+        
+        // Draw text
+        painter.setPen(Qt::white);
+        painter.drawText(QPoint(box.x1, box.y1 - 5), confidenceText);
+        
+        // Draw box dimensions (optional)
+        QString sizeText = QString("%1x%2").arg(width).arg(height);
+        QRect sizeRect = painter.fontMetrics().boundingRect(sizeText);
+        sizeRect.moveTopLeft(QPoint(box.x2 - sizeRect.width() - 5, box.y2 + 5));
+        sizeRect.adjust(-3, -1, 3, 1);
+        
+        painter.setBrush(QColor(0, 0, 0, 150));
+        painter.drawRoundedRect(sizeRect, 2, 2);
+        painter.setPen(Qt::white);
+        painter.drawText(QPoint(box.x2 - sizeRect.width() - 2, box.y2 + 15), sizeText);
+    }
+    
+    painter.end();
+}
+
+void Capture::showBoundingBoxNotification()
+{
+    // Create a temporary notification label
+    QLabel* notificationLabel = new QLabel(this);
+    notificationLabel->setAlignment(Qt::AlignCenter);
+    notificationLabel->setStyleSheet(
+        "QLabel {"
+        "   background-color: rgba(0, 0, 0, 200);"
+        "   color: white;"
+        "   border-radius: 10px;"
+        "   padding: 10px;"
+        "   font-size: 16px;"
+        "   font-weight: bold;"
+        "}"
+    );
+    
+    QString message = m_showBoundingBoxes ? 
+        "Bounding Boxes: ON" : 
+        "Bounding Boxes: OFF";
+    notificationLabel->setText(message);
+    
+    // Position the notification in the center of the widget
+    notificationLabel->adjustSize();
+    int x = (width() - notificationLabel->width()) / 2;
+    int y = (height() - notificationLabel->height()) / 2;
+    notificationLabel->move(x, y);
+    
+    // Show the notification
+    notificationLabel->show();
+    notificationLabel->raise(); // Bring to front
+    
+    // Set up a timer to hide the notification after 1.5 seconds
+    QTimer::singleShot(1500, [notificationLabel]() {
+        if (notificationLabel) {
+            notificationLabel->deleteLater();
+        }
+    });
 }
