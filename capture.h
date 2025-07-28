@@ -19,6 +19,7 @@
 #include <QDateTime>
 #include <QCoreApplication> // For applicationDirPath()
 #include <QElapsedTimer> // Include for QElapsedTimer
+#include <QProcess>
 // --- END NEW INCLUDES ---
 
 QT_BEGIN_NAMESPACE
@@ -106,8 +107,8 @@ private:
     QLabel* overlayImageLabel = nullptr;
     
     // YOLOv5 detector
-    YoloV5Detector* yoloDetector;
-    bool yoloModelLoaded;
+    YoloV5Detector* yoloDetector = nullptr;
+    bool yoloModelLoaded = false;
     
     // Python fallback
     QProcess* pythonYoloProcess;
@@ -115,6 +116,9 @@ private:
     
     // --- MODIFIED: detectPersonInImage now returns void, processing done in slot ---
     void detectPersonInImage(const QString& imagePath);
+
+    int personDetectedFrames = 0;
+    const int personDetectedThreshold = 3;
 
 signals:
     void backtoPreviousPage();

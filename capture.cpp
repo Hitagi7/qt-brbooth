@@ -17,6 +17,7 @@
 #include <QDir>
 #include <QProcess>
 #include <opencv2/opencv.hpp>
+#include "yolov5_detector.h"
 
 Capture::Capture(QWidget *parent, Foreground *fg)
     : QWidget(parent)
@@ -242,7 +243,7 @@ Capture::Capture(QWidget *parent, Foreground *fg)
         
         if (modelFound) {
             qDebug() << "Loading YOLOv5 model from:" << modelPath;
-            yoloDetector = new YoloV5Detector(modelPath.toStdString(), 0.3f, 0.4f);
+            yoloDetector = new YoloV5Detector(modelPath.toStdString(), 0.5f, 0.4f); // 0.5f = confidence threshold
             yoloModelLoaded = yoloDetector->isModelLoaded();
             if (yoloModelLoaded) {
                 qDebug() << "YOLOv5 detector initialized successfully";
@@ -504,23 +505,41 @@ void Capture::detectPersonInImage(const QString& imagePath) {
 
 void Capture::updateCameraFeed()
 {
-    // Start loopTimer at the very beginning of the function to measure total time for one update cycle.
-    loopTimer.start(); // Measure time for this entire call
-
+    loopTimer.start();
     if (!ui->videoLabel || !cap.isOpened()) {
-        isProcessingFrame = false; // Ensure flag is reset if camera fails
+        isProcessingFrame = false;
         return;
     }
-
     cv::Mat frame;
     if (!cap.read(frame) || frame.empty()) {
-        isProcessingFrame = false; // Ensure flag is reset if frame read fails
+        isProcessingFrame = false;
         return;
     }
+    cv::flip(frame, frame, 1);
 
-    cv::flip(frame, frame, 1); // Mirror
+    // --- YOLOv5 Person Detection and Bounding Boxes (debounced, only persons) ---
+    bool personDetected = false;
+    std::vector<Detection> personDetections;
+    if (yoloDetector && yoloModelLoaded) {
+        std::vector<Detection> detections = yoloDetector->detect(frame);
+        for (const auto& det : detections) {
+            if (det.class_id == 0) {
+                personDetected = true;
+                personDetections.push_back(det);
+            }
+        }
+        yoloDetector->drawDetections(frame, personDetections); // Only draw person boxes
+    }
 
-    // Display the frame immediately
+    // Debounce logic
+    if (personDetected) {
+        qDebug() << "Person detected using C++ YOLOv5 detector";
+        emit personDetectedInFrame();
+    }else{
+        qDebug() << "Person not detected using C++ Yolov5 detector";
+    }
+
+    // Display the frame with bounding boxes
     QImage image = cvMatToQImage(frame);
     if (!image.isNull()) {
         QPixmap pixmap = QPixmap::fromImage(image);
@@ -530,38 +549,13 @@ void Capture::updateCameraFeed()
         ui->videoLabel->setAlignment(Qt::AlignTop | Qt::AlignLeft);
         ui->videoLabel->update();
     } else {
-        // If image conversion failed, no display, so skip YOLO for this frame.
-        isProcessingFrame = false; // Ensure it's false as we can't proceed with YOLO
+        isProcessingFrame = false;
         qWarning() << "Failed to convert OpenCV frame to QImage.";
-        // Fall through to performance stats to account for this frame
     }
 
-    // Now, handle YOLO processing only if not already busy
-    if (!isProcessingFrame) { // Proceed with YOLO if free
-        // --- YOLOv5n Person Detection Trigger ---
-        QString tempImagePath = QDir::temp().filePath(
-            "yolo_temp_" + QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss_zzz") + ".jpg"
-            );
-        if (!cv::imwrite(tempImagePath.toStdString(), frame)) { // Save the original (flipped) frame
-            qWarning() << "Failed to save temporary image:" << tempImagePath;
-            // No YOLO for this frame, but still count the frame for display FPS
-            // isProcessingFrame remains false.
-            // Fall through to performance stats.
-        } else {
-            isProcessingFrame = true; // Set flag when starting YOLO
-            detectPersonInImage(tempImagePath); // This starts the async process
-        }
-    } else {
-        // qDebug() << "YOLO processing skipped for this frame due to busy state."; // Uncomment for verbose skipping
-        // Fall through to performance stats.
-    }
-
-    // --- Performance stats (always run for every valid frame received) ---
-    qint64 currentLoopTime = loopTimer.elapsed(); // Time taken for this entire updateCameraFeed call
+    qint64 currentLoopTime = loopTimer.elapsed();
     totalTime += currentLoopTime;
     frameCount++;
-
-    // Print stats every 60 frames
     if (frameCount % 60 == 0) {
         printPerformanceStats();
     }
@@ -772,6 +766,7 @@ void Capture::handlePythonYoloError() {
 }
 
 void Capture::handlePythonYoloFinished(int exitCode, QProcess::ExitStatus exitStatus) {
+    Q_UNUSED(exitStatus);
     qDebug() << "Python YOLOv5 process finished with exit code:" << exitCode;
     
     // Clean up temp file
