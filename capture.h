@@ -9,18 +9,26 @@
 #include <QThread>           // CRUCIAL: For QThread definition and usage
 #include <QMessageBox>       // Required for QMessageBox
 #include <QPropertyAnimation> // Required for QPropertyAnimation
-
-// Standard Qt Widget includes
 #include <QLabel>            // Required for QLabel
 #include <QStackedLayout>    // Required for QStackedLayout
 #include <QGridLayout>       // Required for QGridLayout, used in setupStackedLayoutHybrid
 #include <QPushButton>       // Required for QPushButton, used for ui->back, ui->capture
 #include <QSlider>           // Required for QSlider, used for ui->verticalSlider
-
 #include "videotemplate.h"   // Your custom VideoTemplate class
 #include "camera.h"          // Your custom Camera class
 
-// Forward declarations
+// --- NEW INCLUDES FOR QPROCESS AND JSON ---
+#include <QProcess>
+#include <QJsonDocument>
+#include <QJsonArray>
+#include <QJsonObject>
+#include <QDir>
+#include <QDateTime>
+#include <QCoreApplication> // For applicationDirPath()
+#include <opencv2/opencv.hpp>
+// --- END NEW INCLUDES ---
+
+QT_BEGIN_NAMESPACE
 namespace Ui { class Capture; }
 class Foreground; // Forward declaration for Foreground
 
@@ -50,6 +58,7 @@ signals:
     void imageCaptured(const QPixmap &image);
     void videoRecorded(const QList<QPixmap> &frames);
     void showFinalOutputPage();
+    void personDetectedInFrame();
 
 private slots:
     void updateCameraFeed(const QImage &frame);
@@ -67,6 +76,14 @@ private slots:
     void updateForegroundOverlay(const QString &path);
     void setupStackedLayoutHybrid();
     void updateOverlayStyles();
+
+    // --- NEW SLOTS FOR ASYNCHRONOUS QPROCESS ---
+    void handleYoloOutput();
+    void handleYoloError();
+    void handleYoloFinished(int exitCode, QProcess::ExitStatus exitStatus);
+    void handleYoloErrorOccurred(QProcess::ProcessError error);
+    void printPerformanceStats(); // <-- ADDED THIS DECLARATION
+    // --- END NEW SLOTS ---
 
 private:
     // Declare these private functions here (already correct)
@@ -96,8 +113,30 @@ private:
     QPixmap m_capturedImage;
 
     QStackedLayout *stackedLayout;
-    QLabel *overlayImageLabel;
     QLabel *loadingCameraLabel;
+
+    // Performance tracking members
+    QLabel *videoLabelFPS;
+    QElapsedTimer loopTimer;
+    qint64 totalTime;
+    int frameCount;
+    QElapsedTimer frameTimer;
+
+    // --- MODIFIED/NEW MEMBERS FOR ASYNCHRONOUS YOLO ---
+    QProcess *yoloProcess; // QProcess member
+    bool isProcessingFrame; // Flag to manage concurrent detection calls
+    QString currentTempImagePath; // To keep track of the temp image being processed
+    // --- END MODIFIED/NEW MEMBERS ---
+
+    // pass foreground
+    QLabel* overlayImageLabel = nullptr;
+    // --- MODIFIED: detectPersonInImage now returns void, processing done in slot ---
+    void detectPersonInImage(const QString& imagePath);
+
+    // Helper functions for OpenCV conversion
+    cv::Mat qImageToCvMat(const QImage &inImage);
+    QImage cvMatToQImage(const cv::Mat &mat);
+
 };
 
 #endif // CAPTURE_H

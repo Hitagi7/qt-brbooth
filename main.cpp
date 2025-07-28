@@ -17,6 +17,6 @@ int main(int argc, char *argv[])
 
     qRegisterMetaType<VideoTemplate>("Video Template");
     BRBooth w;
-    w.show();
+    w.showFullScreen(); // Launch in full screen
     return a.exec();
 }
