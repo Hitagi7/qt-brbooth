@@ -56,6 +56,11 @@ private slots:
 
     // --- NEW SLOTS FOR YOLOV5 ---
     void printPerformanceStats(); // <-- ADDED THIS DECLARATION
+    
+    // Python fallback slots
+    void handlePythonYoloOutput();
+    void handlePythonYoloError();
+    void handlePythonYoloFinished(int exitCode, QProcess::ExitStatus exitStatus);
     // --- END NEW SLOTS ---
 
 private:
@@ -103,6 +108,10 @@ private:
     // YOLOv5 detector
     YoloV5Detector* yoloDetector;
     bool yoloModelLoaded;
+    
+    // Python fallback
+    QProcess* pythonYoloProcess;
+    QString currentTempImagePath;
     
     // --- MODIFIED: detectPersonInImage now returns void, processing done in slot ---
     void detectPersonInImage(const QString& imagePath);

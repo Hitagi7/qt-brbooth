@@ -15,6 +15,7 @@
 #include <QCoreApplication>
 #include <QFile>
 #include <QDir>
+#include <QProcess>
 #include <opencv2/opencv.hpp>
 
 Capture::Capture(QWidget *parent, Foreground *fg)
@@ -39,6 +40,7 @@ Capture::Capture(QWidget *parent, Foreground *fg)
     , foreground(fg)
     , yoloDetector(nullptr)
     , yoloModelLoaded(false)
+    , pythonYoloProcess(new QProcess(this))
 {
     ui->setupUi(this);
 
@@ -208,20 +210,56 @@ Capture::Capture(QWidget *parent, Foreground *fg)
 
     // --- INITIALIZE YOLOV5 DETECTOR ---
     try {
-        QString modelPath = QCoreApplication::applicationDirPath() + "/models/yolov5n.onnx";
-        QFileInfo modelFile(modelPath);
-        if (modelFile.exists()) {
+        qDebug() << "=== YOLOv5 Detector Initialization ===";
+        qDebug() << "Application directory:" << QCoreApplication::applicationDirPath();
+        
+        // Test OpenCV DNN availability
+        qDebug() << "OpenCV version:" << CV_VERSION;
+        qDebug() << "OpenCV DNN available:" << cv::dnn::getAvailableBackends().size() << "backends";
+        
+        // Try multiple possible paths for the model
+        QStringList possiblePaths = {
+            QCoreApplication::applicationDirPath() + "/models/yolov5nu.onnx",
+            QCoreApplication::applicationDirPath() + "/../../../models/yolov5nu.onnx",
+            QCoreApplication::applicationDirPath() + "/../../models/yolov5nu.onnx",
+            QCoreApplication::applicationDirPath() + "/../models/yolov5nu.onnx"
+        };
+        
+        QString modelPath;
+        bool modelFound = false;
+        
+        qDebug() << "Searching for YOLOv5 model in:";
+        for (const QString& path : possiblePaths) {
+            QFileInfo modelFile(path);
+            qDebug() << "  Checking:" << path << "-> Exists:" << modelFile.exists();
+            if (modelFile.exists()) {
+                modelPath = path;
+                modelFound = true;
+                qDebug() << "Found YOLOv5 model at:" << modelPath;
+                break;
+            }
+        }
+        
+        if (modelFound) {
+            qDebug() << "Loading YOLOv5 model from:" << modelPath;
             yoloDetector = new YoloV5Detector(modelPath.toStdString(), 0.3f, 0.4f);
             yoloModelLoaded = yoloDetector->isModelLoaded();
             if (yoloModelLoaded) {
                 qDebug() << "YOLOv5 detector initialized successfully";
             } else {
                 qWarning() << "Failed to load YOLOv5 model from:" << modelPath;
+                qWarning() << "This might be because the file is a PyTorch model (.pt) renamed to .onnx";
+                qWarning() << "Please download a proper ONNX model or convert the PyTorch model";
             }
         } else {
-            qWarning() << "YOLOv5 model not found at:" << modelPath;
-            qDebug() << "Please place yolov5n.onnx in the models/ directory";
+            qWarning() << "YOLOv5 model not found. Searched in:";
+            for (const QString& path : possiblePaths) {
+                qWarning() << "  " << path;
+            }
+            qDebug() << "Please place yolov5nu.onnx in the models/ directory";
+            qDebug() << "Note: The current file appears to be a PyTorch model, not ONNX";
         }
+        qDebug() << "=== End YOLOv5 Detector Initialization ===";
     } catch (const std::exception& e) {
         qWarning() << "Error initializing YOLOv5 detector:" << e.what();
     }
@@ -365,7 +403,7 @@ Capture::~Capture()
     if (yoloDetector) {
         delete yoloDetector;
         yoloDetector = nullptr;
-    }
+        }
 
     delete ui;
 }
@@ -406,7 +444,7 @@ void Capture::setVideoTemplate(const VideoTemplate &templateData) {
 }
 
 void Capture::detectPersonInImage(const QString& imagePath) {
-    // Use C++ YOLOv5 detector
+    // Use C++ YOLOv5 detector if available
     if (yoloModelLoaded && yoloDetector) {
         cv::Mat frame = cv::imread(imagePath.toStdString());
         if (!frame.empty()) {
@@ -422,10 +460,45 @@ void Capture::detectPersonInImage(const QString& imagePath) {
             isProcessingFrame = false; // Reset flag for next frame
         }
     } else {
-        qWarning() << "YOLOv5 detector not loaded. Please ensure yolov5n.onnx is in the models/ directory.";
-        // Clean up temp file even if detection failed
-        QFile::remove(imagePath);
-        isProcessingFrame = false;
+        // Fallback to Python YOLOv5
+        qDebug() << "C++ YOLOv5 not available, using Python fallback";
+        currentTempImagePath = imagePath;
+        
+        // Connect signals for Python process
+        connect(pythonYoloProcess, &QProcess::readyReadStandardOutput, this, &Capture::handlePythonYoloOutput);
+        connect(pythonYoloProcess, &QProcess::readyReadStandardError, this, &Capture::handlePythonYoloError);
+        connect(pythonYoloProcess, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this, &Capture::handlePythonYoloFinished);
+        
+        // Prepare Python script path and model path
+        QString scriptPath = QCoreApplication::applicationDirPath() + "/yolo_detect.py";
+        QString modelPath = QCoreApplication::applicationDirPath() + "/models/yolov5nu.pt";
+        
+        // Check if Python script exists, if not, create it in the current directory
+        if (!QFile::exists(scriptPath)) {
+            scriptPath = QCoreApplication::applicationDirPath() + "/../../../yolo_detect.py";
+        }
+        if (!QFile::exists(modelPath)) {
+            modelPath = QCoreApplication::applicationDirPath() + "/../../../models/yolov5nu.pt";
+        }
+        
+        if (QFile::exists(scriptPath) && QFile::exists(modelPath)) {
+    QStringList arguments;
+            arguments << scriptPath << imagePath << modelPath;
+            
+            qDebug() << "Starting Python YOLOv5 detection...";
+            qDebug() << "Script:" << scriptPath;
+            qDebug() << "Image:" << imagePath;
+            qDebug() << "Model:" << modelPath;
+            
+            pythonYoloProcess->start("python", arguments);
+        } else {
+            qWarning() << "Python script or model not found:";
+            qWarning() << "Script:" << scriptPath << "exists:" << QFile::exists(scriptPath);
+            qWarning() << "Model:" << modelPath << "exists:" << QFile::exists(modelPath);
+            // Clean up temp file
+            QFile::remove(imagePath);
+            isProcessingFrame = false;
+        }
     }
 }
 
@@ -686,4 +759,40 @@ void Capture::updateForegroundOverlay(const QString &path)
     overlayImageLabel->setPixmap(overlayPixmap);
     overlayImageLabel->resize(this->size()); // Ensure it scales with window
     overlayImageLabel->show();
+}
+
+void Capture::handlePythonYoloOutput() {
+    QString output = QString::fromUtf8(pythonYoloProcess->readAllStandardOutput());
+    qDebug() << "Python YOLOv5 output:" << output.trimmed();
+}
+
+void Capture::handlePythonYoloError() {
+    QString error = QString::fromUtf8(pythonYoloProcess->readAllStandardError());
+    qWarning() << "Python YOLOv5 error:" << error.trimmed();
+}
+
+void Capture::handlePythonYoloFinished(int exitCode, QProcess::ExitStatus exitStatus) {
+    qDebug() << "Python YOLOv5 process finished with exit code:" << exitCode;
+    
+    // Clean up temp file
+    if (!currentTempImagePath.isEmpty()) {
+        QFile::remove(currentTempImagePath);
+        currentTempImagePath.clear();
+    }
+    
+    // Check if person was detected (exit code 0 means person detected)
+    if (exitCode == 0) {
+        qDebug() << "Person detected using Python YOLOv5 detector";
+        emit personDetectedInFrame();
+    } else {
+        qDebug() << "No person detected using Python YOLOv5 detector";
+    }
+    
+    // Reset processing flag
+    isProcessingFrame = false;
+    
+    // Disconnect signals
+    disconnect(pythonYoloProcess, &QProcess::readyReadStandardOutput, this, &Capture::handlePythonYoloOutput);
+    disconnect(pythonYoloProcess, &QProcess::readyReadStandardError, this, &Capture::handlePythonYoloError);
+    disconnect(pythonYoloProcess, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this, &Capture::handlePythonYoloFinished);
 }

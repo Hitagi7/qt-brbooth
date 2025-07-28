@@ -9,7 +9,7 @@ if (!(Test-Path "models")) {
     Write-Host "Created models directory" -ForegroundColor Yellow
 }
 
-$modelPath = "models/yolov5n.onnx"
+$modelPath = "models/yolov5nu.onnx"
 
 # Check if model already exists
 if (Test-Path $modelPath) {
@@ -25,7 +25,7 @@ if (Test-Path $modelPath) {
 Write-Host "Downloading YOLOv5n model..." -ForegroundColor Yellow
 
 try {
-    Invoke-WebRequest -Uri "https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov5n.pt" -OutFile $modelPath
+    Invoke-WebRequest -Uri "https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov5nu.pt" -OutFile $modelPath
     Write-Host "✅ YOLOv5n model downloaded successfully!" -ForegroundColor Green
     Write-Host "Model location: $((Get-Location).Path)/$modelPath" -ForegroundColor Cyan
     Write-Host ""
@@ -41,5 +41,5 @@ catch {
     Write-Host "1. Visit: https://github.com/ultralytics/assets/releases" -ForegroundColor White
     Write-Host "2. Download yolov5n.pt from the latest release" -ForegroundColor White
     Write-Host "3. Place it in the models/ directory" -ForegroundColor White
-    Write-Host "4. Rename it to yolov5n.onnx" -ForegroundColor White
+    Write-Host "4. Rename it to yolov5nu.onnx" -ForegroundColor White
 } 

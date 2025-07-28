@@ -24,14 +24,14 @@ The project now includes a **C++ YOLOv5 detector** that can detect persons in re
 
 **Manual Download (Recommended):**
 1. Go to: https://github.com/ultralytics/assets/releases
-2. Download `yolov5n.pt` from the latest release
+2. Download `yolov5nu.pt` from the latest release
 3. Create a `models/` directory in your project
-4. Place the file in `models/` and rename it to `yolov5n.onnx`
+4. Place the file in `models/` and rename it to `yolov5nu.onnx`
 
 **Or use PowerShell:**
 ```powershell
 mkdir models
-Invoke-WebRequest -Uri "https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov5n.pt" -OutFile "models/yolov5n.onnx"
+Invoke-WebRequest -Uri "https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov5nu.pt" -OutFile "models/yolov5nu.onnx"
 ```
 
 ### Step 2: Build the Project
@@ -44,7 +44,7 @@ make
 ### Step 3: Run the Application
 
 The application will automatically:
-1. Load the YOLOv5 model from `models/yolov5n.onnx`
+1. Load the YOLOv5 model from `models/yolov5nu.onnx`
 2. Use C++ YOLOv5 detection for person detection
 3. Show a warning if the model is not found
 
@@ -82,7 +82,7 @@ yoloDetector = new YoloV5Detector(modelPath.toStdString(), 0.3f, 0.4f);
 
 ### Model Location
 
-The model is expected at: `[application_directory]/models/yolov5n.onnx`
+The model is expected at: `[application_directory]/models/yolov5nu.onnx`
 
 ## 📊 Performance
 
@@ -192,7 +192,7 @@ for (const auto& det : detections) {
 ### Model Requirements
 
 The application requires:
-- `yolov5n.onnx` file in the `models/` directory
+- `yolov5nu.onnx` file in the `models/` directory
 - OpenCV with DNN module enabled
 
 ## 🎨 Customization

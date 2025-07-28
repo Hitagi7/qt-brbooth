@@ -47,6 +47,11 @@ qnx: target.path = /tmp/$${TARGET}/bin
 else: unix:!android: target.path = /opt/$${TARGET}/bin
 !isEmpty(target.path): INSTALLS += target
 
+# Copy YOLOv5 model to build directory
+models.files = models/yolov5nu.onnx
+models.path = $$OUT_PWD
+INSTALLS += models
+
 RESOURCES += \
     resources.qrc
 

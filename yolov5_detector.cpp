@@ -5,7 +5,19 @@
 YoloV5Detector::YoloV5Detector(const std::string& modelPath, float confThreshold, float nmsThreshold)
     : confThreshold(confThreshold), nmsThreshold(nmsThreshold), inputWidth(640), inputHeight(640), modelLoaded(false)
 {
+    std::cout << "YoloV5Detector constructor called with model path: " << modelPath << std::endl;
+    
     try {
+        // Check if file exists
+        std::ifstream file(modelPath);
+        if (!file.good()) {
+            std::cerr << "Model file does not exist or is not readable: " << modelPath << std::endl;
+            return;
+        }
+        file.close();
+        
+        std::cout << "Loading ONNX model from: " << modelPath << std::endl;
+        
         // Load the ONNX model
         net = cv::dnn::readNetFromONNX(modelPath);
         
@@ -13,6 +25,8 @@ YoloV5Detector::YoloV5Detector(const std::string& modelPath, float confThreshold
             std::cerr << "Failed to load YOLOv5 model from: " << modelPath << std::endl;
             return;
         }
+        
+        std::cout << "ONNX model loaded successfully, setting backend..." << std::endl;
         
         // Set backend and target
         net.setPreferableBackend(cv::dnn::DNN_BACKEND_DEFAULT);
