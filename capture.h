@@ -12,12 +12,9 @@
 #include <opencv2/opencv.hpp>
 #include "videotemplate.h"
 #include "foreground.h"
+#include "yolov5_detector.h"
 
-// --- NEW INCLUDES FOR QPROCESS AND JSON ---
-#include <QProcess>
-#include <QJsonDocument>
-#include <QJsonArray>
-#include <QJsonObject>
+// --- NEW INCLUDES FOR YOLOV5 ---
 #include <QDir>
 #include <QDateTime>
 #include <QCoreApplication> // For applicationDirPath()
@@ -57,11 +54,7 @@ private slots:
     void on_verticalSlider_valueChanged(int value);
     void updateForegroundOverlay(const QString &path);
 
-    // --- NEW SLOTS FOR ASYNCHRONOUS QPROCESS ---
-    void handleYoloOutput();
-    void handleYoloError();
-    void handleYoloFinished(int exitCode, QProcess::ExitStatus exitStatus);
-    void handleYoloErrorOccurred(QProcess::ProcessError error);
+    // --- NEW SLOTS FOR YOLOV5 ---
     void printPerformanceStats(); // <-- ADDED THIS DECLARATION
     // --- END NEW SLOTS ---
 
@@ -99,15 +92,18 @@ private:
     int frameCount;
     QElapsedTimer frameTimer;
 
-    // --- MODIFIED/NEW MEMBERS FOR ASYNCHRONOUS YOLO ---
-    QProcess *yoloProcess; // QProcess member
+    // --- MODIFIED/NEW MEMBERS FOR YOLOV5 ---
     bool isProcessingFrame; // Flag to manage concurrent detection calls
-    QString currentTempImagePath; // To keep track of the temp image being processed
     // --- END MODIFIED/NEW MEMBERS ---
 
     // pass foreground
     Foreground *foreground;
     QLabel* overlayImageLabel = nullptr;
+    
+    // YOLOv5 detector
+    YoloV5Detector* yoloDetector;
+    bool yoloModelLoaded;
+    
     // --- MODIFIED: detectPersonInImage now returns void, processing done in slot ---
     void detectPersonInImage(const QString& imagePath);
 

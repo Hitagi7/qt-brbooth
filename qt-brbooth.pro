@@ -20,7 +20,8 @@ SOURCES += \
     foreground.cpp \
     iconhover.cpp \
     main.cpp \
-    brbooth.cpp
+    brbooth.cpp \
+    yolov5_detector.cpp
 
 HEADERS += \
     background.h \
@@ -30,7 +31,8 @@ HEADERS += \
     final.h \
     foreground.h \
     iconhover.h \
-    videotemplate.h
+    videotemplate.h \
+    yolov5_detector.h
 
 FORMS += \
     background.ui \

@@ -11,6 +11,10 @@
 #include <QElapsedTimer>
 #include <QVBoxLayout> // Still needed for countdownLabel positioning, but not for main layout
 #include <QGridLayout> // New: For main layout
+#include <QFileInfo>
+#include <QCoreApplication>
+#include <QFile>
+#include <QDir>
 #include <opencv2/opencv.hpp>
 
 Capture::Capture(QWidget *parent, Foreground *fg)
@@ -33,7 +37,8 @@ Capture::Capture(QWidget *parent, Foreground *fg)
     , frameCount(0)          // Initialize frameCount
     , isProcessingFrame(false) // Initialize frame processing flag
     , foreground(fg)
-    , yoloProcess(new QProcess(this)) // Initialize QProcess here!
+    , yoloDetector(nullptr)
+    , yoloModelLoaded(false)
 {
     ui->setupUi(this);
 
@@ -199,12 +204,28 @@ Capture::Capture(QWidget *parent, Foreground *fg)
     connect(ui->capture, &QPushButton::clicked, this, &Capture::on_capture_clicked);
     connect(ui->verticalSlider, &QSlider::valueChanged, this, &Capture::on_verticalSlider_valueChanged);
 
-    // --- CONNECT QPROCESS SIGNALS HERE ---
-    connect(yoloProcess, &QProcess::readyReadStandardOutput, this, &Capture::handleYoloOutput);
-    connect(yoloProcess, &QProcess::readyReadStandardError, this, &Capture::handleYoloError);
-    connect(yoloProcess, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this, &Capture::handleYoloFinished);
-    connect(yoloProcess, &QProcess::errorOccurred, this, &Capture::handleYoloErrorOccurred);
-    // --- END CONNECT QPROCESS SIGNALS ---
+    // --- YOLOV5 DETECTOR READY ---
+
+    // --- INITIALIZE YOLOV5 DETECTOR ---
+    try {
+        QString modelPath = QCoreApplication::applicationDirPath() + "/models/yolov5n.onnx";
+        QFileInfo modelFile(modelPath);
+        if (modelFile.exists()) {
+            yoloDetector = new YoloV5Detector(modelPath.toStdString(), 0.3f, 0.4f);
+            yoloModelLoaded = yoloDetector->isModelLoaded();
+            if (yoloModelLoaded) {
+                qDebug() << "YOLOv5 detector initialized successfully";
+            } else {
+                qWarning() << "Failed to load YOLOv5 model from:" << modelPath;
+            }
+        } else {
+            qWarning() << "YOLOv5 model not found at:" << modelPath;
+            qDebug() << "Please place yolov5n.onnx in the models/ directory";
+        }
+    } catch (const std::exception& e) {
+        qWarning() << "Error initializing YOLOv5 detector:" << e.what();
+    }
+    // --- END YOLOV5 DETECTOR INITIALIZATION ---
 
     qDebug() << "OpenCV Camera started successfully with hybrid stacked layout and optimized FPS!";
 }
@@ -334,30 +355,17 @@ void Capture::updateOverlayStyles()
 
 Capture::~Capture()
 {
-    // === FIX FOR "Destroyed while process running" ASSERTION ===
-    // Disconnect signals from yoloProcess FIRST to prevent calls to a dying Capture object
-    disconnect(yoloProcess, &QProcess::readyReadStandardOutput, this, &Capture::handleYoloOutput);
-    disconnect(yoloProcess, &QProcess::readyReadStandardError, this, &Capture::handleYoloError);
-    disconnect(yoloProcess, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this, &Capture::handleYoloFinished);
-    disconnect(yoloProcess, &QProcess::errorOccurred, this, &Capture::handleYoloErrorOccurred);
-    // ==========================================================
-
     if (cameraTimer){ cameraTimer->stop(); delete cameraTimer; }
     if (countdownTimer){ countdownTimer->stop(); delete countdownTimer; }
     if (recordTimer){ recordTimer->stop(); delete recordTimer; }
     if (recordingFrameTimer){ recordingFrameTimer->stop(); delete recordingFrameTimer; }
     if (cap.isOpened()) { cap.release(); }
 
-    // --- Terminate YOLO process on exit ---
-    if (yoloProcess->state() == QProcess::Running) {
-        yoloProcess->terminate();
-        yoloProcess->waitForFinished(1000); // Give it a moment to finish
-        if (yoloProcess->state() == QProcess::Running) {
-            yoloProcess->kill();
-        }
+    // Clean up YOLOv5 detector
+    if (yoloDetector) {
+        delete yoloDetector;
+        yoloDetector = nullptr;
     }
-    // yoloProcess will be deleted by QObject parent mechanism because 'this' is its parent.
-    // --- END Terminate YOLO process ---
 
     delete ui;
 }
@@ -398,32 +406,27 @@ void Capture::setVideoTemplate(const VideoTemplate &templateData) {
 }
 
 void Capture::detectPersonInImage(const QString& imagePath) {
-    // This check is now mostly handled by the caller (updateCameraFeed),
-    // but remains as a safeguard.
-    if (yoloProcess->state() == QProcess::Running) {
-        qDebug() << "YOLO process already running (from detectPersonInImage), skipping start.";
-        return;
+    // Use C++ YOLOv5 detector
+    if (yoloModelLoaded && yoloDetector) {
+        cv::Mat frame = cv::imread(imagePath.toStdString());
+        if (!frame.empty()) {
+            bool personDetected = yoloDetector->detectPerson(frame, 0.3f);
+            
+            if (personDetected) {
+                qDebug() << "Person detected using C++ YOLOv5 detector";
+                emit personDetectedInFrame();
+            }
+            
+            // Clean up temp file
+            QFile::remove(imagePath);
+            isProcessingFrame = false; // Reset flag for next frame
+        }
+    } else {
+        qWarning() << "YOLOv5 detector not loaded. Please ensure yolov5n.onnx is in the models/ directory.";
+        // Clean up temp file even if detection failed
+        QFile::remove(imagePath);
+        isProcessingFrame = false;
     }
-
-    currentTempImagePath = imagePath; // Store the path for deletion later
-
-    QString program = "python";
-    QStringList arguments;
-    arguments << "yolov5/detect.py"
-              << "--weights" << "yolov5/yolov5n.pt"
-              << "--source" << imagePath
-              << "--classes" << "0" // Class ID for 'person'
-              << "--nosave"; // CRUCIAL: ensures output is to stdout, not saved to file
-
-    yoloProcess->setWorkingDirectory(QCoreApplication::applicationDirPath() + "/../../../"); // Corrected path
-
-    qDebug() << "Starting YOLOv5 process for frame detection...";
-    qDebug() << "Program:" << program;
-    qDebug() << "Arguments:" << arguments.join(" ");
-    qDebug() << "Working Directory:" << yoloProcess->workingDirectory();
-    qDebug() << "Source Image Path:" << imagePath;
-
-    yoloProcess->start(program, arguments);
 }
 
 void Capture::updateCameraFeed()
@@ -514,78 +517,7 @@ void Capture::printPerformanceStats() {
     frameTimer.start(); // Restart frameTimer for the next measurement period
 }
 
-void Capture::handleYoloOutput() {
-    QByteArray output = yoloProcess->readAllStandardOutput();
-    // qDebug() << "YOLOv5 StdOut (Raw):" << output; // Uncomment for verbose output
 
-    QJsonDocument doc = QJsonDocument::fromJson(output);
-
-    if (!doc.isNull() && doc.isArray()) {
-        QJsonArray results = doc.array();
-        bool personDetected = false;
-        for (const QJsonValue& imageResult : results) {
-            QJsonObject obj = imageResult.toObject();
-            QJsonArray detections = obj["detections"].toArray();
-            if (!detections.isEmpty()) {
-                personDetected = true;
-                qDebug() << "Person(s) detected! Number of detections:" << detections.size();
-                for (const QJsonValue& detectionValue : detections) {
-                    QJsonObject detection = detectionValue.toObject();
-                    QJsonArray bbox = detection["bbox"].toArray();
-                    double confidence = detection["confidence"].toDouble();
-                    qDebug() << "  BBox:" << bbox.at(0).toInt() << bbox.at(1).toInt()
-                             << bbox.at(2).toInt() << bbox.at(3).toInt()
-                             << "Confidence:" << confidence;
-                    // TODO: Emit a signal here with the bbox data to update your UI (e.g., draw rects)
-                }
-            }
-        }
-        if (personDetected) {
-            emit personDetectedInFrame(); // Emit signal if any person was found
-        } else {
-            qDebug() << "No person detected in frame.";
-        }
-    } else {
-        qDebug() << "Detection output is not a valid JSON array or is null. Raw output was:" << output;
-    }
-}
-
-void Capture::handleYoloError() {
-    QByteArray errorOutput = yoloProcess->readAllStandardError();
-    if (!errorOutput.isEmpty()) {
-        qWarning() << "YOLOv5 Python Script Errors/Warnings (stderr):" << errorOutput;
-    }
-}
-
-void Capture::handleYoloFinished(int exitCode, QProcess::ExitStatus exitStatus) {
-    qDebug() << "YOLOv5 process finished with exit code:" << exitCode << "and status:" << exitStatus;
-    if (exitCode != 0) {
-        qWarning() << "YOLOv5 script exited with an error. Check stderr for details.";
-        qWarning() << "Final Stderr (if any):" << yoloProcess->readAllStandardError();
-    }
-    isProcessingFrame = false; // Always reset the flag when the process finishes
-
-    // Ensure any remaining output is read (edge case)
-    yoloProcess->readAllStandardOutput();
-    yoloProcess->readAllStandardError();
-
-    // Delete the temporary image file
-    if (!currentTempImagePath.isEmpty()) {
-        QFile::remove(currentTempImagePath);
-        currentTempImagePath.clear();
-    }
-}
-
-void Capture::handleYoloErrorOccurred(QProcess::ProcessError error) {
-    qWarning() << "QProcess experienced an internal error:" << error << yoloProcess->errorString();
-    isProcessingFrame = false; // Always reset the flag when an internal QProcess error occurs
-
-    // Delete the temporary image file
-    if (!currentTempImagePath.isEmpty()) {
-        QFile::remove(currentTempImagePath);
-        currentTempImagePath.clear();
-    }
-}
 
 void Capture::captureRecordingFrame()
 {
