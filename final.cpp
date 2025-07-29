@@ -1,23 +1,22 @@
 #include "final.h"
+#include <QDateTime>
+#include <QFileDialog>
+#include <QImage>
+#include <QMessageBox>
 #include <QMouseEvent>
 #include <QRegularExpression>
+#include <QStandardPaths>
 #include <QStyle>
 #include <QVBoxLayout> // Might be implicitly used by UI file for buttons
 #include "iconhover.h" // Assuming this is your custom class for button hover effects
 #include "ui_final.h"  // Generated UI header
-#include <QFileDialog>
-#include <QMessageBox>
-#include <QImage>
-#include <QDateTime>
-#include <QStandardPaths>
 
 // OpenCV includes (ensure your .pro file links to OpenCV libraries)
 #include <opencv2/opencv.hpp>
 
 // Explicitly include layouts, although they are in final.h, it's good practice
-#include <QStackedLayout>
 #include <QGridLayout>
-
+#include <QStackedLayout>
 
 Final::Final(QWidget *parent)
     : QWidget(parent)
@@ -35,24 +34,30 @@ Final::Final(QWidget *parent)
     // --- NEW LAYOUT SETUP leveraging final.ui components ---
 
     // 1. Create the QGridLayout as the main layout for the Final widget
-    QGridLayout* mainLayout = new QGridLayout(this);
+    QGridLayout *mainLayout = new QGridLayout(this);
     mainLayout->setContentsMargins(0, 0, 0, 0); // No padding for the grid itself
-    mainLayout->setSpacing(0); // No spacing between grid cells
+    mainLayout->setSpacing(0);                  // No spacing between grid cells
 
     // 2. Create the QStackedLayout to stack videoLabel and overlayFinal
     m_stackedLayout = new QStackedLayout; // Initialize the member
-    m_stackedLayout->setStackingMode(QStackedLayout::StackAll); // Makes all contained widgets visible and layered
+    m_stackedLayout->setStackingMode(
+        QStackedLayout::StackAll); // Makes all contained widgets visible and layered
     m_stackedLayout->setContentsMargins(0, 0, 0, 0); // No padding inside the stacked layout
-    m_stackedLayout->setSpacing(0); // No spacing between stacked items
+    m_stackedLayout->setSpacing(0);                  // No spacing between stacked items
 
     // 3. Add existing UI widgets to the stacked layout
-    m_stackedLayout->addWidget(ui->videoLabel);   // This will be the background layer (for image/video display)
-    m_stackedLayout->addWidget(ui->overlayFinal); // This will be the foreground layer (it already contains your buttons)
+    m_stackedLayout->addWidget(
+        ui->videoLabel); // This will be the background layer (for image/video display)
+    m_stackedLayout->addWidget(
+        ui->overlayFinal); // This will be the foreground layer (it already contains your buttons)
 
     // 4. Add the stacked layout to the main grid layout, making it stretch
-    mainLayout->addLayout(m_stackedLayout, 0, 0); // Place the stacked layout in the first cell (row 0, col 0)
-    mainLayout->setRowStretch(0, 1);    // Make this row stretchable, so it takes all vertical space
-    mainLayout->setColumnStretch(0, 1); // Make this column stretchable, so it takes all horizontal space
+    mainLayout->addLayout(m_stackedLayout,
+                          0,
+                          0);        // Place the stacked layout in the first cell (row 0, col 0)
+    mainLayout->setRowStretch(0, 1); // Make this row stretchable, so it takes all vertical space
+    mainLayout->setColumnStretch(0,
+                                 1); // Make this column stretchable, so it takes all horizontal space
 
     // 5. Set the main grid layout for the Final widget
     setLayout(mainLayout); // Apply the mainLayout to the Final widget
@@ -64,7 +69,7 @@ Final::Final(QWidget *parent)
     ui->videoLabel->setMinimumSize(1, 1);
     ui->videoLabel->setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
     ui->videoLabel->setStyleSheet("background-color: black;"); // Set background to black if no image
-    ui->videoLabel->setScaledContents(false); // We handle scaling manually
+    ui->videoLabel->setScaledContents(false);                  // We handle scaling manually
     ui->videoLabel->setAlignment(Qt::AlignCenter); // Center the scaled image within the label
 
     // Configure overlayFinal (foreground for buttons)
@@ -75,8 +80,8 @@ Final::Final(QWidget *parent)
 
     // Ensure overlayFinal is on top
     ui->overlayFinal->raise(); // Brings overlayFinal to the front of the stacked layout.
-    ui->back->raise(); // Ensure buttons are on top of overlay
-    ui->save->raise(); // Ensure buttons are on top of overlay
+    ui->back->raise();         // Ensure buttons are on top of overlay
+    ui->save->raise();         // Ensure buttons are on top of overlay
 
     // --- Existing setup for buttons and timers ---
 
@@ -88,27 +93,23 @@ Final::Final(QWidget *parent)
     ui->back->installEventFilter(backButtonHover);
 
     // Set button styles
-    ui->back->setStyleSheet(
-        "QPushButton {"
-        "   background: transparent;"
-        "   border: none;"
-        "   color: white;"
-        "}"
-        );
+    ui->back->setStyleSheet("QPushButton {"
+                            "   background: transparent;"
+                            "   border: none;"
+                            "   color: white;"
+                            "}");
 
-    ui->save->setStyleSheet(
-        "QPushButton {"
-        "   border-radius: 9px;"
-        "   border-bottom: 3px solid rgba(2, 2, 2, 200);" // Subtle shadow
-        "   background: rgba(11, 194, 0, 200);" // Your original green color
-        "   color: white;"
-        "   font-size: 16px;"
-        "   font-weight: bold;"
-        "}"
-        "QPushButton:hover {"
-        "   background: rgba(8, 154, 0, 230);" // Your original hover color
-        "}"
-        );
+    ui->save->setStyleSheet("QPushButton {"
+                            "   border-radius: 9px;"
+                            "   border-bottom: 3px solid rgba(2, 2, 2, 200);" // Subtle shadow
+                            "   background: rgba(11, 194, 0, 200);" // Your original green color
+                            "   color: white;"
+                            "   font-size: 16px;"
+                            "   font-weight: bold;"
+                            "}"
+                            "QPushButton:hover {"
+                            "   background: rgba(8, 154, 0, 230);" // Your original hover color
+                            "}");
 
     videoPlaybackTimer = new QTimer(this);
     connect(videoPlaybackTimer, &QTimer::timeout, this, &Final::playNextFrame);
@@ -120,7 +121,7 @@ Final::Final(QWidget *parent)
 
 Final::~Final()
 {
-    if(videoPlaybackTimer){
+    if (videoPlaybackTimer) {
         videoPlaybackTimer->stop();
         delete videoPlaybackTimer;
         videoPlaybackTimer = nullptr;
@@ -144,9 +145,10 @@ void Final::refreshDisplay()
     // If no video frames, but a single image is loaded
     else if (!m_lastLoadedImage.isNull()) {
         // Scale the stored original image to the current size of ui->videoLabel
-        QPixmap scaledImage = m_lastLoadedImage.scaled(ui->videoLabel->size(),
-                                                       Qt::IgnoreAspectRatio, // <== IMPORTANT: Stretches to fill
-                                                       Qt::SmoothTransformation);
+        QPixmap scaledImage = m_lastLoadedImage
+                                  .scaled(ui->videoLabel->size(),
+                                          Qt::IgnoreAspectRatio, // <== IMPORTANT: Stretches to fill
+                                          Qt::SmoothTransformation);
         ui->videoLabel->setPixmap(scaledImage);
     }
     // If nothing is loaded, clear the display
@@ -160,8 +162,10 @@ void Final::resizeEvent(QResizeEvent *event)
     QWidget::resizeEvent(event); // Call the base class implementation
 
     // Ensure ui->videoLabel and ui->overlayFinal fill the entire widget's current size
-    if (ui->videoLabel) ui->videoLabel->resize(this->size());
-    if (ui->overlayFinal) ui->overlayFinal->resize(this->size());
+    if (ui->videoLabel)
+        ui->videoLabel->resize(this->size());
+    if (ui->overlayFinal)
+        ui->overlayFinal->resize(this->size());
 
     // <== CRITICAL: Re-scale and display the content when the widget resizes
     refreshDisplay();
@@ -170,7 +174,7 @@ void Final::resizeEvent(QResizeEvent *event)
 void Final::setImage(const QPixmap &image)
 {
     // Stop video playback if active
-    if (videoPlaybackTimer->isActive()){
+    if (videoPlaybackTimer->isActive()) {
         videoPlaybackTimer->stop();
     }
 
@@ -220,9 +224,10 @@ void Final::playNextFrame()
 
     // Get the current frame and scale it to the size of ui->videoLabel
     QPixmap currentFrame = m_videoFrames.at(m_currentFrameIndex);
-    QPixmap scaledFrame = currentFrame.scaled(ui->videoLabel->size(),
-                                              Qt::IgnoreAspectRatio, // <== IMPORTANT: Stretches to fill
-                                              Qt::SmoothTransformation);
+    QPixmap scaledFrame = currentFrame
+                              .scaled(ui->videoLabel->size(),
+                                      Qt::IgnoreAspectRatio, // <== IMPORTANT: Stretches to fill
+                                      Qt::SmoothTransformation);
     ui->videoLabel->setPixmap(scaledFrame);
 
     m_currentFrameIndex++; // Advance to the next frame for the next timer timeout
@@ -232,7 +237,7 @@ void Final::playNextFrame()
 
 void Final::on_back_clicked()
 {
-    if (videoPlaybackTimer->isActive()){
+    if (videoPlaybackTimer->isActive()) {
         videoPlaybackTimer->stop();
     }
     emit backToCapturePage();
@@ -256,7 +261,8 @@ void Final::on_save_clicked()
         QString downloadsPath = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
         if (downloadsPath.isEmpty()) {
             // Fallback for systems without standard download path (e.g., some Linux setups or custom env)
-            downloadsPath = "C:/Downloads"; // Or a more cross-platform default like QDir::currentPath()
+            downloadsPath
+                = "C:/Downloads"; // Or a more cross-platform default like QDir::currentPath()
         }
 
         QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss");
@@ -268,7 +274,8 @@ void Final::on_save_clicked()
         }
 
         if (imageToSave.save(fileName)) {
-            QMessageBox::information(this, "Save Image",
+            QMessageBox::information(this,
+                                     "Save Image",
                                      QString("Image saved successfully to:\n%1").arg(fileName));
         } else {
             QMessageBox::critical(this, "Save Image", "Failed to save image.");
@@ -288,29 +295,41 @@ cv::Mat QImageToCvMat(const QImage &inImage)
         // For 32-bit formats, OpenCV typically expects BGRA or BGR.
         // Assuming BGRA or similar layout where alpha is last.
         // OpenCV Mat constructor takes (rows, cols, type, data, step)
-        return cv::Mat(inImage.height(), inImage.width(), CV_8UC4,
-                       (void*)inImage.constBits(), inImage.bytesPerLine());
+        return cv::Mat(inImage.height(),
+                       inImage.width(),
+                       CV_8UC4,
+                       (void *) inImage.constBits(),
+                       inImage.bytesPerLine());
     case QImage::Format_RGB888:
         // RGB888 in QImage is typically 3 bytes per pixel, RGB order.
         // OpenCV expects BGR by default, so a clone and conversion might be needed,
         // or ensure `cvtColor` is used later if written as RGB.
         // For direct conversion, it's safer to convert QImage to a known OpenCV format first if needed.
         // Here, we clone because `inImage.constBits()` might not be persistent.
-        return cv::Mat(inImage.height(), inImage.width(), CV_8UC3,
-                       (void*)inImage.constBits(), inImage.bytesPerLine()).clone();
-    case QImage::Format_Indexed8:
-    {
+        return cv::Mat(inImage.height(),
+                       inImage.width(),
+                       CV_8UC3,
+                       (void *) inImage.constBits(),
+                       inImage.bytesPerLine())
+            .clone();
+    case QImage::Format_Indexed8: {
         // 8-bit grayscale image
-        cv::Mat mat(inImage.height(), inImage.width(), CV_8UC1,
-                    (void*)inImage.constBits(), inImage.bytesPerLine());
+        cv::Mat mat(inImage.height(),
+                    inImage.width(),
+                    CV_8UC1,
+                    (void *) inImage.constBits(),
+                    inImage.bytesPerLine());
         return mat.clone(); // Clone to ensure data is owned by Mat
     }
     default:
         qWarning() << "QImageToCvMat - QImage format not handled: " << inImage.format();
         // Convert to a supported format if not directly convertible
         QImage convertedImage = inImage.convertToFormat(QImage::Format_RGB32);
-        return cv::Mat(convertedImage.height(), convertedImage.width(), CV_8UC4,
-                       (void*)convertedImage.constBits(), convertedImage.bytesPerLine());
+        return cv::Mat(convertedImage.height(),
+                       convertedImage.width(),
+                       CV_8UC4,
+                       (void *) convertedImage.constBits(),
+                       convertedImage.bytesPerLine());
     }
 }
 
@@ -344,7 +363,7 @@ void Final::saveVideoToFile()
     int height = frameSize.height();
 
     // Assuming video was captured at 60 FPS for 10 seconds, adjust if different
-    double frameRate = 60.0; // The target playback frame rate for the saved video
+    double frameRate = 60.0;         // The target playback frame rate for the saved video
     if (m_videoFrames.size() > 10) { // If you have enough frames for 10 seconds at 60fps
         // Adjust frameRate based on how many frames collected over 10s or similar,
         // or hardcode based on your capture rate.
@@ -358,8 +377,11 @@ void Final::saveVideoToFile()
     // Open the video writer
     // Parameters: filename, fourcc, fps, frame size, isColor
     if (!videoWriter.open(fileName.toStdString(), fourcc, frameRate, cv::Size(width, height), true)) {
-        QMessageBox::critical(this, "Save Video", "Failed to open video writer. Check codecs and file path.");
-        qWarning() << "Failed to open video writer for file: " << fileName.toStdString().c_str() << " with FOURCC: " << fourcc;
+        QMessageBox::critical(this,
+                              "Save Video",
+                              "Failed to open video writer. Check codecs and file path.");
+        qWarning() << "Failed to open video writer for file: " << fileName.toStdString().c_str()
+                   << " with FOURCC: " << fourcc;
         return;
     }
 
@@ -388,7 +410,10 @@ void Final::saveVideoToFile()
     }
 
     videoWriter.release(); // Release the video writer
-    QMessageBox::information(this, "Save Video",
-                             QString("Video saved successfully at %1 FPS to:\n%2").arg(frameRate, 0, 'f', 1).arg(fileName));
+    QMessageBox::information(this,
+                             "Save Video",
+                             QString("Video saved successfully at %1 FPS to:\n%2")
+                                 .arg(frameRate, 0, 'f', 1)
+                                 .arg(fileName));
     qDebug() << "Video saved to: " << fileName;
 }

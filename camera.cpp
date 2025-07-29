@@ -89,16 +89,21 @@ void Camera::startCamera()
     double actual_fps = cap.get(cv::CAP_PROP_FPS);
 
     qDebug() << "========================================";
-    qDebug() << "Camera: Camera settings REQUESTED:" << m_desiredWidth << "x" << m_desiredHeight << "@" << m_desiredFps << "FPS";
-    qDebug() << "Camera: Camera settings ACTUAL: " << actual_width << "x" << actual_height << "@" << actual_fps << "FPS";
+    qDebug() << "Camera: Camera settings REQUESTED:" << m_desiredWidth << "x" << m_desiredHeight
+             << "@" << m_desiredFps << "FPS";
+    qDebug() << "Camera: Camera settings ACTUAL: " << actual_width << "x" << actual_height << "@"
+             << actual_fps << "FPS";
     qDebug() << "========================================";
 
     if (qAbs(actual_fps - m_desiredFps) > 1.0) {
-        qWarning() << "Camera: WARNING: Camera did not accept desired FPS request. Actual FPS is" << actual_fps;
+        qWarning() << "Camera: WARNING: Camera did not accept desired FPS request. Actual FPS is"
+                   << actual_fps;
     }
 
     if (qAbs(actual_width - m_desiredWidth) > 1.0 || qAbs(actual_height - m_desiredHeight) > 1.0) {
-        qWarning() << "Camera: WARNING: Camera did not accept desired resolution. Actual resolution is" << actual_width << "x" << actual_height;
+        qWarning()
+            << "Camera: WARNING: Camera did not accept desired resolution. Actual resolution is"
+            << actual_width << "x" << actual_height;
     }
 
     // ✅ Emit first frame immediately for faster feedback
@@ -125,7 +130,8 @@ void Camera::startCamera()
 
     cameraReadTimer->start(timerInterval);
     emit cameraOpened(true, actual_width, actual_height, actual_fps);
-    qDebug() << "Camera: Camera started successfully in worker thread. Timer interval:" << timerInterval << "ms";
+    qDebug() << "Camera: Camera started successfully in worker thread. Timer interval:"
+             << timerInterval << "ms";
 }
 
 void Camera::stopCamera()
@@ -167,12 +173,14 @@ void Camera::processFrame()
     frameCount++;
 
     if (frameCount % 60 == 0) {
-        double avgLoopTime = (double)totalTime / frameCount;
-        double measuredFPS = 1000.0 / ((double)frameTimer.elapsed() / frameCount);
+        double avgLoopTime = (double) totalTime / frameCount;
+        double measuredFPS = 1000.0 / ((double) frameTimer.elapsed() / frameCount);
         qDebug() << "----------------- Worker Thread Stats ------------------";
         qDebug() << "Camera: Avg loop time (last 60 frames):" << avgLoopTime << "ms";
         qDebug() << "Camera: Current FPS (measured over 60 frames):" << measuredFPS << "FPS";
-        qDebug() << "Camera: Frame processing efficiency:" << (avgLoopTime < (1000.0 / cap.get(cv::CAP_PROP_FPS)) ? "GOOD" : "NEEDS OPTIMIZATION");
+        qDebug() << "Camera: Frame processing efficiency:"
+                 << (avgLoopTime < (1000.0 / cap.get(cv::CAP_PROP_FPS)) ? "GOOD"
+                                                                        : "NEEDS OPTIMIZATION");
         qDebug() << "--------------------------------------------------------";
         frameCount = 0;
         totalTime = 0;

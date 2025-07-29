@@ -5,6 +5,7 @@
 #include <QStackedWidget> // Make sure this is included for QStackedWidget
 #include <QThread> // For camera threading
 
+
 // Forward declarations to avoid circular includes and speed up compilation
 class Foreground;
 class Background;

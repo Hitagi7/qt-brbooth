@@ -1,24 +1,27 @@
 #include "capture.h"
-#include "ui_capture.h"
-#include "foreground.h"
 #include "camera.h"
+#include "foreground.h"
+#include "ui_capture.h"
 
-#include <QThread>
 #include <QDebug>
-#include <QImage>
-#include <QPixmap>
-#include <QTimer>
-#include <QPropertyAnimation>
-#include <QFont>
-#include <QResizeEvent>
 #include <QElapsedTimer>
-#include <QVBoxLayout>
+#include <QFont>
 #include <QGridLayout>
+#include <QImage>
 #include <QMessageBox>
-#include <QStackedLayout>
 #include <QPainter>
+#include <QPixmap>
+#include <QPropertyAnimation>
+#include <QResizeEvent>
+#include <QStackedLayout>
+#include <QThread>
+#include <QTimer>
+#include <QVBoxLayout>
 
-Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, QThread *existingCameraThread)
+Capture::Capture(QWidget *parent,
+                 Foreground *fg,
+                 Camera *existingCameraWorker,
+                 QThread *existingCameraThread)
     : QWidget(parent)
     , ui(new Ui::Capture)
     , countdownTimer(nullptr)
@@ -69,7 +72,7 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
         "background-color: rgba(0, 0, 0, 150); "
         "border-radius: 15px; "
         "padding: 10px 20px; " // Added padding (top/bottom 10px, left/right 20px)
-        );
+    );
     // Adjusted fixed size to accommodate padding and ensure text fits
     // A rough estimate: "Loading Camera." at 36pt bold might need more than 350px width.
     // Let's try to calculate a safer size or rely on sizeHint if not fixed.
@@ -126,7 +129,8 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
         loadingCameraLabel->hide();
         ui->videoLabel->show();
         ui->videoLabel->setStyleSheet("background-color: #333; color: white; border-radius: 10px;");
-        ui->videoLabel->setText("Camera worker not provided or is NULL.\nCannot initialize camera.");
+        ui->videoLabel->setText(
+            "Camera worker not provided or is NULL.\nCannot initialize camera.");
         ui->videoLabel->setAlignment(Qt::AlignCenter);
     }
 
@@ -136,8 +140,9 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     font.setPointSize(100);
     font.setBold(true);
     countdownLabel->setFont(font);
-    countdownLabel->setStyleSheet("color:white; background-color: rgba(0, 0, 0, 150); border-radius: 20px;");
-    countdownLabel->setFixedSize(200,200);
+    countdownLabel->setStyleSheet(
+        "color:white; background-color: rgba(0, 0, 0, 150); border-radius: 20px;");
+    countdownLabel->setFixedSize(200, 200);
     countdownLabel->hide();
 
     countdownTimer = new QTimer(this);
@@ -152,22 +157,46 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
 
     connect(ui->back, &QPushButton::clicked, this, &Capture::on_back_clicked);
     connect(ui->capture, &QPushButton::clicked, this, &Capture::on_capture_clicked);
-    connect(ui->verticalSlider, &QSlider::valueChanged, this, &Capture::on_verticalSlider_valueChanged);
+    connect(ui->verticalSlider,
+            &QSlider::valueChanged,
+            this,
+            &Capture::on_verticalSlider_valueChanged);
 
     qDebug() << "Capture UI initialized. Loading Camera...";
 }
 
 Capture::~Capture()
 {
-    if (countdownTimer){ countdownTimer->stop(); delete countdownTimer; countdownTimer = nullptr; }
-    if (recordTimer){ recordTimer->stop(); delete recordTimer; recordTimer = nullptr; }
-    if (recordingFrameTimer){ recordingFrameTimer->stop(); delete recordingFrameTimer; recordingFrameTimer = nullptr; }
-    if (overlayImageLabel){ delete overlayImageLabel; overlayImageLabel = nullptr; }
-    if (loadingCameraLabel){ delete loadingCameraLabel; loadingCameraLabel = nullptr; }
+    if (countdownTimer) {
+        countdownTimer->stop();
+        delete countdownTimer;
+        countdownTimer = nullptr;
+    }
+    if (recordTimer) {
+        recordTimer->stop();
+        delete recordTimer;
+        recordTimer = nullptr;
+    }
+    if (recordingFrameTimer) {
+        recordingFrameTimer->stop();
+        delete recordingFrameTimer;
+        recordingFrameTimer = nullptr;
+    }
+    if (overlayImageLabel) {
+        delete overlayImageLabel;
+        overlayImageLabel = nullptr;
+    }
+    if (loadingCameraLabel) {
+        delete loadingCameraLabel;
+        loadingCameraLabel = nullptr;
+    }
     delete ui;
 }
 
-void Capture::handleCameraOpened(bool success, double actual_width, double actual_height, double actual_fps)
+void Capture::handleCameraOpened(bool success,
+                                 double actual_width,
+                                 double actual_height,
+                                 double actual_fps)
 {
     Q_UNUSED(actual_width);
     Q_UNUSED(actual_height);
@@ -230,15 +259,12 @@ void Capture::updateCameraFeed(const QImage &image)
         ui->videoLabel->show();
     }
 
-
     QPixmap pixmap = QPixmap::fromImage(image);
 
     QSize labelSize = ui->videoLabel->size();
-    QPixmap scaledPixmap = pixmap.scaled(
-        labelSize,
-        Qt::KeepAspectRatioByExpanding,
-        Qt::FastTransformation
-        );
+    QPixmap scaledPixmap = pixmap.scaled(labelSize,
+                                         Qt::KeepAspectRatioByExpanding,
+                                         Qt::FastTransformation);
 
     ui->videoLabel->setPixmap(scaledPixmap);
     ui->videoLabel->setAlignment(Qt::AlignCenter);
@@ -261,31 +287,30 @@ void Capture::setupStackedLayoutHybrid()
         stackedLayout->setContentsMargins(0, 0, 0, 0);
         stackedLayout->setSpacing(0);
 
-        stackedLayout->addWidget(ui->videoLabel);       // Layer 0: Camera feed (background)
+        stackedLayout->addWidget(ui->videoLabel); // Layer 0: Camera feed (background)
 
         // --- FIX for Centering "Loading Camera" ---
         // Create a layout to center the fixed-size loadingCameraLabel
-        QVBoxLayout* centeringLayout = new QVBoxLayout();
+        QVBoxLayout *centeringLayout = new QVBoxLayout();
         centeringLayout->addStretch(); // Top stretch
-        QHBoxLayout* hCenteringLayout = new QHBoxLayout();
-        hCenteringLayout->addStretch(); // Left stretch
+        QHBoxLayout *hCenteringLayout = new QHBoxLayout();
+        hCenteringLayout->addStretch();                  // Left stretch
         hCenteringLayout->addWidget(loadingCameraLabel); // Add the fixed-size label
-        hCenteringLayout->addStretch(); // Right stretch
-        centeringLayout->addLayout(hCenteringLayout); // Add horizontal layout to vertical
-        centeringLayout->addStretch(); // Bottom stretch
+        hCenteringLayout->addStretch();                  // Right stretch
+        centeringLayout->addLayout(hCenteringLayout);    // Add horizontal layout to vertical
+        centeringLayout->addStretch();                   // Bottom stretch
 
-        QWidget* centeringWidget = new QWidget(this); // Create a wrapper widget
+        QWidget *centeringWidget = new QWidget(this); // Create a wrapper widget
         centeringWidget->setLayout(centeringLayout);
-        centeringWidget->setContentsMargins(0,0,0,0); // Ensure no extra margins
+        centeringWidget->setContentsMargins(0, 0, 0, 0);             // Ensure no extra margins
         centeringWidget->setAttribute(Qt::WA_TranslucentBackground); // Keep background transparent
         // Initially show the centeringWidget, as loadingCameraLabel is shown by default
         centeringWidget->show();
 
-
-        stackedLayout->addWidget(centeringWidget);      // Layer 1: Loading text (now centered)
+        stackedLayout->addWidget(centeringWidget); // Layer 1: Loading text (now centered)
         // ------------------------------------------
 
-        stackedLayout->addWidget(ui->overlayWidget);    // Layer 2: UI elements (buttons, slider)
+        stackedLayout->addWidget(ui->overlayWidget); // Layer 2: UI elements (buttons, slider)
         if (overlayImageLabel) {
             stackedLayout->addWidget(overlayImageLabel); // Layer 3: Foreground image (top)
         }
@@ -294,7 +319,7 @@ void Capture::setupStackedLayoutHybrid()
             delete layout();
         }
 
-        QGridLayout* mainLayout = new QGridLayout(this);
+        QGridLayout *mainLayout = new QGridLayout(this);
         mainLayout->setContentsMargins(0, 0, 0, 0);
         mainLayout->setSpacing(0);
         mainLayout->addLayout(stackedLayout, 0, 0);
@@ -308,10 +333,14 @@ void Capture::setupStackedLayoutHybrid()
         overlayImageLabel->raise();
     }
     ui->overlayWidget->raise();
-    if (ui->back) ui->back->raise();
-    if (ui->capture) ui->capture->raise();
-    if (ui->verticalSlider) ui->verticalSlider->raise();
-    if (countdownLabel) countdownLabel->raise();
+    if (ui->back)
+        ui->back->raise();
+    if (ui->capture)
+        ui->capture->raise();
+    if (ui->verticalSlider)
+        ui->verticalSlider->raise();
+    if (countdownLabel)
+        countdownLabel->raise();
 
     // Now, instead of raising loadingCameraLabel, raise its parent centeringWidget
     if (loadingCameraLabel->parentWidget()) {
@@ -326,63 +355,57 @@ void Capture::setupStackedLayoutHybrid()
 void Capture::updateOverlayStyles()
 {
     qDebug() << "Updating overlay styles with clean professional appearance...";
-    ui->back->setStyleSheet(
-        "QPushButton {"
-        "   background: transparent;"
-        "   border: none;"
-        "   color: white;"
-        "}"
-        );
+    ui->back->setStyleSheet("QPushButton {"
+                            "   background: transparent;"
+                            "   border: none;"
+                            "   color: white;"
+                            "}");
 
-    ui->capture->setStyleSheet(
-        "QPushButton {"
-        "   border-radius: 9px;"
-        "   border-bottom: 3px solid rgba(2, 2, 2, 200);"
-        "   background: rgba(11, 194, 0, 200);"
-        "   color: white;"
-        "   font-size: 16px;"
-        "   font-weight: bold;"
-        "}"
-        "QPushButton:hover {"
-        "   background: rgba(8, 154, 0, 230);"
-        "}"
-        "QPushButton:disabled {"
-        "   background: rgba(100, 100, 100, 150);"
-        "   color: rgba(200, 200, 200, 150);"
-        "   border-bottom: 3px solid rgba(50, 50, 50, 150);"
-        "}"
-        );
+    ui->capture->setStyleSheet("QPushButton {"
+                               "   border-radius: 9px;"
+                               "   border-bottom: 3px solid rgba(2, 2, 2, 200);"
+                               "   background: rgba(11, 194, 0, 200);"
+                               "   color: white;"
+                               "   font-size: 16px;"
+                               "   font-weight: bold;"
+                               "}"
+                               "QPushButton:hover {"
+                               "   background: rgba(8, 154, 0, 230);"
+                               "}"
+                               "QPushButton:disabled {"
+                               "   background: rgba(100, 100, 100, 150);"
+                               "   color: rgba(200, 200, 200, 150);"
+                               "   border-bottom: 3px solid rgba(50, 50, 50, 150);"
+                               "}");
 
-    ui->verticalSlider->setStyleSheet(
-        "QSlider::groove:vertical {"
-        "   background: rgba(0, 0, 0, 80);"
-        "   width: 30px;"
-        "   border-radius: 15px;"
-        "   border: none;"
-        "}"
-        "QSlider::handle:vertical {"
-        "   background: rgba(13, 77, 38, 220);"
-        "   border: 1px solid rgba(30, 144, 255, 180);"
-        "   width: 60px;"
-        "   height: 13px;"
-        "   border-radius: 7px;"
-        "   margin: 0 -15px;"
-        "}"
-        "QSlider::sub-page:vertical {"
-        "   background: rgba(0, 0, 0, 60);"
-        "   border-top-left-radius: 15px;"
-        "   border-top-right-radius: 15px;"
-        "   border-bottom-left-radius: 0px;"
-        "   border-bottom-right-radius: 0px;"
-        "}"
-        "QSlider::add-page:vertical {"
-        "   background: rgba(11, 194, 0, 180);"
-        "   border-bottom-left-radius: 15px;"
-        "   border-bottom-right-radius: 15px;"
-        "   border-top-left-radius: 0px;"
-        "   border-top-right-radius: 0px;"
-        "}"
-        );
+    ui->verticalSlider->setStyleSheet("QSlider::groove:vertical {"
+                                      "   background: rgba(0, 0, 0, 80);"
+                                      "   width: 30px;"
+                                      "   border-radius: 15px;"
+                                      "   border: none;"
+                                      "}"
+                                      "QSlider::handle:vertical {"
+                                      "   background: rgba(13, 77, 38, 220);"
+                                      "   border: 1px solid rgba(30, 144, 255, 180);"
+                                      "   width: 60px;"
+                                      "   height: 13px;"
+                                      "   border-radius: 7px;"
+                                      "   margin: 0 -15px;"
+                                      "}"
+                                      "QSlider::sub-page:vertical {"
+                                      "   background: rgba(0, 0, 0, 60);"
+                                      "   border-top-left-radius: 15px;"
+                                      "   border-top-right-radius: 15px;"
+                                      "   border-bottom-left-radius: 0px;"
+                                      "   border-bottom-right-radius: 0px;"
+                                      "}"
+                                      "QSlider::add-page:vertical {"
+                                      "   background: rgba(11, 194, 0, 180);"
+                                      "   border-bottom-left-radius: 15px;"
+                                      "   border-bottom-right-radius: 15px;"
+                                      "   border-top-left-radius: 0px;"
+                                      "   border-top-right-radius: 0px;"
+                                      "}");
 
     ui->overlayWidget->setStyleSheet("background: transparent;");
     qDebug() << "Clean professional overlay styles applied";
@@ -404,18 +427,21 @@ void Capture::resizeEvent(QResizeEvent *event)
     }
 }
 
-void Capture::setCaptureMode(CaptureMode mode) {
+void Capture::setCaptureMode(CaptureMode mode)
+{
     m_currentCaptureMode = mode;
     qDebug() << "Capture mode set to:" << static_cast<int>(mode);
 }
 
-void Capture::setVideoTemplate(const VideoTemplate &templateData) {
+void Capture::setVideoTemplate(const VideoTemplate &templateData)
+{
     m_currentVideoTemplate = templateData;
 }
 
 void Capture::captureRecordingFrame()
 {
-    if (!m_isRecording) return;
+    if (!m_isRecording)
+        return;
 
     if (!ui->videoLabel->pixmap().isNull()) {
         m_recordedFrames.append(ui->videoLabel->pixmap());
@@ -442,7 +468,10 @@ void Capture::on_back_clicked()
 void Capture::on_capture_clicked()
 {
     if (!cameraWorker || !cameraWorker->isCameraOpen()) {
-        QMessageBox::warning(this, "Camera Not Ready", "Camera is not open. Please ensure it's connected and drivers are installed.");
+        QMessageBox::warning(
+            this,
+            "Camera Not Ready",
+            "Camera is not open. Please ensure it's connected and drivers are installed.");
         return;
     }
 
@@ -463,16 +492,16 @@ void Capture::on_capture_clicked()
 void Capture::updateCountdown()
 {
     countdownValue--;
-    if (countdownValue > 0){
+    if (countdownValue > 0) {
         countdownLabel->setText(QString::number(countdownValue));
     } else {
         countdownTimer->stop();
         countdownLabel->hide();
 
-        if(m_currentCaptureMode == ImageCaptureMode){
+        if (m_currentCaptureMode == ImageCaptureMode) {
             performImageCapture();
             ui->capture->setEnabled(true);
-        }else if(m_currentCaptureMode == VideoRecordMode){
+        } else if (m_currentCaptureMode == VideoRecordMode) {
             startRecording();
         }
     }
@@ -485,12 +514,13 @@ void Capture::updateRecordTimer()
     if (m_recordedSeconds >= m_currentVideoTemplate.durationSeconds) {
         stopRecording();
     }
-    qDebug() << "Recording: " + QString::number(m_recordedSeconds) + " / " + QString::number(m_currentVideoTemplate.durationSeconds) + "s";
+    qDebug() << "Recording: " + QString::number(m_recordedSeconds) + " / "
+                    + QString::number(m_currentVideoTemplate.durationSeconds) + "s";
 }
 
 void Capture::startRecording()
 {
-    if(!cameraWorker->isCameraOpen()){
+    if (!cameraWorker->isCameraOpen()) {
         qWarning() << "Cannot start recording: Camera not opened by worker.";
         ui->capture->setEnabled(true);
         return;
@@ -504,17 +534,20 @@ void Capture::startRecording()
 
     recordTimer->start(1000);
     recordingFrameTimer->start(frameIntervalMs);
-    qDebug() << "Recording started at target FPS: " + QString::number(m_targetRecordingFPS) + " frames/sec";
+    qDebug() << "Recording started at target FPS: " + QString::number(m_targetRecordingFPS)
+                    + " frames/sec";
 }
 
 void Capture::stopRecording()
 {
-    if (!m_isRecording) return;
+    if (!m_isRecording)
+        return;
 
     recordTimer->stop();
     recordingFrameTimer->stop();
     m_isRecording = false;
-    qDebug() << "Recording stopped. Captured " + QString::number(m_recordedFrames.size()) + " frames.";
+    qDebug() << "Recording stopped. Captured " + QString::number(m_recordedFrames.size())
+                    + " frames.";
 
     if (!m_recordedFrames.isEmpty()) {
         emit videoRecorded(m_recordedFrames);
@@ -538,11 +571,9 @@ void Capture::performImageCapture()
             QPixmap overlayPixmap(overlayPath);
             if (!overlayPixmap.isNull()) {
                 // Scale overlay to match camera image size
-                QPixmap scaledOverlay = overlayPixmap.scaled(
-                    compositedPixmap.size(),
-                    Qt::KeepAspectRatioByExpanding,
-                    Qt::SmoothTransformation
-                );
+                QPixmap scaledOverlay = overlayPixmap.scaled(compositedPixmap.size(),
+                                                             Qt::KeepAspectRatioByExpanding,
+                                                             Qt::SmoothTransformation);
                 // Composite overlay onto camera image
                 QPainter painter(&compositedPixmap);
                 painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
@@ -555,7 +586,9 @@ void Capture::performImageCapture()
         qDebug() << "Image captured and composited with overlay.";
     } else {
         qWarning() << "Failed to capture image: videoLabel pixmap is empty.";
-        QMessageBox::warning(this, "Capture Failed", "No camera feed available to capture an image.");
+        QMessageBox::warning(this,
+                             "Capture Failed",
+                             "No camera feed available to capture an image.");
     }
     emit showFinalOutputPage();
 }
@@ -563,9 +596,12 @@ void Capture::performImageCapture()
 void Capture::on_verticalSlider_valueChanged(int value)
 {
     int tickInterval = ui->verticalSlider->tickInterval();
-    if (tickInterval == 0) return;
-    int snappedValue = qRound((double)value / tickInterval) * tickInterval;
-    snappedValue = qBound(ui->verticalSlider->minimum(), snappedValue, ui->verticalSlider->maximum());
+    if (tickInterval == 0)
+        return;
+    int snappedValue = qRound((double) value / tickInterval) * tickInterval;
+    snappedValue = qBound(ui->verticalSlider->minimum(),
+                          snappedValue,
+                          ui->verticalSlider->maximum());
     if (value != snappedValue) {
         ui->verticalSlider->setValue(snappedValue);
     }

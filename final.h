@@ -1,19 +1,21 @@
 #ifndef FINAL_H
 #define FINAL_H
 
-#include <QWidget>
-#include <QPixmap>
-#include <QList>
-#include <QTimer>
+#include <QGridLayout> // For the main layout of the Final widget
 #include <QLabel>
+#include <QList>
+#include <QPixmap>
 #include <QStackedLayout> // For the stacked layout to layer widgets
-#include <QGridLayout>   // For the main layout of the Final widget
+#include <QTimer>
+#include <QWidget>
 
 // Forward declare OpenCV classes (good practice if only used in .cpp)
 // You typically include <opencv2/opencv.hpp> in the .cpp file where these are used.
 
 QT_BEGIN_NAMESPACE
-namespace Ui { class Final; }
+namespace Ui {
+class Final;
+}
 QT_END_NAMESPACE
 
 class Final : public QWidget
@@ -46,7 +48,7 @@ private:
     QList<QPixmap> m_videoFrames; // Stores frames for video playback/saving
     int m_currentFrameIndex;
 
-    QStackedLayout* m_stackedLayout = nullptr; // Member for the stacked layout
+    QStackedLayout *m_stackedLayout = nullptr; // Member for the stacked layout
 
     QPixmap m_lastLoadedImage; // To store the original image for resizing
 

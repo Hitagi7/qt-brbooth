@@ -1,25 +1,28 @@
 #include "brbooth.h"
+#include <QDebug>
 #include "background.h"
+#include "camera.h"
 #include "capture.h"
 #include "dynamic.h"
 #include "final.h"
 #include "foreground.h"
 #include "ui_brbooth.h"
-#include "videotemplate.h" // Needed for VideoTemplate object creation
-#include "camera.h"        // Needed for Camera worker class
 #include <QDebug>
 #include <opencv2/opencv.hpp> // Using CV_VERSION for debug
 #include <QMovie>   // For GIF animation
 #include <QLabel>   // To display QMovie
 #include <QStyle>   // For QStyle::polish
 #include <QResizeEvent> // For resizeEvent override
+#include "videotemplate.h"
+#include <opencv2/opencv.hpp> // Keep if CV_VERSION is directly used or other OpenCV types/functions are used
 
 BRBooth::BRBooth(QWidget *parent)
     : QMainWindow(parent)
     , ui(new Ui::BRBooth)
     , cameraThread(new QThread(this)) // Initialize cameraThread first
     , cameraWorker(new Camera())      // Initialize cameraWorker second
-    , lastVisitedPageIndex(0)         // Initialize lastVisitedPageIndex (will be overwritten by initial showLandingPage)
+    , lastVisitedPageIndex(
+          0) // Initialize lastVisitedPageIndex (will be overwritten by initial showLandingPage)
 {
     qDebug() << "OpenCV Version: " << CV_VERSION;
     ui->setupUi(this);
@@ -155,7 +158,10 @@ BRBooth::BRBooth(QWidget *parent)
     }
 
     if (backgroundPage) {
-        connect(backgroundPage, &Background::backtoForegroundPage, this, &BRBooth::showForegroundPage);
+        connect(backgroundPage,
+                &Background::backtoForegroundPage,
+                this,
+                &BRBooth::showForegroundPage);
         connect(backgroundPage, &Background::imageSelectedTwice, this, [this]() {
             capturePage->setCaptureMode(Capture::ImageCaptureMode);
             showCapturePage(); // This call will now correctly store the background page index as lastVisited
@@ -256,7 +262,8 @@ void BRBooth::showCapturePage()
     // CRITICAL FIX: When we call showCapturePage(), the *current* page is the one we want to remember
     // as the "last visited" (the page to go back to).
     lastVisitedPageIndex = ui->stackedWidget->currentIndex();
-    qDebug() << "DEBUG: showCapturePage() called. Setting index to:" << capturePageIndex << ". SAVED lastVisitedPageIndex (page we just came from):" << lastVisitedPageIndex;
+    qDebug() << "DEBUG: showCapturePage() called. Setting index to:" << capturePageIndex
+             << ". SAVED lastVisitedPageIndex (page we just came from):" << lastVisitedPageIndex;
     ui->stackedWidget->setCurrentIndex(capturePageIndex);
 }
 

@@ -108,18 +108,25 @@ void Foreground::on_back_clicked()
 
 void Foreground::processImageButtonClick(QPushButton *button)
 {
-    if (!button) return;
+    if (!button)
+        return;
 
     // Set selected foreground based on objectName
-    QString name = button->objectName();  // e.g., "image1"
+    QString name = button->objectName(); // e.g., "image1"
     QString path;
 
-    if (name == "image1") path = ":/foreground/templates/foreground/1.png";
-    else if (name == "image2") path = ":/foreground/templates/foreground/2.png";
-    else if (name == "image3") path = ":/foreground/templates/foreground/3.png";
-    else if (name == "image4") path = ":/foreground/templates/foreground/4.png";
-    else if (name == "image5") path = ":/foreground/templates/foreground/5.png";
-    else if (name == "image6") path = ":/foreground/templates/foreground/6.png";
+    if (name == "image1")
+        path = ":/foreground/templates/foreground/1.png";
+    else if (name == "image2")
+        path = ":/foreground/templates/foreground/2.png";
+    else if (name == "image3")
+        path = ":/foreground/templates/foreground/3.png";
+    else if (name == "image4")
+        path = ":/foreground/templates/foreground/4.png";
+    else if (name == "image5")
+        path = ":/foreground/templates/foreground/5.png";
+    else if (name == "image6")
+        path = ":/foreground/templates/foreground/6.png";
 
     if (!path.isEmpty()) {
         setSelectedForeground(path);
@@ -140,7 +147,6 @@ void Foreground::processImageButtonClick(QPushButton *button)
         currentSelectedImageButton = button;
     }
 }
-
 
 void Foreground::setSelectedForeground(const QString &path)
 {

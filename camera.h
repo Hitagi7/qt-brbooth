@@ -1,11 +1,11 @@
 #ifndef CAMERA_H
 #define CAMERA_H
 
-#include <QObject>
-#include <QImage>
-#include <QTimer>
 #include <QDebug>
 #include <QElapsedTimer>
+#include <QImage>
+#include <QObject>
+#include <QTimer>
 #include <opencv2/opencv.hpp>
 
 // Forward declaration for cvMatToQImage utility
