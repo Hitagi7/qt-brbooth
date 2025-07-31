@@ -9,9 +9,12 @@
 #include <QTimer>
 #include <QPixmap>
 #include <QList>
+#include <QCheckBox>
+#include <QApplication>
 #include <opencv2/opencv.hpp>
 #include "videotemplate.h"
 #include "foreground.h"
+#include "simplepersondetector.h"
 
 // --- NEW INCLUDES FOR QPROCESS AND JSON ---
 #include <QProcess>
@@ -39,6 +42,11 @@ QT_BEGIN_NAMESPACE
 namespace Ui { class Capture; }
 QT_END_NAMESPACE
 
+// Forward declarations
+class QCheckBox;
+class QLabel;
+class QTimer;
+
 class Capture : public QWidget
 {
     Q_OBJECT
@@ -60,12 +68,15 @@ public:
     bool getShowBoundingBoxes() const;
     int getDetectionCount() const;
     double getAverageConfidence() const;
+    void onBoundingBoxCheckBoxToggled(bool checked);
+    void testYoloDetection(); // Test method for YOLO detection
     // --- END NEW ---
 
 protected:
     void resizeEvent(QResizeEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
     void showEvent(QShowEvent *event) override;
+    void hideEvent(QHideEvent *event) override;
 
 private slots:
     void updateCameraFeed();
@@ -84,6 +95,10 @@ private slots:
     void handleYoloErrorOccurred(QProcess::ProcessError error);
     void printPerformanceStats(); // <-- ADDED THIS DECLARATION
     // --- END NEW SLOTS ---
+    
+    // --- NEW: Debug Display Slots ---
+    void updateDebugDisplay();
+    // --- END NEW ---
     
 private:
     Ui::Capture *ui;
@@ -120,10 +135,15 @@ private:
     QElapsedTimer frameTimer;
 
     // --- MODIFIED/NEW MEMBERS FOR ASYNCHRONOUS YOLO ---
-    QProcess *yoloProcess; // QProcess member
+    QProcess *yoloProcess; // QProcess member (keeping for fallback)
     bool isProcessingFrame; // Flag to manage concurrent detection calls
     QString currentTempImagePath; // To keep track of the temp image being processed
     // --- END MODIFIED/NEW MEMBERS ---
+    
+    // --- NEW: C++ Person Detector ---
+    SimplePersonDetector *m_personDetector; // Simple person detector
+    bool m_useCppDetector; // Flag to use C++ detector instead of Python
+    // --- END NEW ---
 
     // --- NEW: Bounding Box Members ---
     QList<BoundingBox> m_currentDetections; // Store current frame detections
@@ -133,7 +153,7 @@ private:
 
     // pass foreground
     Foreground *foreground;
-    QLabel* overlayImageLabel = nullptr;
+    QLabel* overlayImageLabel;
     // --- MODIFIED: detectPersonInImage now returns void, processing done in slot ---
     void detectPersonInImage(const QString& imagePath);
 
@@ -141,6 +161,22 @@ private:
     void drawBoundingBoxes(QPixmap& pixmap, const QList<BoundingBox>& detections);
     void updateDetectionResults(const QList<BoundingBox>& detections);
     void showBoundingBoxNotification();
+    // --- END NEW ---
+
+    // --- NEW: Debug Display Members ---
+    QWidget *debugWidget;
+    QLabel *debugLabel;
+    QLabel *fpsLabel;
+    QLabel *detectionLabel;
+    QCheckBox *boundingBoxCheckBox;
+    QTimer *debugUpdateTimer;
+    int m_currentFPS;
+    bool m_personDetected;
+    int m_detectionCount;
+    double m_averageConfidence;
+    
+    // --- NEW: Debug Display Methods ---
+    void setupDebugDisplay();
     // --- END NEW ---
 
 signals:

@@ -13,6 +13,9 @@
 #include <QGridLayout> // New: For main layout
 #include <QPainter> // For drawing bounding boxes
 #include <QKeyEvent> // For keyboard event handling
+#include <QCheckBox> // For bounding box toggle checkbox
+#include <QApplication> // For Qt::WindowStaysOnTopHint
+#include <QPushButton> // For debug panel buttons
 #include <opencv2/opencv.hpp>
 
 Capture::Capture(QWidget *parent, Foreground *fg)
@@ -37,6 +40,18 @@ Capture::Capture(QWidget *parent, Foreground *fg)
     , foreground(fg)
     , yoloProcess(new QProcess(this)) // Initialize QProcess here!
     , m_showBoundingBoxes(true) // Initialize bounding box display to true
+    , debugLabel(nullptr)
+    , fpsLabel(nullptr)
+    , detectionLabel(nullptr)
+    , boundingBoxCheckBox(nullptr)
+    , debugUpdateTimer(nullptr)
+    , m_currentFPS(0)
+    , m_personDetected(false)
+    , m_detectionCount(0)
+    , m_averageConfidence(0.0)
+    , overlayImageLabel(nullptr)
+    , m_personDetector(new SimplePersonDetector())
+    , m_useCppDetector(true) // Use C++ detector by default
 {
     ui->setupUi(this);
 
@@ -51,6 +66,10 @@ Capture::Capture(QWidget *parent, Foreground *fg)
     QGridLayout* mainLayout = new QGridLayout(this);
     mainLayout->setContentsMargins(0, 0, 0, 0);
     mainLayout->setSpacing(0);
+
+    // --- NEW: Setup Debug Display ---
+    setupDebugDisplay();
+    // --- END NEW ---
 
     //QT Foreground Overlay ========================================================s
     overlayImageLabel = new QLabel(ui->overlayWidget);
@@ -167,14 +186,14 @@ Capture::Capture(QWidget *parent, Foreground *fg)
     int timerInterval = qMax(1, static_cast<int>(1000.0 / actual_fps));
     qDebug() << "Setting camera timer interval to" << timerInterval << "ms for" << actual_fps << "FPS";
 
-    // Start camera timer for updates with dynamic interval
+    // Create camera timer but DON'T start it yet - only start when page is shown
     cameraTimer = new QTimer(this);
     connect(cameraTimer, &QTimer::timeout, this, &Capture::updateCameraFeed);
-    cameraTimer->start(timerInterval); // ✅ Use actual camera FPS
+    // cameraTimer->start(timerInterval); // ❌ REMOVED: Don't start immediately
 
-    // Initialize and start performance timers
-    loopTimer.start();
-    frameTimer.start();
+    // Initialize performance timers but don't start them yet
+    // loopTimer.start(); // ❌ REMOVED: Don't start immediately
+    // frameTimer.start(); // ❌ REMOVED: Don't start immediately
 
     ui->capture->setEnabled(true);
 
@@ -192,7 +211,6 @@ Capture::Capture(QWidget *parent, Foreground *fg)
     // Setup timers
     countdownTimer = new QTimer(this);
     connect(countdownTimer, &QTimer::timeout, this, &Capture::updateCountdown);
-    qDebug() << "OpenCV Camera display timer started for" << actual_fps << "FPS";
 
     recordTimer = new QTimer(this);
     connect(recordTimer, &QTimer::timeout, this, &Capture::updateRecordTimer);
@@ -214,6 +232,59 @@ Capture::Capture(QWidget *parent, Foreground *fg)
     connect(yoloProcess, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this, &Capture::handleYoloFinished);
     connect(yoloProcess, &QProcess::errorOccurred, this, &Capture::handleYoloErrorOccurred);
     // --- END CONNECT QPROCESS SIGNALS ---
+
+    // Check if YOLO model file exists
+    QString modelPath = QCoreApplication::applicationDirPath() + "/../../../yolov5/yolov5n.pt";
+    QFileInfo modelFile(modelPath);
+    if (!modelFile.exists()) {
+        modelPath = QCoreApplication::applicationDirPath() + "/yolov5/yolov5n.pt";
+        modelFile.setFile(modelPath);
+    }
+    
+    if (modelFile.exists()) {
+        qDebug() << "YOLOv5 model found at:" << modelPath;
+        qDebug() << "Model file size:" << modelFile.size() << "bytes";
+        
+        // Initialize the C++ person detector
+        if (m_useCppDetector) {
+            qDebug() << "Initializing C++ person detector...";
+            if (m_personDetector->initialize()) {
+                qDebug() << "✅ C++ person detector initialized successfully!";
+            } else {
+                qWarning() << "❌ Failed to initialize C++ person detector, falling back to Python";
+                m_useCppDetector = false;
+            }
+        }
+    } else {
+        qWarning() << "YOLOv5 model file not found! Expected at:" << modelPath;
+        qWarning() << "Detection will not work without the model file.";
+        m_useCppDetector = false;
+    }
+
+    // Test Python environment
+    QProcess testProcess;
+    testProcess.start("python3", QStringList() << "-c" << "import torch; print('PyTorch version:', torch.__version__)");
+    if (testProcess.waitForStarted(1000)) {
+        if (testProcess.waitForFinished(5000)) {
+            QByteArray output = testProcess.readAllStandardOutput();
+            qDebug() << "Python3 test output:" << output.trimmed();
+        } else {
+            qWarning() << "Python3 test timed out";
+        }
+    } else {
+        qDebug() << "Python3 not found, trying python...";
+        testProcess.start("python", QStringList() << "-c" << "import torch; print('PyTorch version:', torch.__version__)");
+        if (testProcess.waitForStarted(1000)) {
+            if (testProcess.waitForFinished(5000)) {
+                QByteArray output = testProcess.readAllStandardOutput();
+                qDebug() << "Python test output:" << output.trimmed();
+            } else {
+                qWarning() << "Python test timed out";
+            }
+        } else {
+            qWarning() << "Neither python3 nor python found! YOLO detection will not work.";
+        }
+    }
 
     qDebug() << "OpenCV Camera started successfully with hybrid stacked layout and optimized FPS!";
 }
@@ -396,6 +467,12 @@ void Capture::resizeEvent(QResizeEvent *event)
     update();
     if (ui->videoLabel) ui->videoLabel->resize(this->size());
     if (ui->overlayWidget) ui->overlayWidget->resize(this->size());
+    
+    // Reposition debug panel
+    QWidget* debugPanel = findChild<QWidget*>("debugPanel");
+    if (debugPanel) {
+        debugPanel->move(width() - debugPanel->width() - 20, 20);
+    }
 }
 
 void Capture::setCaptureMode(CaptureMode mode) {
@@ -445,32 +522,83 @@ double Capture::getAverageConfidence() const
 }
 
 void Capture::detectPersonInImage(const QString& imagePath) {
-    // This check is now mostly handled by the caller (updateCameraFeed),
-    // but remains as a safeguard.
     if (yoloProcess->state() == QProcess::Running) {
-        qDebug() << "YOLO process already running (from detectPersonInImage), skipping start.";
+        qDebug() << "YOLO process is already running, skipping this frame";
         return;
     }
 
-    currentTempImagePath = imagePath; // Store the path for deletion later
-
-    QString program = "python";
+    // Use python3 explicitly and provide full path to the script
+    QString program = "python3";
     QStringList arguments;
-    arguments << "yolov5/detect.py"
+    
+    // Get the absolute path to the detect.py script
+    QString scriptPath = QCoreApplication::applicationDirPath() + "/../../../yolov5/detect.py";
+    QFileInfo scriptFile(scriptPath);
+    
+    if (!scriptFile.exists()) {
+        qWarning() << "YOLOv5 detect.py script not found at:" << scriptPath;
+        // Try alternative paths
+        scriptPath = QCoreApplication::applicationDirPath() + "/yolov5/detect.py";
+        scriptFile.setFile(scriptPath);
+        if (!scriptFile.exists()) {
+            qWarning() << "YOLOv5 detect.py script not found at alternative path:" << scriptPath;
+            return;
+        }
+    }
+    
+    arguments << scriptPath
               << "--weights" << "yolov5/yolov5n.pt"
               << "--source" << imagePath
               << "--classes" << "0" // Class ID for 'person'
+              << "--conf-thres" << "0.25" // Lower confidence threshold for better detection
+              << "--iou-thres" << "0.45" // Standard IoU threshold
               << "--nosave"; // CRUCIAL: ensures output is to stdout, not saved to file
 
-    yoloProcess->setWorkingDirectory(QCoreApplication::applicationDirPath() + "/../../../"); // Corrected path
+    // Set working directory to the project root
+    QString workingDir = QCoreApplication::applicationDirPath() + "/../../../";
+    QDir dir(workingDir);
+    if (!dir.exists()) {
+        workingDir = QCoreApplication::applicationDirPath();
+    }
+    yoloProcess->setWorkingDirectory(workingDir);
 
-    qDebug() << "Starting YOLOv5 process for frame detection...";
+    qDebug() << "=== YOLO DIAGNOSTIC INFO ===";
     qDebug() << "Program:" << program;
     qDebug() << "Arguments:" << arguments.join(" ");
     qDebug() << "Working Directory:" << yoloProcess->workingDirectory();
-    qDebug() << "Source Image Path:" << imagePath;
+    qDebug() << "Image path:" << imagePath;
+    qDebug() << "Script path:" << scriptPath;
+    qDebug() << "Current temp image path:" << currentTempImagePath;
+    
+    // Check if the image file exists
+    QFileInfo fileInfo(imagePath);
+    if (!fileInfo.exists()) {
+        qWarning() << "Image file does not exist:" << imagePath;
+        return;
+    }
+    qDebug() << "Image file exists, size:" << fileInfo.size() << "bytes";
 
+    // Store the current temp image path for cleanup
+    currentTempImagePath = imagePath;
+
+    // Try python3 first, fallback to python
     yoloProcess->start(program, arguments);
+    
+    // If python3 fails, try python
+    if (!yoloProcess->waitForStarted(1000)) {
+        qDebug() << "python3 failed, trying python...";
+        program = "python";
+        yoloProcess->start(program, arguments);
+        
+        if (!yoloProcess->waitForStarted(1000)) {
+            qWarning() << "Both python3 and python failed to start YOLO process!";
+            qWarning() << "This indicates a Python environment issue.";
+            isProcessingFrame = false;
+            return;
+        }
+    }
+    
+    qDebug() << "YOLO process started successfully with PID:" << yoloProcess->processId();
 }
 
 void Capture::updateCameraFeed()
@@ -502,9 +630,19 @@ void Capture::updateCameraFeed()
             QList<BoundingBox> detections = m_currentDetections; // Copy for thread safety
             locker.unlock();
             
+            qDebug() << "🔍 Bounding boxes enabled, checking" << detections.size() << "detections";
+            
             if (!detections.isEmpty()) {
+                qDebug() << "🎯 Drawing" << detections.size() << "bounding boxes on pixmap size:" << pixmap.size();
+                
+                // Draw bounding boxes directly on the original pixmap (no scaling needed)
+                // The detections are already in the correct coordinate system for the original frame
                 drawBoundingBoxes(pixmap, detections);
+            } else {
+                qDebug() << "⚠️ No detections to draw";
             }
+        } else {
+            qDebug() << "🚫 Bounding boxes disabled";
         }
         
         QSize labelSize = ui->videoLabel->size();
@@ -513,30 +651,73 @@ void Capture::updateCameraFeed()
         ui->videoLabel->setAlignment(Qt::AlignTop | Qt::AlignLeft);
         ui->videoLabel->update();
     } else {
-        // If image conversion failed, no display, so skip YOLO for this frame.
-        isProcessingFrame = false; // Ensure it's false as we can't proceed with YOLO
-        qWarning() << "Failed to convert OpenCV frame to QImage.";
-        // Fall through to performance stats to account for this frame
+        qWarning() << "Failed to convert OpenCV frame to QImage";
+        isProcessingFrame = false;
+        return;
     }
 
-    // Now, handle YOLO processing only if not already busy
-    if (!isProcessingFrame) { // Proceed with YOLO if free
-        // --- YOLOv5n Person Detection Trigger ---
-        QString tempImagePath = QDir::temp().filePath(
-            "yolo_temp_" + QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss_zzz") + ".jpg"
-            );
-        if (!cv::imwrite(tempImagePath.toStdString(), frame)) { // Save the original (flipped) frame
-            qWarning() << "Failed to save temporary image:" << tempImagePath;
-            // No YOLO for this frame, but still count the frame for display FPS
-            // isProcessingFrame remains false.
-            // Fall through to performance stats.
+    // --- OPTIMIZED DETECTION PROCESSING: Only process every 3rd frame to maintain good FPS ---
+    static int frameSkipCounter = 0;
+    frameSkipCounter++;
+    
+    // Run detection every 20th frame to balance aggressive detection with performance
+    if (frameSkipCounter % 20 == 0 && !isProcessingFrame) {
+        if (m_useCppDetector && m_personDetector && m_personDetector->isInitialized()) {
+            // Use C++ person detector
+            isProcessingFrame = true;
+            
+            try {
+                // Run detection directly on the frame
+                QList<SimpleDetection> detections = m_personDetector->detect(frame);
+                
+                // Convert SimpleDetection objects to BoundingBox objects
+                QList<BoundingBox> boundingBoxes;
+                for (const SimpleDetection& det : detections) {
+                    // Validate detection before converting - accept any confidence value
+                    if (det.boundingBox.width > 0 && det.boundingBox.height > 0) {
+                        BoundingBox box(
+                            det.boundingBox.x,
+                            det.boundingBox.y,
+                            det.boundingBox.x + det.boundingBox.width,
+                            det.boundingBox.y + det.boundingBox.height,
+                            det.confidence
+                        );
+                        boundingBoxes.append(box);
+                        qDebug() << "✅ Added detection:" << det.boundingBox.x << det.boundingBox.y 
+                                << det.boundingBox.width << "x" << det.boundingBox.height 
+                                << "conf:" << det.confidence;
+                    }
+                }
+                
+                // Update detection results
+                updateDetectionResults(boundingBoxes);
+                
+                if (boundingBoxes.size() > 1) {
+                    qDebug() << "👥 MULTIPLE PEOPLE DETECTED! C++ detector found" << boundingBoxes.size() << "persons";
+                } else {
+                    qDebug() << "C++ person detector found" << boundingBoxes.size() << "persons";
+                }
+                
+            } catch (const std::exception& e) {
+                qWarning() << "Exception in C++ person detection:" << e.what();
+                updateDetectionResults(QList<BoundingBox>());
+            }
+            
+            isProcessingFrame = false;
+            
         } else {
-            isProcessingFrame = true; // Set flag when starting YOLO
-            detectPersonInImage(tempImagePath); // This starts the async process
+            // Fallback to Python YOLO
+            QString tempImagePath = QString("%1/temp_frame_%2.jpg")
+                .arg(QCoreApplication::applicationDirPath())
+                .arg(QDateTime::currentMSecsSinceEpoch());
+                
+            if (!cv::imwrite(tempImagePath.toStdString(), frame)) { // Save the original (flipped) frame
+                qWarning() << "Failed to save temporary image:" << tempImagePath;
+            } else {
+                isProcessingFrame = true; // Set flag when starting YOLO
+                detectPersonInImage(tempImagePath); // This starts the async process
+            }
         }
-    } else {
-        // qDebug() << "YOLO processing skipped for this frame due to busy state."; // Uncomment for verbose skipping
-        // Fall through to performance stats.
     }
     
     // Clear old detections if YOLO is not processing (to avoid stale boxes)
@@ -545,10 +726,11 @@ void Capture::updateCameraFeed()
         QMutexLocker locker(&m_detectionMutex);
         if (!isProcessingFrame && !m_currentDetections.isEmpty()) {
             frameCounter++;
-            // Clear detections after 30 frames (about 0.5 seconds at 60 FPS) if no new detection
-            if (frameCounter > 30) {
+            // Clear detections after 60 frames (about 1 second at 60 FPS) if no new detection
+            if (frameCounter > 60) {
                 m_currentDetections.clear();
                 frameCounter = 0;
+                qDebug() << "Cleared stale detections after timeout";
             }
         } else if (isProcessingFrame) {
             // Reset counter when YOLO is processing
@@ -561,6 +743,12 @@ void Capture::updateCameraFeed()
     qint64 currentLoopTime = loopTimer.elapsed(); // Time taken for this entire updateCameraFeed call
     totalTime += currentLoopTime;
     frameCount++;
+
+    // Calculate current FPS for debug display
+    if (frameCount % 10 == 0) { // Update FPS every 10 frames for smoother display
+        double currentFPS = 1000.0 / (currentLoopTime > 0 ? currentLoopTime : 1);
+        m_currentFPS = static_cast<int>(currentFPS);
+    }
 
     // Print stats every 60 frames
     if (frameCount % 60 == 0) {
@@ -593,79 +781,207 @@ void Capture::printPerformanceStats() {
 
 void Capture::handleYoloOutput() {
     QByteArray output = yoloProcess->readAllStandardOutput();
-    // qDebug() << "YOLOv5 StdOut (Raw):" << output; // Uncomment for verbose output
+    qDebug() << "=== YOLO OUTPUT RECEIVED ===";
+    qDebug() << "Raw output length:" << output.length() << "bytes";
+    qDebug() << "Raw output:" << output;
 
+    // Try to parse as JSON
     QJsonDocument doc = QJsonDocument::fromJson(output);
-
+    
     if (!doc.isNull() && doc.isArray()) {
         QJsonArray results = doc.array();
         bool personDetected = false;
         QList<BoundingBox> detections;
         
+        qDebug() << "✅ Successfully parsed JSON with" << results.size() << "results";
+        
         for (const QJsonValue& imageResult : results) {
             QJsonObject obj = imageResult.toObject();
             QJsonArray detectionArray = obj["detections"].toArray();
+            
+            qDebug() << "Processing image result with" << detectionArray.size() << "detections";
+            
             if (!detectionArray.isEmpty()) {
                 personDetected = true;
-                qDebug() << "Person(s) detected! Number of detections:" << detectionArray.size();
+                qDebug() << "🎯 Person(s) detected! Number of detections:" << detectionArray.size();
                 for (const QJsonValue& detectionValue : detectionArray) {
                     QJsonObject detection = detectionValue.toObject();
                     QJsonArray bbox = detection["bbox"].toArray();
                     double confidence = detection["confidence"].toDouble();
                     
-                    // Create bounding box object
-                    BoundingBox box(
-                        bbox.at(0).toInt(), // x1
-                        bbox.at(1).toInt(), // y1
-                        bbox.at(2).toInt(), // x2
-                        bbox.at(3).toInt(), // y2
-                        confidence
-                    );
-                    detections.append(box);
-                    
-                    qDebug() << "  BBox:" << box.x1 << box.y1 << box.x2 << box.y2
-                             << "Confidence:" << box.confidence;
+                    if (bbox.size() == 4) {
+                        // Create bounding box object
+                        BoundingBox box(
+                            bbox.at(0).toInt(), // x1
+                            bbox.at(1).toInt(), // y1
+                            bbox.at(2).toInt(), // x2
+                            bbox.at(3).toInt(), // y2
+                            confidence
+                        );
+                        detections.append(box);
+                        
+                        qDebug() << "  📦 BBox:" << box.x1 << box.y1 << box.x2 << box.y2
+                                 << "Confidence:" << box.confidence;
+                    } else {
+                        qWarning() << "❌ Invalid bbox array size:" << bbox.size();
+                    }
                 }
+            } else {
+                qDebug() << "❌ No detections found in this image result";
             }
         }
         
         // Update detection results for drawing
         updateDetectionResults(detections);
         
+        // Update debug information
+        m_personDetected = personDetected;
+        m_detectionCount = detections.size();
+        
+        // Calculate average confidence
+        if (!detections.isEmpty()) {
+            double totalConfidence = 0.0;
+            for (const BoundingBox& box : detections) {
+                totalConfidence += box.confidence;
+            }
+            m_averageConfidence = totalConfidence / detections.size();
+            qDebug() << "📊 Average confidence:" << m_averageConfidence;
+        } else {
+            m_averageConfidence = 0.0;
+        }
+        
         if (personDetected) {
             emit personDetectedInFrame(); // Emit signal if any person was found
+            qDebug() << "🚀 Emitted personDetectedInFrame signal";
         } else {
-            qDebug() << "No person detected in frame.";
+            qDebug() << "❌ No person detected in frame.";
         }
     } else {
-        qDebug() << "Detection output is not a valid JSON array or is null. Raw output was:" << output;
+        qDebug() << "❌ Detection output is not a valid JSON array or is null.";
+        qDebug() << "Raw output was:" << output;
+        
+        // Try to extract any useful information from the output
+        QString outputStr = QString::fromUtf8(output);
+        if (outputStr.contains("person", Qt::CaseInsensitive)) {
+            qDebug() << "ℹ️ Output contains 'person' keyword - might indicate detection";
+        }
+        if (outputStr.contains("error", Qt::CaseInsensitive)) {
+            qWarning() << "⚠️ Output contains 'error' keyword - check for Python errors";
+        }
+        if (outputStr.contains("torch", Qt::CaseInsensitive)) {
+            qDebug() << "ℹ️ Output contains 'torch' keyword - PyTorch related message";
+        }
+        
         // Clear detections if no valid output
         updateDetectionResults(QList<BoundingBox>());
+        
+        // Clear debug information
+        m_personDetected = false;
+        m_detectionCount = 0;
+        m_averageConfidence = 0.0;
     }
+    
+    qDebug() << "=== END YOLO OUTPUT PROCESSING ===";
 }
 
 void Capture::handleYoloError() {
     QByteArray errorOutput = yoloProcess->readAllStandardError();
     if (!errorOutput.isEmpty()) {
-        qWarning() << "YOLOv5 Python Script Errors/Warnings (stderr):" << errorOutput;
+        qWarning() << "=== YOLO ERROR OUTPUT ===";
+        qWarning() << "Error output length:" << errorOutput.length() << "bytes";
+        qWarning() << "Error output:" << errorOutput;
+        
+        // Check for common errors
+        QString errorStr = QString::fromUtf8(errorOutput);
+        if (errorStr.contains("No module named", Qt::CaseInsensitive)) {
+            qWarning() << "❌ Missing Python module - check if ultralytics is installed";
+            qWarning() << "   Try: pip install ultralytics";
+        } else if (errorStr.contains("FileNotFoundError", Qt::CaseInsensitive)) {
+            qWarning() << "❌ File not found error - check script and model paths";
+        } else if (errorStr.contains("CUDA", Qt::CaseInsensitive)) {
+            qWarning() << "⚠️ CUDA/GPU related error - falling back to CPU";
+        } else if (errorStr.contains("torch", Qt::CaseInsensitive)) {
+            qWarning() << "❌ PyTorch related error - check PyTorch installation";
+            qWarning() << "   Try: pip install torch torchvision";
+        } else if (errorStr.contains("ImportError", Qt::CaseInsensitive)) {
+            qWarning() << "❌ Import error - missing dependencies";
+        } else if (errorStr.contains("PermissionError", Qt::CaseInsensitive)) {
+            qWarning() << "❌ Permission error - check file access rights";
+        } else if (errorStr.contains("OSError", Qt::CaseInsensitive)) {
+            qWarning() << "❌ OS error - check system compatibility";
+        } else {
+            qWarning() << "⚠️ Unknown error type - check Python environment";
+        }
+        
+        qWarning() << "=== END YOLO ERROR OUTPUT ===";
     }
 }
 
 void Capture::handleYoloFinished(int exitCode, QProcess::ExitStatus exitStatus) {
     qDebug() << "YOLOv5 process finished with exit code:" << exitCode << "and status:" << exitStatus;
+    
     if (exitCode != 0) {
         qWarning() << "YOLOv5 script exited with an error. Check stderr for details.";
         qWarning() << "Final Stderr (if any):" << yoloProcess->readAllStandardError();
+        
         // Clear detections on error
         updateDetectionResults(QList<BoundingBox>());
+        
+        // Clear debug information
+        m_personDetected = false;
+        m_detectionCount = 0;
+        m_averageConfidence = 0.0;
+    } else {
+        qDebug() << "YOLOv5 process completed successfully";
     }
+    
     isProcessingFrame = false; // Always reset the flag when the process finishes
 
     // Ensure any remaining output is read (edge case)
-    yoloProcess->readAllStandardOutput();
-    yoloProcess->readAllStandardError();
+    QByteArray remainingOutput = yoloProcess->readAllStandardOutput();
+    if (!remainingOutput.isEmpty()) {
+        qDebug() << "Processing remaining output after process finished:" << remainingOutput;
+        // Process any remaining output
+        QByteArray fullOutput = remainingOutput;
+        QJsonDocument doc = QJsonDocument::fromJson(fullOutput);
+        if (!doc.isNull() && doc.isArray()) {
+            // Process the remaining output as if it came through handleYoloOutput
+            QJsonArray results = doc.array();
+            bool personDetected = false;
+            QList<BoundingBox> detections;
+            
+            for (const QJsonValue& imageResult : results) {
+                QJsonObject obj = imageResult.toObject();
+                QJsonArray detectionArray = obj["detections"].toArray();
+                
+                if (!detectionArray.isEmpty()) {
+                    personDetected = true;
+                    for (const QJsonValue& detectionValue : detectionArray) {
+                        QJsonObject detection = detectionValue.toObject();
+                        QJsonArray bbox = detection["bbox"].toArray();
+                        double confidence = detection["confidence"].toDouble();
+                        
+                        if (bbox.size() == 4) {
+                            BoundingBox box(
+                                bbox.at(0).toInt(),
+                                bbox.at(1).toInt(),
+                                bbox.at(2).toInt(),
+                                bbox.at(3).toInt(),
+                                confidence
+                            );
+                            detections.append(box);
+                        }
+                    }
+                }
+            }
+            
+            updateDetectionResults(detections);
+            m_personDetected = personDetected;
+            m_detectionCount = detections.size();
+        }
+    }
 
-    // Delete the temporary image file
+    // Clean up temporary image file
     if (!currentTempImagePath.isEmpty()) {
         QFile::remove(currentTempImagePath);
         currentTempImagePath.clear();
@@ -678,6 +994,11 @@ void Capture::handleYoloErrorOccurred(QProcess::ProcessError error) {
 
     // Clear detections on error
     updateDetectionResults(QList<BoundingBox>());
+    
+    // Clear debug information
+    m_personDetected = false;
+    m_detectionCount = 0;
+    m_averageConfidence = 0.0;
 
     // Delete the temporary image file
     if (!currentTempImagePath.isEmpty()) {
@@ -870,6 +1191,12 @@ void Capture::keyPressEvent(QKeyEvent *event)
         showBoundingBoxNotification();
         break;
         
+    case Qt::Key_T:
+        // Test YOLO detection
+        qDebug() << "T key pressed - testing YOLO detection";
+        testYoloDetection();
+        break;
+        
     default:
         // Call parent class for other keys
         QWidget::keyPressEvent(event);
@@ -882,19 +1209,73 @@ void Capture::showEvent(QShowEvent *event)
     QWidget::showEvent(event);
     // Ensure this widget has focus when shown
     setFocus();
+    
+    // Start camera timer and performance timers when page is shown
+    if (cameraTimer && !cameraTimer->isActive()) {
+        qDebug() << "🎬 Starting camera timer - Capture page is now visible";
+        cameraTimer->start();
+        loopTimer.start();
+        frameTimer.start();
+    }
+}
+
+void Capture::hideEvent(QHideEvent *event)
+{
+    QWidget::hideEvent(event);
+    
+    // Stop camera timer and performance timers when page is hidden
+    if (cameraTimer && cameraTimer->isActive()) {
+        qDebug() << "⏸️ Stopping camera timer - Capture page is now hidden";
+        cameraTimer->stop();
+        loopTimer.invalidate();
+        frameTimer.invalidate();
+    }
 }
 
 // --- NEW: Bounding Box Drawing Methods Implementation ---
 
 void Capture::updateDetectionResults(const QList<BoundingBox>& detections)
 {
-    QMutexLocker locker(&m_detectionMutex);
-    m_currentDetections = detections;
-    locker.unlock();
+    try {
+        QMutexLocker locker(&m_detectionMutex);
+        m_currentDetections = detections;
+        locker.unlock();
+        
+        // Update debug display variables
+        m_detectionCount = detections.size();
+        m_personDetected = (detections.size() > 0);
+        
+        // Calculate average confidence
+        if (!detections.isEmpty()) {
+            double totalConfidence = 0.0;
+            int validDetections = 0;
+            for (const BoundingBox& box : detections) {
+                if (box.confidence >= 0.0 && box.confidence <= 1.0) {
+                    totalConfidence += box.confidence;
+                    validDetections++;
+                }
+            }
+            m_averageConfidence = (validDetections > 0) ? (totalConfidence / validDetections) : 0.0;
+        } else {
+            m_averageConfidence = 0.0;
+        }
+    
+    qDebug() << "Detection results updated:" << detections.size() << "detections";
+    for (int i = 0; i < detections.size(); ++i) {
+        const BoundingBox& box = detections[i];
+        qDebug() << "  Detection" << i << ":" << box.x1 << box.y1 << box.x2 << box.y2 << "conf:" << box.confidence;
+    }
     
     // Reset frame counter when new detections arrive
     static int frameCounter = 0;
     frameCounter = 0;
+    
+    } catch (const std::exception& e) {
+        qWarning() << "Exception in updateDetectionResults:" << e.what();
+        m_detectionCount = 0;
+        m_personDetected = false;
+        m_averageConfidence = 0.0;
+    }
 }
 
 void Capture::drawBoundingBoxes(QPixmap& pixmap, const QList<BoundingBox>& detections)
@@ -904,8 +1285,18 @@ void Capture::drawBoundingBoxes(QPixmap& pixmap, const QList<BoundingBox>& detec
     // Set up the painter for drawing
     painter.setRenderHint(QPainter::Antialiasing);
     
+    qDebug() << "🎨 Drawing" << detections.size() << "bounding boxes on pixmap size:" << pixmap.size();
+    
     for (int i = 0; i < detections.size(); ++i) {
         const BoundingBox& box = detections[i];
+        
+        // Validate bounding box coordinates
+        if (box.x1 < 0 || box.y1 < 0 || box.x2 <= box.x1 || box.y2 <= box.y1 ||
+            box.x2 > pixmap.width() || box.y2 > pixmap.height()) {
+            qWarning() << "❌ Invalid bounding box coordinates:" << box.x1 << box.y1 << box.x2 << box.y2
+                       << "pixmap size:" << pixmap.size();
+            continue;
+        }
         
         // Calculate box dimensions
         int width = box.x2 - box.x1;
@@ -913,6 +1304,8 @@ void Capture::drawBoundingBoxes(QPixmap& pixmap, const QList<BoundingBox>& detec
         
         // Create rectangle
         QRect rect(box.x1, box.y1, width, height);
+        
+        qDebug() << "✅ Drawing box" << i << "at" << rect << "with confidence" << box.confidence;
         
         // Set up colors based on confidence
         QColor boxColor;
@@ -925,7 +1318,7 @@ void Capture::drawBoundingBoxes(QPixmap& pixmap, const QList<BoundingBox>& detec
         }
         
         // Draw the bounding box with rounded corners
-        QPen pen(boxColor, 3); // 3 pixel thick line
+        QPen pen(boxColor, 4); // Increased thickness for better visibility
         painter.setPen(pen);
         painter.drawRoundedRect(rect, 5, 5); // Rounded corners
         
@@ -983,6 +1376,7 @@ void Capture::drawBoundingBoxes(QPixmap& pixmap, const QList<BoundingBox>& detec
     }
     
     painter.end();
+    qDebug() << "✅ Finished drawing" << detections.size() << "bounding boxes";
 }
 
 void Capture::showBoundingBoxNotification()
@@ -1022,4 +1416,178 @@ void Capture::showBoundingBoxNotification()
             notificationLabel->deleteLater();
         }
     });
+}
+
+// --- NEW: Debug Display Methods ---
+
+void Capture::setupDebugDisplay() {
+    // Create debug overlay widget
+    debugWidget = new QWidget(this);
+    debugWidget->setStyleSheet("background-color: rgba(0, 0, 0, 150); color: white; border-radius: 10px; padding: 10px;");
+    debugWidget->setFixedSize(400, 200);
+    debugWidget->move(10, 10);
+    debugWidget->setWindowFlags(Qt::WindowStaysOnTopHint);
+    debugWidget->show();
+
+    // Create layout for debug widgets
+    QVBoxLayout* debugLayout = new QVBoxLayout(debugWidget);
+    debugLayout->setSpacing(5);
+
+    // FPS Label
+    fpsLabel = new QLabel("Camera FPS: --", debugWidget);
+    fpsLabel->setStyleSheet("color: white; font-weight: bold;");
+    debugLayout->addWidget(fpsLabel);
+
+    // Detection Label
+    detectionLabel = new QLabel("Detection Status: --", debugWidget);
+    detectionLabel->setStyleSheet("color: white; font-weight: bold;");
+    debugLayout->addWidget(detectionLabel);
+
+    // Main Debug Label
+    debugLabel = new QLabel("Debug Info: --", debugWidget);
+    debugLabel->setStyleSheet("color: white; font-weight: bold;");
+    debugLayout->addWidget(debugLabel);
+
+    // Bounding Box Checkbox
+    boundingBoxCheckBox = new QCheckBox("Show Bounding Boxes", debugWidget);
+    boundingBoxCheckBox->setStyleSheet("color: white; font-weight: bold;");
+    boundingBoxCheckBox->setChecked(m_showBoundingBoxes);
+    connect(boundingBoxCheckBox, &QCheckBox::toggled, this, &Capture::onBoundingBoxCheckBoxToggled);
+    debugLayout->addWidget(boundingBoxCheckBox);
+
+    // Test Button
+    QPushButton* testButton = new QPushButton("Test YOLO Detection", debugWidget);
+    testButton->setStyleSheet("background-color: #4CAF50; color: white; border: none; padding: 8px; border-radius: 5px; font-weight: bold;");
+    connect(testButton, &QPushButton::clicked, this, &Capture::testYoloDetection);
+    debugLayout->addWidget(testButton);
+
+    // Update timer
+    debugUpdateTimer = new QTimer(this);
+    connect(debugUpdateTimer, &QTimer::timeout, this, &Capture::updateDebugDisplay);
+    debugUpdateTimer->start(100); // Update every 100ms for real-time display
+}
+
+void Capture::updateDebugDisplay() {
+    if (!debugLabel || !fpsLabel || !detectionLabel) {
+        return;
+    }
+    
+    // Update FPS display
+    fpsLabel->setText(QString("Camera FPS: %1").arg(m_currentFPS));
+    
+    // Update detection status
+    QString detectionText;
+    if (m_personDetected) {
+        detectionText = QString("DETECTED: %1 person(s) | Avg Conf: %2%")
+            .arg(m_detectionCount)
+            .arg(static_cast<int>(m_averageConfidence * 100));
+        detectionLabel->setStyleSheet("color: green; font-weight: bold;");
+    } else {
+        detectionText = "No person detected";
+        detectionLabel->setStyleSheet("color: red; font-weight: bold;");
+    }
+    detectionLabel->setText(detectionText);
+    
+    // Update main debug info
+    QString debugText = QString("YOLO Status: %1 | BBox: %2 | Processing: %3")
+        .arg(yoloProcess->state() == QProcess::Running ? "Running" : "Idle")
+        .arg(m_showBoundingBoxes ? "ON" : "OFF")
+        .arg(isProcessingFrame ? "Yes" : "No");
+    
+    debugLabel->setText(debugText);
+    
+    // Update bounding box checkbox state
+    if (boundingBoxCheckBox) {
+        boundingBoxCheckBox->setChecked(m_showBoundingBoxes);
+    }
+    
+    // Show detection details if available
+    QMutexLocker locker(&m_detectionMutex);
+    if (!m_currentDetections.isEmpty()) {
+        QString detailsText = "Detection Details:\n";
+        for (int i = 0; i < m_currentDetections.size(); ++i) {
+            const BoundingBox& box = m_currentDetections[i];
+            detailsText += QString("  Person %1: (%2,%3)-(%4,%5) Conf: %6%\n")
+                .arg(i + 1)
+                .arg(box.x1).arg(box.y1).arg(box.x2).arg(box.y2)
+                .arg(static_cast<int>(box.confidence * 100));
+        }
+        qDebug() << detailsText.trimmed();
+    }
+    locker.unlock();
+}
+
+void Capture::onBoundingBoxCheckBoxToggled(bool checked)
+{
+    m_showBoundingBoxes = checked;
+    qDebug() << "Bounding boxes toggled via checkbox to:" << m_showBoundingBoxes;
+    showBoundingBoxNotification();
+}
+
+// --- NEW: Test YOLO Detection Method ---
+void Capture::testYoloDetection() {
+    qDebug() << "=== MANUAL YOLO DETECTION TEST ===";
+    
+    // Create a test image with a simple pattern that should be detectable
+    cv::Mat testImage(480, 640, CV_8UC3, cv::Scalar(128, 128, 128));
+    
+    // Draw a simple rectangle to simulate a person (should be detectable)
+    cv::rectangle(testImage, cv::Point(200, 100), cv::Point(400, 400), cv::Scalar(255, 255, 255), -1);
+    
+    // Add some noise to make it more realistic
+    cv::randn(testImage, cv::Scalar(0, 0, 0), cv::Scalar(30, 30, 30));
+    
+    QString testImagePath = QString("%1/test_detection_%2.jpg")
+        .arg(QCoreApplication::applicationDirPath())
+        .arg(QDateTime::currentMSecsSinceEpoch());
+    
+    if (cv::imwrite(testImagePath.toStdString(), testImage)) {
+        qDebug() << "✅ Created test image:" << testImagePath;
+        qDebug() << "Image size:" << testImage.cols << "x" << testImage.rows;
+        
+        // Check if YOLO process is available
+        if (yoloProcess->state() == QProcess::Running) {
+            qDebug() << "⚠️ YOLO process is currently running, will wait for it to finish...";
+            yoloProcess->waitForFinished(5000); // Wait up to 5 seconds
+        }
+        
+        // Reset detection state for clean test
+        m_personDetected = false;
+        m_detectionCount = 0;
+        m_averageConfidence = 0.0;
+        updateDetectionResults(QList<BoundingBox>());
+        
+        // Start detection
+        detectPersonInImage(testImagePath);
+        
+        // Set up a timer to check results after a delay
+        QTimer::singleShot(5000, [this, testImagePath]() {
+            qDebug() << "=== TEST RESULTS ===";
+            qDebug() << "Detection count:" << m_detectionCount;
+            qDebug() << "Person detected:" << m_personDetected;
+            qDebug() << "Average confidence:" << m_averageConfidence;
+            
+            QMutexLocker locker(&m_detectionMutex);
+            qDebug() << "Current detections:" << m_currentDetections.size();
+            for (int i = 0; i < m_currentDetections.size(); ++i) {
+                const BoundingBox& box = m_currentDetections[i];
+                qDebug() << "  Detection" << i << ":" << box.x1 << box.y1 << box.x2 << box.y2 << "conf:" << box.confidence;
+            }
+            locker.unlock();
+            
+            // Clean up test image
+            QFile::remove(testImagePath);
+            
+            if (m_detectionCount > 0) {
+                qDebug() << "✅ TEST PASSED: YOLO detection is working!";
+            } else {
+                qDebug() << "❌ TEST FAILED: No detections found. Check Python environment and model file.";
+            }
+        });
+        
+    } else {
+        qWarning() << "❌ Failed to create test image";
+    }
+    
+    qDebug() << "=== END TEST ===";
 }
