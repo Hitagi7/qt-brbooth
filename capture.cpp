@@ -46,10 +46,13 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     , totalTime(0)           // Initialize totalTime
     , frameCount(0)          // Initialize frameCount
     , frameTimer()
-    , yoloProcess(new QProcess(this)) // Initialize QProcess here!
-    , isProcessingFrame(false) // Initialize frame processing flag
-    , currentTempImagePath()
     , overlayImageLabel(nullptr)
+    , m_personScaleFactor(1.0) // Initialize to 1.0 (normal size) - matches slider at 0
+    , m_lastDetectedPersonRect() // Initialize empty rectangle
+    , m_personDetected(false) // Initialize person detection flag
+    , personDetector(nullptr) // Initialize person detector pointer
+    , hogEnabled(true) // Enable HOG by default with optimizations
+    , frameSkipCounter(0) // Initialize frame skip counter
 {
     ui->setupUi(this);
 
@@ -125,7 +128,8 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     ui->verticalSlider->setTickPosition(QSlider::TicksBothSides);
     ui->verticalSlider->setTickInterval(tickStep);
     ui->verticalSlider->setSingleStep(tickStep);
-    ui->verticalSlider->setValue(0);
+    ui->verticalSlider->setPageStep(tickStep); // Page step also set to tick interval
+    ui->verticalSlider->setValue(0); // Set to 100 for 1.0x scaling (normal size, no scaling) - slider is inverted
 
     ui->back->setIcon(QIcon(":/icons/Icons/normal.svg"));
     ui->back->setIconSize(QSize(100, 100));
@@ -172,14 +176,20 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
 
     connect(ui->back, &QPushButton::clicked, this, &Capture::on_back_clicked);
     connect(ui->capture, &QPushButton::clicked, this, &Capture::on_capture_clicked);
+
     connect(ui->verticalSlider, &QSlider::valueChanged, this, &Capture::on_verticalSlider_valueChanged);
 
-    // --- CONNECT QPROCESS SIGNALS ONCE IN CONSTRUCTOR ---
-    connect(yoloProcess, &QProcess::readyReadStandardOutput, this, &Capture::handleYoloOutput);
-    connect(yoloProcess, &QProcess::readyReadStandardError, this, &Capture::handleYoloError);
-    connect(yoloProcess, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this, &Capture::handleYoloFinished);
-    connect(yoloProcess, &QProcess::errorOccurred, this, &Capture::handleYoloErrorOccurred);
-    // --- END CONNECT QPROCESS SIGNALS ---
+
+    // --- INITIALIZE ADVANCED HOG DETECTOR ---
+    personDetector = new SimplePersonDetector();
+    if (personDetector->initialize()) {
+        qDebug() << "Advanced HOG person detector initialized successfully";
+        qDebug() << "HOG detection enabled with fallback detection";
+    } else {
+        qWarning() << "Failed to initialize advanced HOG detector";
+        hogEnabled = false;
+    }
+    // --- END INITIALIZE HOG DETECTOR ---
 
     qDebug() << "Capture UI initialized. Loading Camera...";
 }
@@ -198,27 +208,11 @@ Capture::~Capture()
     if (loadingCameraLabel){ delete loadingCameraLabel; loadingCameraLabel = nullptr; }
     if (videoLabelFPS){ delete videoLabelFPS; videoLabelFPS = nullptr; } // Only if you actually 'new' this somewhere
 
-    // === Corrected FIX for YOLO QProcess cleanup ===
-    // Disconnect signals from yoloProcess FIRST to prevent calls to a dying Capture object
-    // It's good practice to disconnect if the slots might try to access 'this' after partial destruction.
-    disconnect(yoloProcess, &QProcess::readyReadStandardOutput, this, &Capture::handleYoloOutput);
-    disconnect(yoloProcess, &QProcess::readyReadStandardError, this, &Capture::handleYoloError);
-    disconnect(yoloProcess, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this, &Capture::handleYoloFinished);
-    disconnect(yoloProcess, &QProcess::errorOccurred, this, &Capture::handleYoloErrorOccurred);
-
-    // Terminate YOLO process on exit if it's still running
-    if (yoloProcess->state() == QProcess::Running) {
-        qDebug() << "Capture: Terminating YOLO process...";
-        yoloProcess->terminate();
-        if (!yoloProcess->waitForFinished(1000)) { // Give it a moment to finish gracefully
-            qWarning() << "Capture: YOLO process did not terminate gracefully, killing...";
-            yoloProcess->kill(); // Force kill if it doesn't terminate
-            yoloProcess->waitForFinished(500); // Wait briefly after kill
-        }
+    // Clean up person detector
+    if (personDetector) {
+        delete personDetector;
+        personDetector = nullptr;
     }
-    // yoloProcess will be deleted by QObject parent mechanism because 'this' is its parent.
-    // No explicit 'delete yoloProcess;' is needed here.
-    // === END Corrected FIX for YOLO QProcess cleanup ===
 
     // DO NOT DELETE cameraWorker or cameraThread here.
     // They are passed in as existing objects, implying Capture does not own them.
@@ -286,7 +280,6 @@ void Capture::updateCameraFeed(const QImage &image)
 
     if (image.isNull()) {
         qWarning() << "Capture: Received null QImage from Camera.";
-        isProcessingFrame = false; // Ensure flag is reset if image is null
         // Performance stats should still be calculated for every attempt to process a frame
         qint64 currentLoopTime = loopTimer.elapsed();
         totalTime += currentLoopTime;
@@ -309,35 +302,42 @@ void Capture::updateCameraFeed(const QImage &image)
     QPixmap pixmap = QPixmap::fromImage(image);
 
     QSize labelSize = ui->videoLabel->size();
+    // --- HOG PERSON DETECTION (OPTIMIZED) ---
+    if (hogEnabled && personDetector && personDetector->isInitialized()) {
+        frameSkipCounter++;
+        if (frameSkipCounter >= HOG_FRAME_SKIP) {
+            detectPersonWithHOG(image);
+            frameSkipCounter = 0;
+        }
+    }
+    // --- END HOG PERSON DETECTION ---
+
     QPixmap scaledPixmap = pixmap.scaled(
         labelSize,
         Qt::KeepAspectRatioByExpanding,
         Qt::FastTransformation
         );
 
+    // --- APPLY FRAME SCALING ---
+    if (qAbs(m_personScaleFactor - 1.0) > 0.01) {
+        // Scale the entire frame instead of just the person
+        QSize originalSize = scaledPixmap.size();
+        int newWidth = qRound(originalSize.width() * m_personScaleFactor);
+        int newHeight = qRound(originalSize.height() * m_personScaleFactor);
+        
+        scaledPixmap = scaledPixmap.scaled(
+            newWidth, newHeight,
+            Qt::KeepAspectRatio,
+            Qt::SmoothTransformation
+        );
+        
+        qDebug() << "Applied frame scaling with factor:" << m_personScaleFactor << "Original size:" << originalSize << "New size:" << scaledPixmap.size();
+    }
+    // --- END FRAME SCALING ---
+    
     ui->videoLabel->setPixmap(scaledPixmap);
     ui->videoLabel->setAlignment(Qt::AlignCenter);
     ui->videoLabel->update(); // Request a repaint
-
-    // Now, handle YOLO processing only if not already busy
-    if (!isProcessingFrame) {
-        QString tempImagePath = QDir::temp().filePath(
-            "yolo_temp_" + QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss_zzz") + ".jpg"
-            );
-
-        // Convert QImage to cv::Mat for saving to file for YOLO
-        cv::Mat frameForYolo = qImageToCvMat(image);
-
-        if (!frameForYolo.empty() && cv::imwrite(tempImagePath.toStdString(), frameForYolo)) {
-            isProcessingFrame = true; // Set flag when starting YOLO
-            detectPersonInImage(tempImagePath); // This starts the async process
-        } else {
-            qWarning() << "Failed to save temporary image or convert QImage to cv::Mat for YOLO:" << tempImagePath;
-            isProcessingFrame = false; // Ensure it's false if saving failed
-        }
-    } else {
-        // YOLO processing skipped for this frame due to busy state.
-    }
 
     // --- Performance stats (always run for every valid frame received) ---
     qint64 currentLoopTime = loopTimer.elapsed();
@@ -523,33 +523,59 @@ void Capture::setVideoTemplate(const VideoTemplate &templateData) {
 }
 
 
-void Capture::detectPersonInImage(const QString& imagePath) {
-    // This check is now mostly handled by the caller (updateCameraFeed),
-    // but remains as a safeguard.
-    if (yoloProcess->state() == QProcess::Running) {
-        qDebug() << "YOLO process already running (from detectPersonInImage), skipping start.";
+void Capture::detectPersonWithHOG(const QImage& image) {
+    if (!personDetector || !personDetector->isInitialized()) {
         return;
     }
 
-    currentTempImagePath = imagePath; // Store the path for deletion later
+    try {
+        // Convert QImage to cv::Mat
+        cv::Mat frame = qImageToCvMat(image);
+        if (frame.empty()) {
+            return;
+        }
 
-    QString program = "python";
-    QStringList arguments;
-    arguments << "yolov5/detect.py"
-              << "--weights" << "yolov5/yolov5n.pt"
-              << "--source" << imagePath
-              << "--classes" << "0" // Class ID for 'person'
-              << "--nosave"; // CRUCIAL: ensures output is to stdout, not saved to file
+        // Use the advanced HOG detector
+        QList<SimpleDetection> detections = personDetector->detect(frame);
 
-    yoloProcess->setWorkingDirectory(QCoreApplication::applicationDirPath() + "/../../../"); // Corrected path
+        // Find the best detection (highest confidence)
+        QRect bestDetection = findBestPersonDetection(detections);
+        
+        if (!bestDetection.isEmpty()) {
+            m_personDetected = true;
+            m_lastDetectedPersonRect = bestDetection;
+            qDebug() << "Advanced HOG detected person at:" << bestDetection << "with" << detections.size() << "total detections";
+        } else {
+            m_personDetected = false;
+            m_lastDetectedPersonRect = QRect();
+            qDebug() << "No person detected by advanced HOG";
+        }
+    } catch (const cv::Exception& e) {
+        qWarning() << "Advanced HOG detection error:" << e.what();
+        m_personDetected = false;
+        m_lastDetectedPersonRect = QRect();
+    }
+}
 
-    qDebug() << "Starting YOLOv5 process for frame detection...";
-    qDebug() << "Program:" << program;
-    qDebug() << "Arguments:" << arguments.join(" ");
-    qDebug() << "Working Directory:" << yoloProcess->workingDirectory();
-    qDebug() << "Source Image Path:" << imagePath;
+QRect Capture::findBestPersonDetection(const QList<SimpleDetection>& detections) {
+    if (detections.isEmpty()) {
+        return QRect();
+    }
 
-    yoloProcess->start(program, arguments);
+    // Find the detection with highest confidence
+    SimpleDetection bestDetection = detections.first();
+    double maxConfidence = bestDetection.confidence;
+
+    for (const auto& detection : detections) {
+        if (detection.confidence > maxConfidence) {
+            maxConfidence = detection.confidence;
+            bestDetection = detection;
+        }
+    }
+
+    // Convert cv::Rect to QRect
+    return QRect(bestDetection.boundingBox.x, bestDetection.boundingBox.y, 
+                bestDetection.boundingBox.width, bestDetection.boundingBox.height);
 }
 
 void Capture::printPerformanceStats() {
@@ -575,78 +601,7 @@ void Capture::printPerformanceStats() {
     frameTimer.start(); // Restart frameTimer for the next measurement period
 }
 
-void Capture::handleYoloOutput() {
-    QByteArray output = yoloProcess->readAllStandardOutput();
-    // qDebug() << "YOLOv5 StdOut (Raw):" << output; // Uncomment for verbose output
-
-    QJsonDocument doc = QJsonDocument::fromJson(output);
-
-    if (!doc.isNull() && doc.isArray()) {
-        QJsonArray results = doc.array();
-        bool personDetected = false;
-        for (const QJsonValue& imageResult : results) {
-            QJsonObject obj = imageResult.toObject();
-            QJsonArray detections = obj["detections"].toArray();
-            if (!detections.isEmpty()) {
-                personDetected = true;
-                qDebug() << "Person(s) detected! Number of detections:" << detections.size();
-                for (const QJsonValue& detectionValue : detections) {
-                    QJsonObject detection = detectionValue.toObject();
-                    QJsonArray bbox = detection["bbox"].toArray();
-                    double confidence = detection["confidence"].toDouble();
-                    qDebug() << "  BBox:" << bbox.at(0).toInt() << bbox.at(1).toInt()
-                             << bbox.at(2).toInt() << bbox.at(3).toInt()
-                             << "Confidence:" << confidence;
-                    // TODO: Emit a signal here with the bbox data to update your UI (e.g., draw rects)
-                }
-            }
-        }
-        if (personDetected) {
-            emit personDetectedInFrame(); // Emit signal if any person was found
-        } else {
-            qDebug() << "No person detected in frame.";
-        }
-    } else {
-        qDebug() << "Detection output is not a valid JSON array or is null. Raw output was:" << output;
-    }
-}
-
-void Capture::handleYoloError() {
-    QByteArray errorOutput = yoloProcess->readAllStandardError();
-    if (!errorOutput.isEmpty()) {
-        qWarning() << "YOLOv5 Python Script Errors/Warnings (stderr):" << errorOutput;
-    }
-}
-
-void Capture::handleYoloFinished(int exitCode, QProcess::ExitStatus exitStatus) {
-    qDebug() << "YOLOv5 process finished with exit code:" << exitCode << "and status:" << exitStatus;
-    if (exitCode != 0) {
-        qWarning() << "YOLOv5 script exited with an error. Check stderr for details.";
-        qWarning() << "Final Stderr (if any):" << yoloProcess->readAllStandardError();
-    }
-    isProcessingFrame = false; // Always reset the flag when the process finishes
-
-    // Ensure any remaining output is read (edge case)
-    yoloProcess->readAllStandardOutput();
-    yoloProcess->readAllStandardError();
-
-    // Delete the temporary image file
-    if (!currentTempImagePath.isEmpty()) {
-        QFile::remove(currentTempImagePath);
-        currentTempImagePath.clear();
-    }
-}
-
-void Capture::handleYoloErrorOccurred(QProcess::ProcessError error) {
-    qWarning() << "QProcess experienced an internal error:" << error << yoloProcess->errorString();
-    isProcessingFrame = false; // Always reset the flag when an internal QProcess error occurs
-
-    // Delete the temporary image file
-    if (!currentTempImagePath.isEmpty()) {
-        QFile::remove(currentTempImagePath);
-        currentTempImagePath.clear();
-    }
-}
+// YOLO-related methods have been removed and replaced with HOG detection
 
 void Capture::captureRecordingFrame()
 {
@@ -778,11 +733,27 @@ void Capture::performImageCapture()
                     Qt::KeepAspectRatioByExpanding,
                     Qt::SmoothTransformation
                     );
-                // Composite overlay onto camera image
-                QPainter painter(&compositedPixmap);
-                painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
-                painter.drawPixmap(0, 0, scaledOverlay);
-                painter.end();
+                        // Composite overlay onto camera image
+        QPainter painter(&compositedPixmap);
+        painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+        painter.drawPixmap(0, 0, scaledOverlay);
+        painter.end();
+        
+        // --- APPLY FRAME SCALING TO CAPTURED IMAGE ---
+        // Apply frame scaling to the final composited image
+        if (qAbs(m_personScaleFactor - 1.0) > 0.01) {
+            QSize originalSize = compositedPixmap.size();
+            int newWidth = qRound(originalSize.width() * m_personScaleFactor);
+            int newHeight = qRound(originalSize.height() * m_personScaleFactor);
+            
+            compositedPixmap = compositedPixmap.scaled(
+                newWidth, newHeight,
+                Qt::KeepAspectRatio,
+                Qt::SmoothTransformation
+            );
+            qDebug() << "Applied frame scaling to captured image with factor:" << m_personScaleFactor << "Original size:" << originalSize << "New size:" << compositedPixmap.size();
+        }
+        // --- END FRAME SCALING ---
             }
         }
         m_capturedImage = compositedPixmap;
@@ -858,6 +829,7 @@ QImage Capture::cvMatToQImage(const cv::Mat &mat)
 }
 
 
+
 void Capture::on_verticalSlider_valueChanged(int value)
 {
     int tickInterval = ui->verticalSlider->tickInterval();
@@ -867,6 +839,48 @@ void Capture::on_verticalSlider_valueChanged(int value)
     if (value != snappedValue) {
         ui->verticalSlider->setValue(snappedValue);
     }
+    
+    // Debug: Print actual slider values
+    qDebug() << "Slider value:" << value << "Snapped value:" << snappedValue;
+    
+    // --- SCALING FUNCTIONALITY (TICK-BASED) ---
+    // Convert slider value (0-100) to scale factor (1.0-0.5) in 10-unit steps
+    // Since slider default is 0: 0 = 1.0x scale (normal size), 100 = 0.5x scale (50% smaller)
+    // Tick intervals: 0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100
+    double newScaleFactor = 1.0 - (snappedValue / 100.0) * 0.5;
+    
+    if (qAbs(newScaleFactor - m_personScaleFactor) > 0.01) { // Only update if change is significant
+        m_personScaleFactor = newScaleFactor;
+        qDebug() << "=== TICK-BASED SCALING ===";
+        qDebug() << "Slider tick position:" << snappedValue << "/100";
+        qDebug() << "Person scaling factor:" << m_personScaleFactor;
+        qDebug() << "Scale percentage:" << (m_personScaleFactor * 100) << "%";
+        qDebug() << "========================";
+        
+
+        
+        // Apply frame scaling immediately if we have a valid pixmap
+        if (!ui->videoLabel->pixmap().isNull()) {
+            QPixmap currentPixmap = ui->videoLabel->pixmap();
+            qDebug() << "Applying frame scaling with factor:" << m_personScaleFactor;
+            
+            QSize originalSize = currentPixmap.size();
+            int newWidth = qRound(originalSize.width() * m_personScaleFactor);
+            int newHeight = qRound(originalSize.height() * m_personScaleFactor);
+            
+            QPixmap scaledPixmap = currentPixmap.scaled(
+                newWidth, newHeight,
+                Qt::KeepAspectRatio,
+                Qt::SmoothTransformation
+            );
+            
+            ui->videoLabel->setPixmap(scaledPixmap);
+            qDebug() << "Applied frame scaling: Original size:" << originalSize << "New size:" << scaledPixmap.size();
+        } else {
+            qDebug() << "No pixmap available for frame scaling";
+        }
+    }
+    // --- END SCALING FUNCTIONALITY ---
 }
 
 void Capture::updateForegroundOverlay(const QString &path)
@@ -887,3 +901,50 @@ void Capture::updateForegroundOverlay(const QString &path)
     overlayImageLabel->setPixmap(overlayPixmap);
     overlayImageLabel->show();
 }
+
+QPixmap Capture::applyPersonScaling(const QPixmap& originalPixmap, const QRect& personRect, double scaleFactor)
+{
+    if (originalPixmap.isNull() || personRect.isEmpty() || qAbs(scaleFactor - 1.0) < 0.01) {
+        return originalPixmap; // Return original if no scaling needed
+    }
+    
+    qDebug() << "Applying scaling: factor=" << scaleFactor << "rect=" << personRect;
+    
+    QPixmap result = originalPixmap.copy();
+    QPainter painter(&result);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform);
+    
+    // Extract the person region from the original image
+    QPixmap personRegion = originalPixmap.copy(personRect);
+    
+    // Scale the person region to the new size
+    int scaledWidth = qRound(personRect.width() * scaleFactor);
+    int scaledHeight = qRound(personRect.height() * scaleFactor);
+    
+    QPixmap scaledPersonRegion = personRegion.scaled(
+        scaledWidth, scaledHeight,
+        Qt::KeepAspectRatio,
+        Qt::SmoothTransformation
+    );
+    
+    // Calculate the center point of the original person region
+    QPoint center = personRect.center();
+    
+    // Calculate the new position to keep the person centered
+    int newX = center.x() - scaledPersonRegion.width() / 2;
+    int newY = center.y() - scaledPersonRegion.height() / 2;
+    
+    // Ensure the scaled region stays within the image bounds
+    newX = qBound(0, newX, originalPixmap.width() - scaledPersonRegion.width());
+    newY = qBound(0, newY, originalPixmap.height() - scaledPersonRegion.height());
+    
+    // Draw the scaled person region back to the result
+    painter.drawPixmap(newX, newY, scaledPersonRegion);
+    painter.end();
+    
+    qDebug() << "Scaling complete: new size=" << scaledPersonRegion.size() << "new pos=(" << newX << "," << newY << ")";
+    
+    return result;
+}
+
+
