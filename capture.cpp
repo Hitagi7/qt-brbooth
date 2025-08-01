@@ -17,8 +17,6 @@
 #include <QThread>
 #include <QTimer>
 #include <QVBoxLayout>
-#include <opencv2/opencv.hpp>
-#include <opencv2/imgproc.hpp>
 
 Capture::Capture(QWidget *parent,Foreground *fg,Camera *existingCameraWorker,QThread *existingCameraThread)
     : QWidget(parent)
@@ -45,10 +43,8 @@ Capture::Capture(QWidget *parent,Foreground *fg,Camera *existingCameraWorker,QTh
     , totalTime(0)           // Initialize totalTime
     , frameCount(0)          // Initialize frameCount
     , frameTimer()
-    , yoloProcess(new QProcess(this)) // Initialize QProcess here!
-    , isProcessingFrame(false) // Initialize frame processing flag
-    , currentTempImagePath()
     , overlayImageLabel(nullptr)
+    , m_personScaleFactor(1.0) // Initialize to 1.0 (normal size) - matches slider at 0
 {
     ui->setupUi(this);
 
@@ -124,7 +120,8 @@ Capture::Capture(QWidget *parent,Foreground *fg,Camera *existingCameraWorker,QTh
     ui->verticalSlider->setTickPosition(QSlider::TicksBothSides);
     ui->verticalSlider->setTickInterval(tickStep);
     ui->verticalSlider->setSingleStep(tickStep);
-    ui->verticalSlider->setValue(0);
+    ui->verticalSlider->setPageStep(tickStep); // Page step also set to tick interval
+    ui->verticalSlider->setValue(0); // Set to 100 for 1.0x scaling (normal size, no scaling) - slider is inverted
 
     ui->back->setIcon(QIcon(":/icons/Icons/normal.svg"));
     ui->back->setIconSize(QSize(100, 100));
@@ -173,17 +170,10 @@ Capture::Capture(QWidget *parent,Foreground *fg,Camera *existingCameraWorker,QTh
 
     connect(ui->back, &QPushButton::clicked, this, &Capture::on_back_clicked);
     connect(ui->capture, &QPushButton::clicked, this, &Capture::on_capture_clicked);
-    connect(ui->verticalSlider,
-            &QSlider::valueChanged,
-            this,
-            &Capture::on_verticalSlider_valueChanged);
+    connect(ui->verticalSlider, &QSlider::valueChanged, this, &Capture::on_verticalSlider_valueChanged);
 
-    // --- CONNECT QPROCESS SIGNALS ONCE IN CONSTRUCTOR ---
-    connect(yoloProcess, &QProcess::readyReadStandardOutput, this, &Capture::handleYoloOutput);
-    connect(yoloProcess, &QProcess::readyReadStandardError, this, &Capture::handleYoloError);
-    connect(yoloProcess, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this, &Capture::handleYoloFinished);
-    connect(yoloProcess, &QProcess::errorOccurred, this, &Capture::handleYoloErrorOccurred);
-    // --- END CONNECT QPROCESS SIGNALS ---
+
+
 
     qDebug() << "Capture UI initialized. Loading Camera...";
 }
@@ -202,27 +192,7 @@ Capture::~Capture()
     if (loadingCameraLabel){ delete loadingCameraLabel; loadingCameraLabel = nullptr; }
     if (videoLabelFPS){ delete videoLabelFPS; videoLabelFPS = nullptr; } // Only if you actually 'new' this somewhere
 
-    // === Corrected FIX for YOLO QProcess cleanup ===
-    // Disconnect signals from yoloProcess FIRST to prevent calls to a dying Capture object
-    // It's good practice to disconnect if the slots might try to access 'this' after partial destruction.
-    disconnect(yoloProcess, &QProcess::readyReadStandardOutput, this, &Capture::handleYoloOutput);
-    disconnect(yoloProcess, &QProcess::readyReadStandardError, this, &Capture::handleYoloError);
-    disconnect(yoloProcess, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this, &Capture::handleYoloFinished);
-    disconnect(yoloProcess, &QProcess::errorOccurred, this, &Capture::handleYoloErrorOccurred);
 
-    // Terminate YOLO process on exit if it's still running
-    if (yoloProcess->state() == QProcess::Running) {
-        qDebug() << "Capture: Terminating YOLO process...";
-        yoloProcess->terminate();
-        if (!yoloProcess->waitForFinished(1000)) { // Give it a moment to finish gracefully
-            qWarning() << "Capture: YOLO process did not terminate gracefully, killing...";
-            yoloProcess->kill(); // Force kill if it doesn't terminate
-            yoloProcess->waitForFinished(500); // Wait briefly after kill
-        }
-    }
-    // yoloProcess will be deleted by QObject parent mechanism because 'this' is its parent.
-    // No explicit 'delete yoloProcess;' is needed here.
-    // === END Corrected FIX for YOLO QProcess cleanup ===
 
     // DO NOT DELETE cameraWorker or cameraThread here.
     // They are passed in as existing objects, implying Capture does not own them.
@@ -293,7 +263,6 @@ void Capture::updateCameraFeed(const QImage &image)
 
     if (image.isNull()) {
         qWarning() << "Capture: Received null QImage from Camera.";
-        isProcessingFrame = false; // Ensure flag is reset if image is null
         // Performance stats should still be calculated for every attempt to process a frame
         qint64 currentLoopTime = loopTimer.elapsed();
         totalTime += currentLoopTime;
@@ -313,36 +282,38 @@ void Capture::updateCameraFeed(const QImage &image)
         ui->videoLabel->show();
     }
 
+    // Store the original image for capture (without any scaling applied)
+    m_originalCameraImage = image;
+
     QPixmap pixmap = QPixmap::fromImage(image);
-
     QSize labelSize = ui->videoLabel->size();
-    QPixmap scaledPixmap = pixmap.scaled(labelSize,
-                                         Qt::KeepAspectRatioByExpanding,
-                                         Qt::FastTransformation);
 
+    // First scale to fit the label
+    QPixmap scaledPixmap = pixmap.scaled(
+        labelSize,
+        Qt::KeepAspectRatioByExpanding,
+        Qt::FastTransformation
+    );
+
+    // --- FRAME SCALING ---
+    // Apply scaling consistently to prevent flickering
+    if (qAbs(m_personScaleFactor - 1.0) > 0.01) {
+        QSize originalSize = scaledPixmap.size();
+        int newWidth = qRound(originalSize.width() * m_personScaleFactor);
+        int newHeight = qRound(originalSize.height() * m_personScaleFactor);
+        
+        // Use FastTransformation for better performance during live display
+        scaledPixmap = scaledPixmap.scaled(
+            newWidth, newHeight,
+            Qt::KeepAspectRatio,
+            Qt::FastTransformation
+        );
+    }
+    // --- END FRAME SCALING ---
+    
     ui->videoLabel->setPixmap(scaledPixmap);
     ui->videoLabel->setAlignment(Qt::AlignCenter);
     ui->videoLabel->update(); // Request a repaint
-
-    // Now, handle YOLO processing only if not already busy
-    if (!isProcessingFrame) {
-        QString tempImagePath = QDir::temp().filePath(
-            "yolo_temp_" + QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss_zzz") + ".jpg"
-            );
-
-        // Convert QImage to cv::Mat for saving to file for YOLO
-        cv::Mat frameForYolo = qImageToCvMat(image);
-
-        if (!frameForYolo.empty() && cv::imwrite(tempImagePath.toStdString(), frameForYolo)) {
-            isProcessingFrame = true; // Set flag when starting YOLO
-            detectPersonInImage(tempImagePath); // This starts the async process
-        } else {
-            qWarning() << "Failed to save temporary image or convert QImage to cv::Mat for YOLO:" << tempImagePath;
-            isProcessingFrame = false; // Ensure it's false if saving failed
-        }
-    } else {
-        // YOLO processing skipped for this frame due to busy state.
-    }
 
     // --- Performance stats (always run for every valid frame received) ---
     qint64 currentLoopTime = loopTimer.elapsed();
@@ -527,34 +498,7 @@ void Capture::setVideoTemplate(const VideoTemplate &templateData)
 }
 
 
-void Capture::detectPersonInImage(const QString& imagePath) {
-    // This check is now mostly handled by the caller (updateCameraFeed),
-    // but remains as a safeguard.
-    if (yoloProcess->state() == QProcess::Running) {
-        qDebug() << "YOLO process already running (from detectPersonInImage), skipping start.";
-        return;
-    }
 
-    currentTempImagePath = imagePath; // Store the path for deletion later
-
-    QString program = "python";
-    QStringList arguments;
-    arguments << "yolov5/detect.py"
-              << "--weights" << "yolov5/yolov5n.pt"
-              << "--source" << imagePath
-              << "--classes" << "0" // Class ID for 'person'
-              << "--nosave"; // CRUCIAL: ensures output is to stdout, not saved to file
-
-    yoloProcess->setWorkingDirectory(QCoreApplication::applicationDirPath() + "/../../../"); // Corrected path
-
-    qDebug() << "Starting YOLOv5 process for frame detection...";
-    qDebug() << "Program:" << program;
-    qDebug() << "Arguments:" << arguments.join(" ");
-    qDebug() << "Working Directory:" << yoloProcess->workingDirectory();
-    qDebug() << "Source Image Path:" << imagePath;
-
-    yoloProcess->start(program, arguments);
-}
 
 void Capture::printPerformanceStats() {
     if (frameCount == 0) return; // Avoid division by zero
@@ -579,88 +523,59 @@ void Capture::printPerformanceStats() {
     frameTimer.start(); // Restart frameTimer for the next measurement period
 }
 
-void Capture::handleYoloOutput() {
-    QByteArray output = yoloProcess->readAllStandardOutput();
-    // qDebug() << "YOLOv5 StdOut (Raw):" << output; // Uncomment for verbose output
 
-    QJsonDocument doc = QJsonDocument::fromJson(output);
-
-    if (!doc.isNull() && doc.isArray()) {
-        QJsonArray results = doc.array();
-        bool personDetected = false;
-        for (const QJsonValue& imageResult : results) {
-            QJsonObject obj = imageResult.toObject();
-            QJsonArray detections = obj["detections"].toArray();
-            if (!detections.isEmpty()) {
-                personDetected = true;
-                qDebug() << "Person(s) detected! Number of detections:" << detections.size();
-                for (const QJsonValue& detectionValue : detections) {
-                    QJsonObject detection = detectionValue.toObject();
-                    QJsonArray bbox = detection["bbox"].toArray();
-                    double confidence = detection["confidence"].toDouble();
-                    qDebug() << "  BBox:" << bbox.at(0).toInt() << bbox.at(1).toInt()
-                             << bbox.at(2).toInt() << bbox.at(3).toInt()
-                             << "Confidence:" << confidence;
-                    // TODO: Emit a signal here with the bbox data to update your UI (e.g., draw rects)
-                }
-            }
-        }
-        if (personDetected) {
-            emit personDetectedInFrame(); // Emit signal if any person was found
-        } else {
-            qDebug() << "No person detected in frame.";
-        }
-    } else {
-        qDebug() << "Detection output is not a valid JSON array or is null. Raw output was:" << output;
-    }
-}
-
-void Capture::handleYoloError() {
-    QByteArray errorOutput = yoloProcess->readAllStandardError();
-    if (!errorOutput.isEmpty()) {
-        qWarning() << "YOLOv5 Python Script Errors/Warnings (stderr):" << errorOutput;
-    }
-}
-
-void Capture::handleYoloFinished(int exitCode, QProcess::ExitStatus exitStatus) {
-    qDebug() << "YOLOv5 process finished with exit code:" << exitCode << "and status:" << exitStatus;
-    if (exitCode != 0) {
-        qWarning() << "YOLOv5 script exited with an error. Check stderr for details.";
-        qWarning() << "Final Stderr (if any):" << yoloProcess->readAllStandardError();
-    }
-    isProcessingFrame = false; // Always reset the flag when the process finishes
-
-    // Ensure any remaining output is read (edge case)
-    yoloProcess->readAllStandardOutput();
-    yoloProcess->readAllStandardError();
-
-    // Delete the temporary image file
-    if (!currentTempImagePath.isEmpty()) {
-        QFile::remove(currentTempImagePath);
-        currentTempImagePath.clear();
-    }
-}
-
-void Capture::handleYoloErrorOccurred(QProcess::ProcessError error) {
-    qWarning() << "QProcess experienced an internal error:" << error << yoloProcess->errorString();
-    isProcessingFrame = false; // Always reset the flag when an internal QProcess error occurs
-
-    // Delete the temporary image file
-    if (!currentTempImagePath.isEmpty()) {
-        QFile::remove(currentTempImagePath);
-        currentTempImagePath.clear();
-    }
-}
 
 void Capture::captureRecordingFrame()
 {
     if (!m_isRecording)
         return;
 
-    if (!ui->videoLabel->pixmap().isNull()) {
-        m_recordedFrames.append(ui->videoLabel->pixmap());
+    // Use the original camera image (without display scaling) for recording
+    if (!m_originalCameraImage.isNull()) {
+        QPixmap cameraPixmap = QPixmap::fromImage(m_originalCameraImage);
+        QPixmap compositedPixmap = cameraPixmap.copy();
+
+        // Get the selected overlay/template path
+        QString overlayPath;
+        if (foreground) {
+            overlayPath = foreground->getSelectedForeground();
+        }
+        if (!overlayPath.isEmpty()) {
+            QPixmap overlayPixmap(overlayPath);
+            if (!overlayPixmap.isNull()) {
+                // Scale overlay to match camera image size
+                QPixmap scaledOverlay = overlayPixmap.scaled(
+                    compositedPixmap.size(),
+                    Qt::KeepAspectRatioByExpanding,
+                    Qt::SmoothTransformation
+                );
+                
+                // Composite overlay onto camera image
+                QPainter painter(&compositedPixmap);
+                painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+                painter.drawPixmap(0, 0, scaledOverlay);
+                painter.end();
+            }
+        }
+        
+        // --- APPLY FRAME SCALING TO RECORDED FRAME ---
+        // Apply frame scaling to the final composited frame using high quality transformation
+        if (qAbs(m_personScaleFactor - 1.0) > 0.01) {
+            QSize originalSize = compositedPixmap.size();
+            int newWidth = qRound(originalSize.width() * m_personScaleFactor);
+            int newHeight = qRound(originalSize.height() * m_personScaleFactor);
+            
+            compositedPixmap = compositedPixmap.scaled(
+                newWidth, newHeight,
+                Qt::KeepAspectRatio,
+                Qt::SmoothTransformation
+            );
+        }
+        // --- END FRAME SCALING ---
+        
+        m_recordedFrames.append(compositedPixmap);
     } else {
-        qWarning() << "No pixmap available on videoLabel for recording frame.";
+        qWarning() << "No original camera image available for recording frame.";
     }
 }
 
@@ -772,8 +687,9 @@ void Capture::stopRecording()
 
 void Capture::performImageCapture()
 {
-    if (!ui->videoLabel->pixmap().isNull()) {
-        QPixmap cameraPixmap = ui->videoLabel->pixmap();
+    // Use the original camera image (without display scaling) for capture
+    if (!m_originalCameraImage.isNull()) {
+        QPixmap cameraPixmap = QPixmap::fromImage(m_originalCameraImage);
         QPixmap compositedPixmap = cameraPixmap.copy();
 
         // Get the selected overlay/template path
@@ -790,7 +706,8 @@ void Capture::performImageCapture()
                     compositedPixmap.size(),
                     Qt::KeepAspectRatioByExpanding,
                     Qt::SmoothTransformation
-                    );
+                );
+                
                 // Composite overlay onto camera image
                 QPainter painter(&compositedPixmap);
                 painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
@@ -798,79 +715,34 @@ void Capture::performImageCapture()
                 painter.end();
             }
         }
+        
+        // --- APPLY FRAME SCALING TO CAPTURED IMAGE ---
+        // Apply frame scaling to the final composited image using high quality transformation
+        if (qAbs(m_personScaleFactor - 1.0) > 0.01) {
+            QSize originalSize = compositedPixmap.size();
+            int newWidth = qRound(originalSize.width() * m_personScaleFactor);
+            int newHeight = qRound(originalSize.height() * m_personScaleFactor);
+            
+            compositedPixmap = compositedPixmap.scaled(
+                newWidth, newHeight,
+                Qt::KeepAspectRatio,
+                Qt::SmoothTransformation
+            );
+        }
+        // --- END FRAME SCALING ---
+        
         m_capturedImage = compositedPixmap;
         emit imageCaptured(m_capturedImage);
         qDebug() << "Image captured and composited with overlay.";
-    } else {
-        qWarning() << "Failed to capture image: videoLabel pixmap is empty.";
-        QMessageBox::warning(this,
-                             "Capture Failed",
-                             "No camera feed available to capture an image.");
-    }
+            } else {
+            qWarning() << "Failed to capture image: original camera image is empty.";
+            QMessageBox::warning(this, "Capture Failed", "No camera feed available to capture an image.");
+        }
     emit showFinalOutputPage();
 }
 
-// Helper function to convert QImage to cv::Mat
-cv::Mat Capture::qImageToCvMat(const QImage &inImage)
-{
-    switch (inImage.format()) {
-    case QImage::Format_RGB32:
-    case QImage::Format_ARGB32:
-    case QImage::Format_ARGB32_Premultiplied:
-        // For 32-bit formats, OpenCV typically expects BGRA or BGR.
-        // Assuming BGRA or similar layout where alpha is last.
-        // OpenCV Mat constructor takes (rows, cols, type, data, step)
-        return cv::Mat(inImage.height(), inImage.width(), CV_8UC4,
-                       (void*)inImage.constBits(), inImage.bytesPerLine());
-    case QImage::Format_RGB888:
-        // RGB888 in QImage is typically 3 bytes per pixel, RGB order.
-        // OpenCV expects BGR by default, so a clone and conversion might be needed,
-        // or ensure `cvtColor` is used later if written as RGB.
-        // For direct conversion, it's safer to convert QImage to a known OpenCV format first if needed.
-        // Here, we clone because `inImage.constBits()` might not be persistent.
-        return cv::Mat(inImage.height(), inImage.width(), CV_8UC3,
-                       (void*)inImage.constBits(), inImage.bytesPerLine()).clone();
-    case QImage::Format_Indexed8:
-    {
-        // 8-bit grayscale image
-        cv::Mat mat(inImage.height(), inImage.width(), CV_8UC1,
-                    (void*)inImage.constBits(), inImage.bytesPerLine());
-        return mat.clone(); // Clone to ensure data is owned by Mat
-    }
-    default:
-        qWarning() << "qImageToCvMat - QImage format not handled: " << inImage.format();
-        // Convert to a supported format if not directly convertible
-        QImage convertedImage = inImage.convertToFormat(QImage::Format_RGB32);
-        return cv::Mat(convertedImage.height(), convertedImage.width(), CV_8UC4,
-                       (void*)convertedImage.constBits(), convertedImage.bytesPerLine());
-    }
-}
 
-QImage Capture::cvMatToQImage(const cv::Mat &mat)
-{
-    switch (mat.type()) {
-    case CV_8UC4: {
-        cv::Mat rgb;
-        cv::cvtColor(mat, rgb, cv::COLOR_BGRA2RGB);
-        return QImage(rgb.data, rgb.cols, mat.rows, mat.step, QImage::Format_RGB888);
-    }
-    case CV_8UC3: {
-        QImage image(mat.data, mat.cols, mat.rows, mat.step, QImage::Format_RGB888);
-        return image.rgbSwapped();
-    }
-    case CV_8UC1: {
-        static QVector<QRgb> sColorTable;
-        if (sColorTable.isEmpty())
-            for (int i = 0; i < 256; ++i)
-                sColorTable.push_back(qRgb(i, i, i));
-        QImage image(mat.data, mat.cols, mat.rows, mat.step, QImage::Format_Indexed8);
-        image.setColorTable(sColorTable);
-        return image;
-    }
-    default:
-        return QImage();
-    }
-}
+
 
 
 void Capture::on_verticalSlider_valueChanged(int value)
@@ -885,6 +757,31 @@ void Capture::on_verticalSlider_valueChanged(int value)
     if (value != snappedValue) {
         ui->verticalSlider->setValue(snappedValue);
     }
+    
+    // Debug: Print actual slider values
+    qDebug() << "Slider value:" << value << "Snapped value:" << snappedValue;
+    
+    // --- SCALING FUNCTIONALITY (TICK-BASED) ---
+    // Convert slider value (0-100) to scale factor (1.0-0.5) in 10-unit steps
+    // Since slider default is 0: 0 = 1.0x scale (normal size), 100 = 0.5x scale (50% smaller)
+    // Tick intervals: 0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100
+    double newScaleFactor = 1.0 - (snappedValue / 100.0) * 0.5;
+    
+    if (qAbs(newScaleFactor - m_personScaleFactor) > 0.01) { // Only update if change is significant
+        m_personScaleFactor = newScaleFactor;
+        qDebug() << "=== TICK-BASED SCALING ===";
+        qDebug() << "Slider tick position:" << snappedValue << "/100";
+        qDebug() << "Person scaling factor:" << m_personScaleFactor;
+        qDebug() << "Scale percentage:" << (m_personScaleFactor * 100) << "%";
+        qDebug() << "========================";
+        
+        // Trigger a refresh of the camera feed to apply the new scaling
+        // The scaling will be applied in the next updateCameraFeed call
+        if (!m_originalCameraImage.isNull()) {
+            updateCameraFeed(m_originalCameraImage);
+        }
+    }
+    // --- END SCALING FUNCTIONALITY ---
 }
 
 void Capture::updateForegroundOverlay(const QString &path)
@@ -905,3 +802,7 @@ void Capture::updateForegroundOverlay(const QString &path)
     overlayImageLabel->setPixmap(overlayPixmap);
     overlayImageLabel->show();
 }
+
+
+
+

@@ -17,16 +17,7 @@
 #include "videotemplate.h"   // Your custom VideoTemplate class
 #include "camera.h"          // Your custom Camera class
 
-// --- NEW INCLUDES FOR QPROCESS AND JSON ---
-#include <QProcess>
-#include <QJsonDocument>
-#include <QJsonArray>
-#include <QJsonObject>
-#include <QDir>
-#include <QDateTime>
-#include <QCoreApplication> // For applicationDirPath()
-#include <opencv2/opencv.hpp>
-// --- END NEW INCLUDES ---
+
 
 QT_BEGIN_NAMESPACE
 namespace Ui { class Capture; }
@@ -48,6 +39,8 @@ public:
 
     void setCaptureMode(CaptureMode mode);
     void setVideoTemplate(const VideoTemplate &templateData);
+    
+
 
 protected:
     void resizeEvent(QResizeEvent *event) override;
@@ -75,17 +68,14 @@ private slots:
     void on_capture_clicked();
     void on_verticalSlider_valueChanged(int value);
 
+
     void updateForegroundOverlay(const QString &path);
     void setupStackedLayoutHybrid();
     void updateOverlayStyles();
 
-    // --- NEW SLOTS FOR ASYNCHRONOUS QPROCESS ---
-    void handleYoloOutput();
-    void handleYoloError();
-    void handleYoloFinished(int exitCode, QProcess::ExitStatus exitStatus);
-    void handleYoloErrorOccurred(QProcess::ProcessError error);
-    void printPerformanceStats(); // <-- ADDED THIS DECLARATION
-    // --- END NEW SLOTS ---
+    // --- PERFORMANCE MONITORING ---
+    void printPerformanceStats();
+    // --- END PERFORMANCE MONITORING ---
 
 private:
     // Declare these private functions here (already correct)
@@ -124,20 +114,21 @@ private:
     int frameCount;
     QElapsedTimer frameTimer;
 
-    // --- MODIFIED/NEW MEMBERS FOR ASYNCHRONOUS YOLO ---
-    QProcess *yoloProcess; // QProcess member
-    bool isProcessingFrame; // Flag to manage concurrent detection calls
-    QString currentTempImagePath; // To keep track of the temp image being processed
-    // --- END MODIFIED/NEW MEMBERS ---
+
 
     // pass foreground
     QLabel* overlayImageLabel = nullptr;
-    // --- MODIFIED: detectPersonInImage now returns void, processing done in slot ---
-    void detectPersonInImage(const QString& imagePath);
+    
+    // --- FRAME SCALING MEMBERS ---
+    double m_personScaleFactor;  // Current scaling factor for entire frame (1.0 to 0.5)
+    QImage m_originalCameraImage;  // Store original camera image for capture (without display scaling)
+    // --- END FRAME SCALING MEMBERS ---
+    
 
-    // Helper functions for OpenCV conversion
-    cv::Mat qImageToCvMat(const QImage &inImage);
-    QImage cvMatToQImage(const cv::Mat &mat);
+    
+
+
+
 
 };
 
