@@ -1,4 +1,3 @@
-
 #include <QApplication>
 #include <QFontDatabase>
 #include "brbooth.h"
@@ -17,6 +16,6 @@ int main(int argc, char *argv[])
 
     qRegisterMetaType<VideoTemplate>("Video Template");
     BRBooth w;
-    w.showFullScreen(); // Launch in full screen
+    w.showFullScreen();
     return a.exec();
 }
