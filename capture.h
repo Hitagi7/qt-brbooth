@@ -17,10 +17,7 @@
 #include "videotemplate.h"   // Your custom VideoTemplate class
 #include "camera.h"          // Your custom Camera class
 
-// --- OPENCV INCLUDES FOR HOG DETECTION ---
-#include <opencv2/opencv.hpp>
-#include "simplepersondetector.h"
-// --- END OPENCV INCLUDES ---
+
 
 QT_BEGIN_NAMESPACE
 namespace Ui { class Capture; }
@@ -115,34 +112,21 @@ private:
     int frameCount;
     QElapsedTimer frameTimer;
 
-    // --- HOG DETECTION MEMBERS ---
-    SimplePersonDetector* personDetector; // Advanced HOG person detector
-    bool hogEnabled; // Flag to enable/disable HOG detection
-    int frameSkipCounter; // Counter to skip frames for performance
-    static const int HOG_FRAME_SKIP = 15; // Process HOG every 15 frames (less lag)
-    // --- END HOG DETECTION MEMBERS ---
+
 
     // pass foreground
     QLabel* overlayImageLabel = nullptr;
     
     // --- FRAME SCALING MEMBERS ---
     double m_personScaleFactor;  // Current scaling factor for entire frame (1.0 to 0.5)
-    QRect m_lastDetectedPersonRect;  // Last detected person bounding box (for HOG detection)
-    bool m_personDetected;  // Flag to track if person was detected in current frame (for HOG detection)
+    QImage m_originalCameraImage;  // Store original camera image for capture (without display scaling)
     // --- END FRAME SCALING MEMBERS ---
     
-    // --- HOG PERSON DETECTION ---
-    void detectPersonWithHOG(const QImage& image);
-    QRect findBestPersonDetection(const QList<SimpleDetection>& detections);
-    // --- END HOG PERSON DETECTION ---
-    
-    // --- NEW METHOD FOR PERSON SCALING ---
-    QPixmap applyPersonScaling(const QPixmap& originalPixmap, const QRect& personRect, double scaleFactor);
-    // --- END NEW METHOD ---
 
-    // Helper functions for OpenCV conversion
-    cv::Mat qImageToCvMat(const QImage &inImage);
-    QImage cvMatToQImage(const cv::Mat &mat);
+    
+
+
+
 
 };
 

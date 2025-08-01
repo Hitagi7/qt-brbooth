@@ -17,8 +17,7 @@
 #include <QMessageBox>
 #include <QStackedLayout>
 #include <QPainter>
-#include <opencv2/opencv.hpp>
-#include <opencv2/imgproc.hpp>
+
 
 Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, QThread *existingCameraThread)
 
@@ -48,11 +47,6 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     , frameTimer()
     , overlayImageLabel(nullptr)
     , m_personScaleFactor(1.0) // Initialize to 1.0 (normal size) - matches slider at 0
-    , m_lastDetectedPersonRect() // Initialize empty rectangle
-    , m_personDetected(false) // Initialize person detection flag
-    , personDetector(nullptr) // Initialize person detector pointer
-    , hogEnabled(true) // Enable HOG by default with optimizations
-    , frameSkipCounter(0) // Initialize frame skip counter
 {
     ui->setupUi(this);
 
@@ -180,16 +174,7 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     connect(ui->verticalSlider, &QSlider::valueChanged, this, &Capture::on_verticalSlider_valueChanged);
 
 
-    // --- INITIALIZE ADVANCED HOG DETECTOR ---
-    personDetector = new SimplePersonDetector();
-    if (personDetector->initialize()) {
-        qDebug() << "Advanced HOG person detector initialized successfully";
-        qDebug() << "HOG detection enabled with fallback detection";
-    } else {
-        qWarning() << "Failed to initialize advanced HOG detector";
-        hogEnabled = false;
-    }
-    // --- END INITIALIZE HOG DETECTOR ---
+
 
     qDebug() << "Capture UI initialized. Loading Camera...";
 }
@@ -208,11 +193,7 @@ Capture::~Capture()
     if (loadingCameraLabel){ delete loadingCameraLabel; loadingCameraLabel = nullptr; }
     if (videoLabelFPS){ delete videoLabelFPS; videoLabelFPS = nullptr; } // Only if you actually 'new' this somewhere
 
-    // Clean up person detector
-    if (personDetector) {
-        delete personDetector;
-        personDetector = nullptr;
-    }
+
 
     // DO NOT DELETE cameraWorker or cameraThread here.
     // They are passed in as existing objects, implying Capture does not own them.
@@ -299,39 +280,32 @@ void Capture::updateCameraFeed(const QImage &image)
         ui->videoLabel->show();
     }
 
+    // Store the original image for capture (without any scaling applied)
+    m_originalCameraImage = image;
+
     QPixmap pixmap = QPixmap::fromImage(image);
-
     QSize labelSize = ui->videoLabel->size();
-    // --- HOG PERSON DETECTION (OPTIMIZED) ---
-    if (hogEnabled && personDetector && personDetector->isInitialized()) {
-        frameSkipCounter++;
-        if (frameSkipCounter >= HOG_FRAME_SKIP) {
-            detectPersonWithHOG(image);
-            frameSkipCounter = 0;
-        }
-    }
-    // --- END HOG PERSON DETECTION ---
 
+    // First scale to fit the label
     QPixmap scaledPixmap = pixmap.scaled(
         labelSize,
         Qt::KeepAspectRatioByExpanding,
         Qt::FastTransformation
-        );
+    );
 
-    // --- APPLY FRAME SCALING ---
+    // --- FRAME SCALING ---
+    // Apply scaling consistently to prevent flickering
     if (qAbs(m_personScaleFactor - 1.0) > 0.01) {
-        // Scale the entire frame instead of just the person
         QSize originalSize = scaledPixmap.size();
         int newWidth = qRound(originalSize.width() * m_personScaleFactor);
         int newHeight = qRound(originalSize.height() * m_personScaleFactor);
         
+        // Use FastTransformation for better performance during live display
         scaledPixmap = scaledPixmap.scaled(
             newWidth, newHeight,
             Qt::KeepAspectRatio,
-            Qt::SmoothTransformation
+            Qt::FastTransformation
         );
-        
-        qDebug() << "Applied frame scaling with factor:" << m_personScaleFactor << "Original size:" << originalSize << "New size:" << scaledPixmap.size();
     }
     // --- END FRAME SCALING ---
     
@@ -523,60 +497,7 @@ void Capture::setVideoTemplate(const VideoTemplate &templateData) {
 }
 
 
-void Capture::detectPersonWithHOG(const QImage& image) {
-    if (!personDetector || !personDetector->isInitialized()) {
-        return;
-    }
 
-    try {
-        // Convert QImage to cv::Mat
-        cv::Mat frame = qImageToCvMat(image);
-        if (frame.empty()) {
-            return;
-        }
-
-        // Use the advanced HOG detector
-        QList<SimpleDetection> detections = personDetector->detect(frame);
-
-        // Find the best detection (highest confidence)
-        QRect bestDetection = findBestPersonDetection(detections);
-        
-        if (!bestDetection.isEmpty()) {
-            m_personDetected = true;
-            m_lastDetectedPersonRect = bestDetection;
-            qDebug() << "Advanced HOG detected person at:" << bestDetection << "with" << detections.size() << "total detections";
-        } else {
-            m_personDetected = false;
-            m_lastDetectedPersonRect = QRect();
-            qDebug() << "No person detected by advanced HOG";
-        }
-    } catch (const cv::Exception& e) {
-        qWarning() << "Advanced HOG detection error:" << e.what();
-        m_personDetected = false;
-        m_lastDetectedPersonRect = QRect();
-    }
-}
-
-QRect Capture::findBestPersonDetection(const QList<SimpleDetection>& detections) {
-    if (detections.isEmpty()) {
-        return QRect();
-    }
-
-    // Find the detection with highest confidence
-    SimpleDetection bestDetection = detections.first();
-    double maxConfidence = bestDetection.confidence;
-
-    for (const auto& detection : detections) {
-        if (detection.confidence > maxConfidence) {
-            maxConfidence = detection.confidence;
-            bestDetection = detection;
-        }
-    }
-
-    // Convert cv::Rect to QRect
-    return QRect(bestDetection.boundingBox.x, bestDetection.boundingBox.y, 
-                bestDetection.boundingBox.width, bestDetection.boundingBox.height);
-}
 
 void Capture::printPerformanceStats() {
     if (frameCount == 0) return; // Avoid division by zero
@@ -601,16 +522,58 @@ void Capture::printPerformanceStats() {
     frameTimer.start(); // Restart frameTimer for the next measurement period
 }
 
-// YOLO-related methods have been removed and replaced with HOG detection
+
 
 void Capture::captureRecordingFrame()
 {
     if (!m_isRecording) return;
 
-    if (!ui->videoLabel->pixmap().isNull()) {
-        m_recordedFrames.append(ui->videoLabel->pixmap());
+    // Use the original camera image (without display scaling) for recording
+    if (!m_originalCameraImage.isNull()) {
+        QPixmap cameraPixmap = QPixmap::fromImage(m_originalCameraImage);
+        QPixmap compositedPixmap = cameraPixmap.copy();
+
+        // Get the selected overlay/template path
+        QString overlayPath;
+        if (foreground) {
+            overlayPath = foreground->getSelectedForeground();
+        }
+        if (!overlayPath.isEmpty()) {
+            QPixmap overlayPixmap(overlayPath);
+            if (!overlayPixmap.isNull()) {
+                // Scale overlay to match camera image size
+                QPixmap scaledOverlay = overlayPixmap.scaled(
+                    compositedPixmap.size(),
+                    Qt::KeepAspectRatioByExpanding,
+                    Qt::SmoothTransformation
+                );
+                
+                // Composite overlay onto camera image
+                QPainter painter(&compositedPixmap);
+                painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+                painter.drawPixmap(0, 0, scaledOverlay);
+                painter.end();
+            }
+        }
+        
+        // --- APPLY FRAME SCALING TO RECORDED FRAME ---
+        // Apply frame scaling to the final composited frame using high quality transformation
+        if (qAbs(m_personScaleFactor - 1.0) > 0.01) {
+            QSize originalSize = compositedPixmap.size();
+            int newWidth = qRound(originalSize.width() * m_personScaleFactor);
+            int newHeight = qRound(originalSize.height() * m_personScaleFactor);
+            
+            compositedPixmap = compositedPixmap.scaled(
+                newWidth, newHeight,
+                Qt::KeepAspectRatio,
+                Qt::SmoothTransformation
+            );
+        }
+        // --- END FRAME SCALING ---
+        
+        m_recordedFrames.append(compositedPixmap);
     } else {
-        qWarning() << "No pixmap available on videoLabel for recording frame.";
+        qWarning() << "No original camera image available for recording frame.";
     }
 }
 
@@ -715,8 +678,9 @@ void Capture::stopRecording()
 
 void Capture::performImageCapture()
 {
-    if (!ui->videoLabel->pixmap().isNull()) {
-        QPixmap cameraPixmap = ui->videoLabel->pixmap();
+    // Use the original camera image (without display scaling) for capture
+    if (!m_originalCameraImage.isNull()) {
+        QPixmap cameraPixmap = QPixmap::fromImage(m_originalCameraImage);
         QPixmap compositedPixmap = cameraPixmap.copy();
 
         // Get the selected overlay/template path
@@ -732,15 +696,18 @@ void Capture::performImageCapture()
                     compositedPixmap.size(),
                     Qt::KeepAspectRatioByExpanding,
                     Qt::SmoothTransformation
-                    );
-                        // Composite overlay onto camera image
-        QPainter painter(&compositedPixmap);
-        painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
-        painter.drawPixmap(0, 0, scaledOverlay);
-        painter.end();
+                );
+                
+                // Composite overlay onto camera image
+                QPainter painter(&compositedPixmap);
+                painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+                painter.drawPixmap(0, 0, scaledOverlay);
+                painter.end();
+            }
+        }
         
         // --- APPLY FRAME SCALING TO CAPTURED IMAGE ---
-        // Apply frame scaling to the final composited image
+        // Apply frame scaling to the final composited image using high quality transformation
         if (qAbs(m_personScaleFactor - 1.0) > 0.01) {
             QSize originalSize = compositedPixmap.size();
             int newWidth = qRound(originalSize.width() * m_personScaleFactor);
@@ -751,82 +718,20 @@ void Capture::performImageCapture()
                 Qt::KeepAspectRatio,
                 Qt::SmoothTransformation
             );
-            qDebug() << "Applied frame scaling to captured image with factor:" << m_personScaleFactor << "Original size:" << originalSize << "New size:" << compositedPixmap.size();
         }
         // --- END FRAME SCALING ---
-            }
-        }
+        
         m_capturedImage = compositedPixmap;
         emit imageCaptured(m_capturedImage);
         qDebug() << "Image captured and composited with overlay.";
     } else {
-        qWarning() << "Failed to capture image: videoLabel pixmap is empty.";
+        qWarning() << "Failed to capture image: original camera image is empty.";
         QMessageBox::warning(this, "Capture Failed", "No camera feed available to capture an image.");
     }
     emit showFinalOutputPage();
 }
 
-// Helper function to convert QImage to cv::Mat
-cv::Mat Capture::qImageToCvMat(const QImage &inImage)
-{
-    switch (inImage.format()) {
-    case QImage::Format_RGB32:
-    case QImage::Format_ARGB32:
-    case QImage::Format_ARGB32_Premultiplied:
-        // For 32-bit formats, OpenCV typically expects BGRA or BGR.
-        // Assuming BGRA or similar layout where alpha is last.
-        // OpenCV Mat constructor takes (rows, cols, type, data, step)
-        return cv::Mat(inImage.height(), inImage.width(), CV_8UC4,
-                       (void*)inImage.constBits(), inImage.bytesPerLine());
-    case QImage::Format_RGB888:
-        // RGB888 in QImage is typically 3 bytes per pixel, RGB order.
-        // OpenCV expects BGR by default, so a clone and conversion might be needed,
-        // or ensure `cvtColor` is used later if written as RGB.
-        // For direct conversion, it's safer to convert QImage to a known OpenCV format first if needed.
-        // Here, we clone because `inImage.constBits()` might not be persistent.
-        return cv::Mat(inImage.height(), inImage.width(), CV_8UC3,
-                       (void*)inImage.constBits(), inImage.bytesPerLine()).clone();
-    case QImage::Format_Indexed8:
-    {
-        // 8-bit grayscale image
-        cv::Mat mat(inImage.height(), inImage.width(), CV_8UC1,
-                    (void*)inImage.constBits(), inImage.bytesPerLine());
-        return mat.clone(); // Clone to ensure data is owned by Mat
-    }
-    default:
-        qWarning() << "qImageToCvMat - QImage format not handled: " << inImage.format();
-        // Convert to a supported format if not directly convertible
-        QImage convertedImage = inImage.convertToFormat(QImage::Format_RGB32);
-        return cv::Mat(convertedImage.height(), convertedImage.width(), CV_8UC4,
-                       (void*)convertedImage.constBits(), convertedImage.bytesPerLine());
-    }
-}
 
-QImage Capture::cvMatToQImage(const cv::Mat &mat)
-{
-    switch (mat.type()) {
-    case CV_8UC4: {
-        cv::Mat rgb;
-        cv::cvtColor(mat, rgb, cv::COLOR_BGRA2RGB);
-        return QImage(rgb.data, rgb.cols, mat.rows, mat.step, QImage::Format_RGB888);
-    }
-    case CV_8UC3: {
-        QImage image(mat.data, mat.cols, mat.rows, mat.step, QImage::Format_RGB888);
-        return image.rgbSwapped();
-    }
-    case CV_8UC1: {
-        static QVector<QRgb> sColorTable;
-        if (sColorTable.isEmpty())
-            for (int i = 0; i < 256; ++i)
-                sColorTable.push_back(qRgb(i, i, i));
-        QImage image(mat.data, mat.cols, mat.rows, mat.step, QImage::Format_Indexed8);
-        image.setColorTable(sColorTable);
-        return image;
-    }
-    default:
-        return QImage();
-    }
-}
 
 
 
@@ -857,27 +762,10 @@ void Capture::on_verticalSlider_valueChanged(int value)
         qDebug() << "Scale percentage:" << (m_personScaleFactor * 100) << "%";
         qDebug() << "========================";
         
-
-        
-        // Apply frame scaling immediately if we have a valid pixmap
-        if (!ui->videoLabel->pixmap().isNull()) {
-            QPixmap currentPixmap = ui->videoLabel->pixmap();
-            qDebug() << "Applying frame scaling with factor:" << m_personScaleFactor;
-            
-            QSize originalSize = currentPixmap.size();
-            int newWidth = qRound(originalSize.width() * m_personScaleFactor);
-            int newHeight = qRound(originalSize.height() * m_personScaleFactor);
-            
-            QPixmap scaledPixmap = currentPixmap.scaled(
-                newWidth, newHeight,
-                Qt::KeepAspectRatio,
-                Qt::SmoothTransformation
-            );
-            
-            ui->videoLabel->setPixmap(scaledPixmap);
-            qDebug() << "Applied frame scaling: Original size:" << originalSize << "New size:" << scaledPixmap.size();
-        } else {
-            qDebug() << "No pixmap available for frame scaling";
+        // Trigger a refresh of the camera feed to apply the new scaling
+        // The scaling will be applied in the next updateCameraFeed call
+        if (!m_originalCameraImage.isNull()) {
+            updateCameraFeed(m_originalCameraImage);
         }
     }
     // --- END SCALING FUNCTIONALITY ---
@@ -902,49 +790,6 @@ void Capture::updateForegroundOverlay(const QString &path)
     overlayImageLabel->show();
 }
 
-QPixmap Capture::applyPersonScaling(const QPixmap& originalPixmap, const QRect& personRect, double scaleFactor)
-{
-    if (originalPixmap.isNull() || personRect.isEmpty() || qAbs(scaleFactor - 1.0) < 0.01) {
-        return originalPixmap; // Return original if no scaling needed
-    }
-    
-    qDebug() << "Applying scaling: factor=" << scaleFactor << "rect=" << personRect;
-    
-    QPixmap result = originalPixmap.copy();
-    QPainter painter(&result);
-    painter.setRenderHint(QPainter::SmoothPixmapTransform);
-    
-    // Extract the person region from the original image
-    QPixmap personRegion = originalPixmap.copy(personRect);
-    
-    // Scale the person region to the new size
-    int scaledWidth = qRound(personRect.width() * scaleFactor);
-    int scaledHeight = qRound(personRect.height() * scaleFactor);
-    
-    QPixmap scaledPersonRegion = personRegion.scaled(
-        scaledWidth, scaledHeight,
-        Qt::KeepAspectRatio,
-        Qt::SmoothTransformation
-    );
-    
-    // Calculate the center point of the original person region
-    QPoint center = personRect.center();
-    
-    // Calculate the new position to keep the person centered
-    int newX = center.x() - scaledPersonRegion.width() / 2;
-    int newY = center.y() - scaledPersonRegion.height() / 2;
-    
-    // Ensure the scaled region stays within the image bounds
-    newX = qBound(0, newX, originalPixmap.width() - scaledPersonRegion.width());
-    newY = qBound(0, newY, originalPixmap.height() - scaledPersonRegion.height());
-    
-    // Draw the scaled person region back to the result
-    painter.drawPixmap(newX, newY, scaledPersonRegion);
-    painter.end();
-    
-    qDebug() << "Scaling complete: new size=" << scaledPersonRegion.size() << "new pos=(" << newX << "," << newY << ")";
-    
-    return result;
-}
+
 
 
