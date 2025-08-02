@@ -183,6 +183,7 @@ BRBooth::BRBooth(QWidget *parent)
         connect(capturePage, &Capture::showFinalOutputPage, this, &BRBooth::showFinalOutputPage);
         connect(capturePage, &Capture::imageCaptured, finalOutputPage, &Final::setImage);
         connect(capturePage, &Capture::videoRecorded, finalOutputPage, &Final::setVideo);
+        connect(capturePage, &Capture::foregroundPathChanged, finalOutputPage, &Final::setForegroundOverlay);
     }
 
     if (finalOutputPage) {
@@ -264,6 +265,15 @@ void BRBooth::showCapturePage()
     lastVisitedPageIndex = ui->stackedWidget->currentIndex();
     qDebug() << "DEBUG: showCapturePage() called. Setting index to:" << capturePageIndex
              << ". SAVED lastVisitedPageIndex (page we just came from):" << lastVisitedPageIndex;
+    
+    // Pass the current foreground template to the final interface
+    if (foregroundPage && finalOutputPage) {
+        QString currentForegroundPath = foregroundPage->getSelectedForeground();
+        if (!currentForegroundPath.isEmpty()) {
+            finalOutputPage->setForegroundOverlay(currentForegroundPath);
+        }
+    }
+    
     ui->stackedWidget->setCurrentIndex(capturePageIndex);
 }
 

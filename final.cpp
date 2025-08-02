@@ -25,39 +25,50 @@ Final::Final(QWidget *parent)
     , m_currentFrameIndex(0)
     , m_stackedLayout(nullptr)
     , m_lastLoadedImage() // Initialize the QPixmap member
+    , overlayImageLabel(nullptr)
 {
     ui->setupUi(this); // Initialize UI elements from final.ui
 
     // Ensure the main Final widget itself has no margins or spacing
     setContentsMargins(0, 0, 0, 0);
 
-    // --- NEW LAYOUT SETUP leveraging final.ui components ---
+    // Create overlay image label for pixel art game UI elements (same as capture interface)
+    overlayImageLabel = new QLabel(this); // Create as child of Final widget, not overlayFinal
+    overlayImageLabel->setAttribute(Qt::WA_TranslucentBackground);
+    overlayImageLabel->setAttribute(Qt::WA_TransparentForMouseEvents, true); // Allow mouse events to pass through
+    overlayImageLabel->setStyleSheet("background: transparent;");
+    overlayImageLabel->setScaledContents(true); // Same as capture interface
+    overlayImageLabel->resize(this->size());
+    overlayImageLabel->move(0, 0);
+    
+    // Initially hide the overlay - it will be set when foreground is provided
+    overlayImageLabel->hide();
+
+    // --- LAYOUT SETUP using same logic as capture interface ---
 
     // 1. Create the QGridLayout as the main layout for the Final widget
     QGridLayout *mainLayout = new QGridLayout(this);
     mainLayout->setContentsMargins(0, 0, 0, 0); // No padding for the grid itself
     mainLayout->setSpacing(0);                  // No spacing between grid cells
 
-    // 2. Create the QStackedLayout to stack videoLabel and overlayFinal
+    // 2. Create the QStackedLayout to stack widgets (same as capture interface)
     m_stackedLayout = new QStackedLayout; // Initialize the member
     m_stackedLayout->setStackingMode(
         QStackedLayout::StackAll); // Makes all contained widgets visible and layered
     m_stackedLayout->setContentsMargins(0, 0, 0, 0); // No padding inside the stacked layout
     m_stackedLayout->setSpacing(0);                  // No spacing between stacked items
 
-    // 3. Add existing UI widgets to the stacked layout
-    m_stackedLayout->addWidget(
-        ui->videoLabel); // This will be the background layer (for image/video display)
-    m_stackedLayout->addWidget(
-        ui->overlayFinal); // This will be the foreground layer (it already contains your buttons)
+    // 3. Add widgets to stacked layout in same order as capture interface
+    m_stackedLayout->addWidget(ui->videoLabel); // Layer 0: Video/image display (background)
+    m_stackedLayout->addWidget(ui->overlayFinal); // Layer 1: UI elements (buttons)
+    if (overlayImageLabel) {
+        m_stackedLayout->addWidget(overlayImageLabel); // Layer 2: Foreground template (top)
+    }
 
     // 4. Add the stacked layout to the main grid layout, making it stretch
-    mainLayout->addLayout(m_stackedLayout,
-                          0,
-                          0);        // Place the stacked layout in the first cell (row 0, col 0)
-    mainLayout->setRowStretch(0, 1); // Make this row stretchable, so it takes all vertical space
-    mainLayout->setColumnStretch(0,
-                                 1); // Make this column stretchable, so it takes all horizontal space
+    mainLayout->addLayout(m_stackedLayout, 0, 0); // Place the stacked layout in the first cell
+    mainLayout->setRowStretch(0, 1); // Make this row stretchable
+    mainLayout->setColumnStretch(0, 1); // Make this column stretchable
 
     // 5. Set the main grid layout for the Final widget
     setLayout(mainLayout); // Apply the mainLayout to the Final widget
@@ -78,10 +89,13 @@ Final::Final(QWidget *parent)
     ui->overlayFinal->setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
     ui->overlayFinal->setStyleSheet("background-color: transparent;"); // Crucial for transparency
 
-    // Ensure overlayFinal is on top
-    ui->overlayFinal->raise(); // Brings overlayFinal to the front of the stacked layout.
-    ui->back->raise();         // Ensure buttons are on top of overlay
-    ui->save->raise();         // Ensure buttons are on top of overlay
+    // Ensure proper layering (same as capture interface)
+    if (overlayImageLabel) {
+        overlayImageLabel->raise(); // Foreground template on top
+    }
+    ui->overlayFinal->raise(); // UI elements (buttons) on top
+    ui->back->raise();         // Ensure back button is clickable
+    ui->save->raise();         // Ensure save button is clickable
 
     // --- Existing setup for buttons and timers ---
 
@@ -126,6 +140,13 @@ Final::~Final()
         delete videoPlaybackTimer;
         videoPlaybackTimer = nullptr;
     }
+    
+    // Clean up overlay image label
+    if (overlayImageLabel) {
+        delete overlayImageLabel;
+        overlayImageLabel = nullptr;
+    }
+    
     delete ui;
 }
 
@@ -144,12 +165,29 @@ void Final::refreshDisplay()
     }
     // If no video frames, but a single image is loaded
     else if (!m_lastLoadedImage.isNull()) {
-        // Scale the stored original image to the current size of ui->videoLabel
-        QPixmap scaledImage = m_lastLoadedImage
-                                  .scaled(ui->videoLabel->size(),
-                                          Qt::IgnoreAspectRatio, // <== IMPORTANT: Stretches to fill
-                                          Qt::SmoothTransformation);
-        ui->videoLabel->setPixmap(scaledImage);
+        // The image is already scaled from the capture interface, so display it as-is
+        // Only apply minimal scaling if the image is too large for the label
+        QSize labelSize = ui->videoLabel->size();
+        QSize imageSize = m_lastLoadedImage.size();
+        
+        qDebug() << "Final interface displaying image. Image size:" << imageSize << "Label size:" << labelSize;
+        
+        // Only scale down if the image is larger than the label
+        if (imageSize.width() > labelSize.width() || imageSize.height() > labelSize.height()) {
+            QPixmap scaledImage = m_lastLoadedImage.scaled(
+                labelSize,
+                Qt::KeepAspectRatio,
+                Qt::SmoothTransformation
+            );
+            ui->videoLabel->setPixmap(scaledImage);
+            qDebug() << "Image was re-scaled down to:" << scaledImage.size();
+        } else {
+            // Display the image as-is since it's already properly scaled
+            ui->videoLabel->setPixmap(m_lastLoadedImage);
+            qDebug() << "Image displayed as-is (no re-scaling needed)";
+        }
+        
+        ui->videoLabel->setAlignment(Qt::AlignCenter);
     }
     // If nothing is loaded, clear the display
     else {
@@ -166,6 +204,19 @@ void Final::resizeEvent(QResizeEvent *event)
         ui->videoLabel->resize(this->size());
     if (ui->overlayFinal)
         ui->overlayFinal->resize(this->size());
+    if (overlayImageLabel) {
+        overlayImageLabel->resize(this->size());
+        overlayImageLabel->move(0, 0);
+        
+        // Use the same resize logic as capture interface
+        overlayImageLabel->resize(this->size());
+        overlayImageLabel->move(0, 0);
+    }
+
+    // Ensure buttons remain on top after resize (same as capture interface)
+    ui->overlayFinal->raise();
+    ui->back->raise();
+    ui->save->raise();
 
     // <== CRITICAL: Re-scale and display the content when the widget resizes
     refreshDisplay();
@@ -180,7 +231,9 @@ void Final::setImage(const QPixmap &image)
 
     m_videoFrames.clear(); // Clear any existing video frames
     m_currentFrameIndex = 0;
-    m_lastLoadedImage = image; // Store the original image
+    m_lastLoadedImage = image; // Store the scaled image from capture interface
+
+    qDebug() << "Final interface received image with size:" << image.size();
 
     ui->videoLabel->setText(""); // Clear any previous text
 
@@ -208,6 +261,39 @@ void Final::setVideo(const QList<QPixmap> &frames)
     }
 }
 
+void Final::setForegroundOverlay(const QString &foregroundPath)
+{
+    if (!overlayImageLabel) {
+        qWarning() << "overlayImageLabel is null! Cannot set foreground overlay.";
+        return;
+    }
+
+    if (foregroundPath.isEmpty()) {
+        qDebug() << "No foreground path provided, hiding overlay.";
+        overlayImageLabel->hide();
+        return;
+    }
+
+    QPixmap overlayPixmap(foregroundPath);
+    if (overlayPixmap.isNull()) {
+        qWarning() << "Failed to load foreground overlay from path:" << foregroundPath;
+        overlayImageLabel->hide();
+        return;
+    }
+
+    // Use the same logic as capture interface: set scaled contents and show
+    overlayImageLabel->setPixmap(overlayPixmap);
+    overlayImageLabel->setScaledContents(true); // Same as capture interface
+    overlayImageLabel->show();
+    
+    // Ensure buttons remain on top after setting overlay (same as capture interface)
+    ui->overlayFinal->raise();
+    ui->back->raise();
+    ui->save->raise();
+    
+    qDebug() << "Foreground overlay set successfully from:" << foregroundPath;
+}
+
 void Final::playNextFrame()
 {
     if (m_videoFrames.isEmpty()) {
@@ -222,13 +308,24 @@ void Final::playNextFrame()
         m_currentFrameIndex = 0;
     }
 
-    // Get the current frame and scale it to the size of ui->videoLabel
+    // Get the current frame - it's already scaled from the capture interface
     QPixmap currentFrame = m_videoFrames.at(m_currentFrameIndex);
-    QPixmap scaledFrame = currentFrame
-                              .scaled(ui->videoLabel->size(),
-                                      Qt::IgnoreAspectRatio, // <== IMPORTANT: Stretches to fill
-                                      Qt::SmoothTransformation);
-    ui->videoLabel->setPixmap(scaledFrame);
+    QSize labelSize = ui->videoLabel->size();
+    QSize frameSize = currentFrame.size();
+    
+    // Only scale down if the frame is larger than the label
+    if (frameSize.width() > labelSize.width() || frameSize.height() > labelSize.height()) {
+        QPixmap scaledFrame = currentFrame.scaled(
+            labelSize,
+            Qt::KeepAspectRatio,
+            Qt::SmoothTransformation
+        );
+        ui->videoLabel->setPixmap(scaledFrame);
+    } else {
+        // Display the frame as-is since it's already properly scaled
+        ui->videoLabel->setPixmap(currentFrame);
+    }
+    ui->videoLabel->setAlignment(Qt::AlignCenter);
 
     m_currentFrameIndex++; // Advance to the next frame for the next timer timeout
 }

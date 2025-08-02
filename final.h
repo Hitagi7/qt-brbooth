@@ -28,6 +28,7 @@ public:
 
     void setImage(const QPixmap &image);
     void setVideo(const QList<QPixmap> &frames);
+    void setForegroundOverlay(const QString &foregroundPath);
 
 signals:
     void backToCapturePage();
@@ -51,6 +52,8 @@ private:
     QStackedLayout *m_stackedLayout = nullptr; // Member for the stacked layout
 
     QPixmap m_lastLoadedImage; // To store the original image for resizing
+
+    QLabel *overlayImageLabel; // For pixel art game UI elements
 
     void saveVideoToFile(); // Helper function for saving video
 

@@ -51,6 +51,7 @@ signals:
     void videoRecorded(const QList<QPixmap> &frames);
     void showFinalOutputPage();
     void personDetectedInFrame();
+    void foregroundPathChanged(const QString &foregroundPath);
 
 private slots:
     void updateCameraFeed(const QImage &frame);

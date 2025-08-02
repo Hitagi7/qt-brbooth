@@ -282,7 +282,7 @@ void Capture::updateCameraFeed(const QImage &image)
         ui->videoLabel->show();
     }
 
-    // Store the original image for capture (without any scaling applied)
+    // Store the original image for potential future use
     m_originalCameraImage = image;
 
     QPixmap pixmap = QPixmap::fromImage(image);
@@ -530,50 +530,33 @@ void Capture::captureRecordingFrame()
     if (!m_isRecording)
         return;
 
-    // Use the original camera image (without display scaling) for recording
+    // Capture the scaled frame exactly as it appears in the UI (ignoring foreground template)
     if (!m_originalCameraImage.isNull()) {
         QPixmap cameraPixmap = QPixmap::fromImage(m_originalCameraImage);
-        QPixmap compositedPixmap = cameraPixmap.copy();
+        QSize labelSize = ui->videoLabel->size();
 
-        // Get the selected overlay/template path
-        QString overlayPath;
-        if (foreground) {
-            overlayPath = foreground->getSelectedForeground();
-        }
-        if (!overlayPath.isEmpty()) {
-            QPixmap overlayPixmap(overlayPath);
-            if (!overlayPixmap.isNull()) {
-                // Scale overlay to match camera image size
-                QPixmap scaledOverlay = overlayPixmap.scaled(
-                    compositedPixmap.size(),
-                    Qt::KeepAspectRatioByExpanding,
-                    Qt::SmoothTransformation
-                );
-                
-                // Composite overlay onto camera image
-                QPainter painter(&compositedPixmap);
-                painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
-                painter.drawPixmap(0, 0, scaledOverlay);
-                painter.end();
-            }
-        }
-        
-        // --- APPLY FRAME SCALING TO RECORDED FRAME ---
-        // Apply frame scaling to the final composited frame using high quality transformation
+        // Apply the same scaling logic as the live display
+        // First scale to fit the label
+        QPixmap scaledPixmap = cameraPixmap.scaled(
+            labelSize,
+            Qt::KeepAspectRatioByExpanding,
+            Qt::SmoothTransformation
+        );
+
+        // Apply person scaling if needed
         if (qAbs(m_personScaleFactor - 1.0) > 0.01) {
-            QSize originalSize = compositedPixmap.size();
+            QSize originalSize = scaledPixmap.size();
             int newWidth = qRound(originalSize.width() * m_personScaleFactor);
             int newHeight = qRound(originalSize.height() * m_personScaleFactor);
             
-            compositedPixmap = compositedPixmap.scaled(
+            scaledPixmap = scaledPixmap.scaled(
                 newWidth, newHeight,
                 Qt::KeepAspectRatio,
                 Qt::SmoothTransformation
             );
         }
-        // --- END FRAME SCALING ---
         
-        m_recordedFrames.append(compositedPixmap);
+        m_recordedFrames.append(scaledPixmap);
     } else {
         qWarning() << "No original camera image available for recording frame.";
     }
@@ -687,57 +670,40 @@ void Capture::stopRecording()
 
 void Capture::performImageCapture()
 {
-    // Use the original camera image (without display scaling) for capture
+    // Capture the scaled frame exactly as it appears in the UI (ignoring foreground template)
     if (!m_originalCameraImage.isNull()) {
         QPixmap cameraPixmap = QPixmap::fromImage(m_originalCameraImage);
-        QPixmap compositedPixmap = cameraPixmap.copy();
+        QSize labelSize = ui->videoLabel->size();
 
-        // Get the selected overlay/template path
-        QString overlayPath;
-        if (foreground) {
-            overlayPath = foreground->getSelectedForeground();
-        }
-        if (!overlayPath.isEmpty()) {
-            QPixmap overlayPixmap(overlayPath);
-            if (!overlayPixmap.isNull()) {
-                // Scale overlay to match camera image size
+        // Apply the same scaling logic as the live display
+        // First scale to fit the label
+        QPixmap scaledPixmap = cameraPixmap.scaled(
+            labelSize,
+            Qt::KeepAspectRatioByExpanding,
+            Qt::SmoothTransformation
+        );
 
-                QPixmap scaledOverlay = overlayPixmap.scaled(
-                    compositedPixmap.size(),
-                    Qt::KeepAspectRatioByExpanding,
-                    Qt::SmoothTransformation
-                );
-                
-                // Composite overlay onto camera image
-                QPainter painter(&compositedPixmap);
-                painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
-                painter.drawPixmap(0, 0, scaledOverlay);
-                painter.end();
-            }
-        }
-        
-        // --- APPLY FRAME SCALING TO CAPTURED IMAGE ---
-        // Apply frame scaling to the final composited image using high quality transformation
+        // Apply person scaling if needed
         if (qAbs(m_personScaleFactor - 1.0) > 0.01) {
-            QSize originalSize = compositedPixmap.size();
+            QSize originalSize = scaledPixmap.size();
             int newWidth = qRound(originalSize.width() * m_personScaleFactor);
             int newHeight = qRound(originalSize.height() * m_personScaleFactor);
             
-            compositedPixmap = compositedPixmap.scaled(
+            scaledPixmap = scaledPixmap.scaled(
                 newWidth, newHeight,
                 Qt::KeepAspectRatio,
                 Qt::SmoothTransformation
             );
         }
-        // --- END FRAME SCALING ---
         
-        m_capturedImage = compositedPixmap;
+        m_capturedImage = scaledPixmap;
         emit imageCaptured(m_capturedImage);
-        qDebug() << "Image captured and composited with overlay.";
-            } else {
-            qWarning() << "Failed to capture image: original camera image is empty.";
-            QMessageBox::warning(this, "Capture Failed", "No camera feed available to capture an image.");
-        }
+        qDebug() << "Image captured (scaled frame exactly as displayed, no foreground compositing).";
+        qDebug() << "Captured image size:" << m_capturedImage.size() << "Original size:" << cameraPixmap.size();
+    } else {
+        qWarning() << "Failed to capture image: original camera image is empty.";
+        QMessageBox::warning(this, "Capture Failed", "No camera feed available to capture an image.");
+    }
     emit showFinalOutputPage();
 }
 
@@ -801,6 +767,9 @@ void Capture::updateForegroundOverlay(const QString &path)
     }
     overlayImageLabel->setPixmap(overlayPixmap);
     overlayImageLabel->show();
+    
+    // Emit signal to notify final interface about foreground path change
+    emit foregroundPathChanged(path);
 }
 
 
