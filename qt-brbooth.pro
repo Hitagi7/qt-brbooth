@@ -21,7 +21,8 @@ SOURCES += \
     iconhover.cpp \
     main.cpp \
     brbooth.cpp \
-    simplepersondetector.cpp
+    simplepersondetector.cpp \
+    personsegmentation.cpp
 
 HEADERS += \
     background.h \
@@ -32,7 +33,8 @@ HEADERS += \
     foreground.h \
     iconhover.h \
     videotemplate.h \
-    simplepersondetector.h
+    simplepersondetector.h \
+    personsegmentation.h
 
 FORMS += \
     background.ui \

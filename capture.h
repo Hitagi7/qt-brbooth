@@ -15,6 +15,7 @@
 #include "videotemplate.h"
 #include "foreground.h"
 #include "simplepersondetector.h"
+#include "personsegmentation.h"
 
 // --- NEW INCLUDES FOR QPROCESS AND JSON ---
 #include <QProcess>
@@ -70,6 +71,17 @@ public:
     double getAverageConfidence() const;
     void onBoundingBoxCheckBoxToggled(bool checked);
     void testYoloDetection(); // Test method for YOLO detection
+    // --- END NEW ---
+    
+    // --- NEW: Person Segmentation Methods ---
+    void setShowPersonSegmentation(bool show);
+    bool getShowPersonSegmentation() const;
+    void onSegmentationCheckBoxToggled(bool checked);
+    void setSegmentationConfidenceThreshold(double threshold);
+    double getSegmentationConfidenceThreshold() const;
+    cv::Mat getLastSegmentedFrame() const;
+    void saveSegmentedFrame(const QString& filename = "");
+    double getSegmentationProcessingTime() const;
     // --- END NEW ---
 
 protected:
@@ -151,6 +163,15 @@ private:
     bool m_showBoundingBoxes; // Toggle for showing/hiding boxes
     // --- END NEW ---
 
+    // --- NEW: Person Segmentation Members ---
+    PersonSegmentationProcessor *m_segmentationProcessor; // Segmentation processor
+    bool m_showPersonSegmentation; // Toggle for showing/hiding segmentation
+    double m_segmentationConfidenceThreshold; // Minimum confidence for segmentation
+    cv::Mat m_lastSegmentedFrame; // Store last segmented frame
+    QList<SegmentationResult> m_currentSegmentations; // Store current segmentation results
+    mutable QMutex m_segmentationMutex; // Thread-safe access to segmentation results
+    // --- END NEW ---
+
     // pass foreground
     Foreground *foreground;
     QLabel* overlayImageLabel;
@@ -163,12 +184,20 @@ private:
     void showBoundingBoxNotification();
     // --- END NEW ---
 
+    // --- NEW: Person Segmentation Methods ---
+    void processPersonSegmentation(const cv::Mat& frame, const QList<BoundingBox>& detections);
+    void updateSegmentationResults(const QList<SegmentationResult>& results);
+    void applySegmentationToFrame(cv::Mat& frame, const QList<SegmentationResult>& results);
+    void showSegmentationNotification();
+    // --- END NEW ---
+
     // --- NEW: Debug Display Members ---
     QWidget *debugWidget;
     QLabel *debugLabel;
     QLabel *fpsLabel;
     QLabel *detectionLabel;
     QCheckBox *boundingBoxCheckBox;
+    QCheckBox *segmentationCheckBox;
     QTimer *debugUpdateTimer;
     int m_currentFPS;
     bool m_personDetected;

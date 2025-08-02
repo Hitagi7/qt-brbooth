@@ -52,6 +52,9 @@ Capture::Capture(QWidget *parent, Foreground *fg)
     , overlayImageLabel(nullptr)
     , m_personDetector(new SimplePersonDetector())
     , m_useCppDetector(true) // Use C++ detector by default
+    , m_segmentationProcessor(new PersonSegmentationProcessor())
+    , m_showPersonSegmentation(false) // Start with segmentation disabled
+    , m_segmentationConfidenceThreshold(0.7) // Default high confidence threshold
 {
     ui->setupUi(this);
 
@@ -619,6 +622,19 @@ void Capture::updateCameraFeed()
 
     cv::flip(frame, frame, 1); // Mirror
 
+    // --- NEW: Apply person segmentation if enabled ---
+    if (m_showPersonSegmentation && m_segmentationProcessor) {
+        QMutexLocker locker(&m_segmentationMutex);
+        QList<SegmentationResult> segmentations = m_currentSegmentations; // Copy for thread safety
+        locker.unlock();
+        
+        if (!segmentations.isEmpty()) {
+            // Apply segmentation immediately for seamless tracking
+            applySegmentationToFrame(frame, segmentations);
+        }
+    }
+    // --- END NEW ---
+
     // Display the frame immediately
     QImage image = cvMatToQImage(frame);
     if (!image.isNull()) {
@@ -660,8 +676,8 @@ void Capture::updateCameraFeed()
     static int frameSkipCounter = 0;
     frameSkipCounter++;
     
-    // Run detection every 20th frame to balance aggressive detection with performance
-    if (frameSkipCounter % 20 == 0 && !isProcessingFrame) {
+    // Run detection EVERY FRAME for seamless real-time tracking without traces
+    if (frameSkipCounter % 1 == 0 && !isProcessingFrame) {
         if (m_useCppDetector && m_personDetector && m_personDetector->isInitialized()) {
             // Use C++ person detector
             isProcessingFrame = true;
@@ -691,6 +707,12 @@ void Capture::updateCameraFeed()
                 
                 // Update detection results
                 updateDetectionResults(boundingBoxes);
+                
+                // --- NEW: Process person segmentation ---
+                if (m_showPersonSegmentation && !boundingBoxes.isEmpty()) {
+                    processPersonSegmentation(frame, boundingBoxes);
+                }
+                // --- END NEW ---
                 
                 if (boundingBoxes.size() > 1) {
                     qDebug() << "👥 MULTIPLE PEOPLE DETECTED! C++ detector found" << boundingBoxes.size() << "persons";
@@ -833,6 +855,15 @@ void Capture::handleYoloOutput() {
         
         // Update detection results for drawing
         updateDetectionResults(detections);
+        
+        // --- NEW: Process person segmentation for YOLO detections ---
+        if (m_showPersonSegmentation && !detections.isEmpty()) {
+            // We need to reconstruct the original frame for segmentation
+            // Since this is called from async YOLO processing, we may need to handle this differently
+            // For now, segmentation will primarily work with C++ detector
+            qDebug() << "🎭 YOLO segmentation integration - skipping for now (async processing limitation)";
+        }
+        // --- END NEW ---
         
         // Update debug information
         m_personDetected = personDetected;
@@ -1182,19 +1213,16 @@ void Capture::keyPressEvent(QKeyEvent *event)
 {
     switch (event->key()) {
     case Qt::Key_B:
-        // Toggle bounding boxes
-        m_showBoundingBoxes = !m_showBoundingBoxes;
-        
-        qDebug() << "Bounding boxes toggled via keyboard to:" << m_showBoundingBoxes;
-        
-        // Show a brief on-screen notification
+        // Toggle bounding boxes with 'B' key
+        setShowBoundingBoxes(!getShowBoundingBoxes());
         showBoundingBoxNotification();
+        qDebug() << "🎮 Bounding boxes toggled via keyboard to:" << m_showBoundingBoxes;
         break;
         
-    case Qt::Key_T:
-        // Test YOLO detection
-        qDebug() << "T key pressed - testing YOLO detection";
-        testYoloDetection();
+    case Qt::Key_S:
+        // Toggle instant segmentation with 'S' key
+        setShowPersonSegmentation(!getShowPersonSegmentation());
+        qDebug() << "🚀 INSTANT person segmentation toggled via keyboard to:" << m_showPersonSegmentation;
         break;
         
     default:
@@ -1421,10 +1449,10 @@ void Capture::showBoundingBoxNotification()
 // --- NEW: Debug Display Methods ---
 
 void Capture::setupDebugDisplay() {
-    // Create debug overlay widget
+    // Create debug overlay widget (compact for ultra-fast mode)
     debugWidget = new QWidget(this);
     debugWidget->setStyleSheet("background-color: rgba(0, 0, 0, 150); color: white; border-radius: 10px; padding: 10px;");
-    debugWidget->setFixedSize(400, 200);
+    debugWidget->setFixedSize(400, 180); // Compact size for essentials only
     debugWidget->move(10, 10);
     debugWidget->setWindowFlags(Qt::WindowStaysOnTopHint);
     debugWidget->show();
@@ -1454,12 +1482,22 @@ void Capture::setupDebugDisplay() {
     boundingBoxCheckBox->setChecked(m_showBoundingBoxes);
     connect(boundingBoxCheckBox, &QCheckBox::toggled, this, &Capture::onBoundingBoxCheckBoxToggled);
     debugLayout->addWidget(boundingBoxCheckBox);
+    
+    // Person Segmentation Checkbox  
+    segmentationCheckBox = new QCheckBox("🎯 REAL Person Shape", debugWidget);
+    segmentationCheckBox->setStyleSheet("color: lime; font-weight: bold; font-size: 14px;");
+    segmentationCheckBox->setChecked(m_showPersonSegmentation);
+    connect(segmentationCheckBox, &QCheckBox::toggled, this, &Capture::onSegmentationCheckBoxToggled);
+    debugLayout->addWidget(segmentationCheckBox);
 
-    // Test Button
-    QPushButton* testButton = new QPushButton("Test YOLO Detection", debugWidget);
-    testButton->setStyleSheet("background-color: #4CAF50; color: white; border: none; padding: 8px; border-radius: 5px; font-weight: bold;");
-    connect(testButton, &QPushButton::clicked, this, &Capture::testYoloDetection);
-    debugLayout->addWidget(testButton);
+    // Simplified keyboard shortcuts info
+    QLabel* shortcutsLabel = new QLabel("🎮 Controls:", debugWidget);
+    shortcutsLabel->setStyleSheet("color: cyan; font-weight: bold; font-size: 12px;");
+    debugLayout->addWidget(shortcutsLabel);
+    
+    QLabel* shortcutsInfo = new QLabel("B: Toggle BBox | S: Toggle REAL Person Shape", debugWidget);
+    shortcutsInfo->setStyleSheet("color: lightgray; font-size: 11px; line-height: 1.2;");
+    debugLayout->addWidget(shortcutsInfo);
 
     // Update timer
     debugUpdateTimer = new QTimer(this);
@@ -1489,16 +1527,20 @@ void Capture::updateDebugDisplay() {
     detectionLabel->setText(detectionText);
     
     // Update main debug info
-    QString debugText = QString("YOLO Status: %1 | BBox: %2 | Processing: %3")
-        .arg(yoloProcess->state() == QProcess::Running ? "Running" : "Idle")
+    QString debugText = QString("🎯 REAL SHAPE | BBox: %1 | Shape: %2 (%3ms) | Proc: %4")
         .arg(m_showBoundingBoxes ? "ON" : "OFF")
+        .arg(m_showPersonSegmentation ? "ON" : "OFF")
+        .arg(m_segmentationProcessor ? QString::number(m_segmentationProcessor->getAverageProcessingTime(), 'f', 1) : "0.0")
         .arg(isProcessingFrame ? "Yes" : "No");
     
     debugLabel->setText(debugText);
     
-    // Update bounding box checkbox state
+    // Update checkbox states
     if (boundingBoxCheckBox) {
         boundingBoxCheckBox->setChecked(m_showBoundingBoxes);
+    }
+    if (segmentationCheckBox) {
+        segmentationCheckBox->setChecked(m_showPersonSegmentation);
     }
     
     // Show detection details if available
@@ -1591,3 +1633,236 @@ void Capture::testYoloDetection() {
     
     qDebug() << "=== END TEST ===";
 }
+
+// --- NEW: Person Segmentation Implementation ---
+
+void Capture::setShowPersonSegmentation(bool show) {
+    m_showPersonSegmentation = show;
+    qDebug() << "Person segmentation display" << (show ? "enabled" : "disabled");
+    
+    if (segmentationCheckBox) {
+        segmentationCheckBox->setChecked(show);
+    }
+}
+
+bool Capture::getShowPersonSegmentation() const {
+    return m_showPersonSegmentation;
+}
+
+void Capture::onSegmentationCheckBoxToggled(bool checked) {
+    setShowPersonSegmentation(checked);
+    if (checked) {
+        showSegmentationNotification();
+    }
+}
+
+void Capture::setSegmentationConfidenceThreshold(double threshold) {
+    m_segmentationConfidenceThreshold = qBound(0.1, threshold, 1.0);
+    qDebug() << "Segmentation confidence threshold set to:" << m_segmentationConfidenceThreshold;
+}
+
+double Capture::getSegmentationConfidenceThreshold() const {
+    return m_segmentationConfidenceThreshold;
+}
+
+cv::Mat Capture::getLastSegmentedFrame() const {
+    QMutexLocker locker(&m_segmentationMutex);
+    return m_lastSegmentedFrame.clone();
+}
+
+void Capture::saveSegmentedFrame(const QString& filename) {
+    cv::Mat segmentedFrame = getLastSegmentedFrame();
+    if (segmentedFrame.empty()) {
+        qWarning() << "No segmented frame available to save";
+        return;
+    }
+    
+    QString saveFilename = filename;
+    if (saveFilename.isEmpty()) {
+        saveFilename = QString("segmented_frame_%1.png")
+            .arg(QDateTime::currentMSecsSinceEpoch());
+    }
+    
+    try {
+        if (cv::imwrite(saveFilename.toStdString(), segmentedFrame)) {
+            qDebug() << "✅ Segmented frame saved as:" << saveFilename;
+        } else {
+            qWarning() << "❌ Failed to save segmented frame:" << saveFilename;
+        }
+    } catch (const cv::Exception& e) {
+        qWarning() << "❌ OpenCV error saving segmented frame:" << e.what();
+    }
+}
+
+void Capture::processPersonSegmentation(const cv::Mat& frame, const QList<BoundingBox>& detections) {
+    if (!m_segmentationProcessor || !m_showPersonSegmentation || frame.empty()) {
+        return;
+    }
+    
+    try {
+        qDebug() << "🎭 Processing person segmentation with" << detections.size() << "detections";
+        
+        // Filter detections by confidence threshold
+        QList<BoundingBox> highConfidenceDetections;
+        for (const BoundingBox& detection : detections) {
+            if (detection.confidence >= m_segmentationConfidenceThreshold) {
+                highConfidenceDetections.append(detection);
+            }
+        }
+        
+        if (highConfidenceDetections.isEmpty()) {
+            qDebug() << "⏭️  No high-confidence detections for segmentation (threshold:" << m_segmentationConfidenceThreshold << ")";
+            updateSegmentationResults(QList<SegmentationResult>());
+            return;
+        }
+        
+        qDebug() << "🎯 Processing" << highConfidenceDetections.size() << "high-confidence detections";
+        
+        // Use fast segmentation for real-time performance
+        QList<SegmentationResult> results = m_segmentationProcessor->segmentPersonsFast(
+            frame, highConfidenceDetections, m_segmentationConfidenceThreshold);
+        
+        // Update segmentation results
+        updateSegmentationResults(results);
+        
+        qDebug() << "✅ Segmentation processing complete, generated" << results.size() << "valid segments";
+        
+    } catch (const std::exception& e) {
+        qWarning() << "❌ Exception in person segmentation:" << e.what();
+        updateSegmentationResults(QList<SegmentationResult>());
+    }
+}
+
+void Capture::updateSegmentationResults(const QList<SegmentationResult>& results) {
+    try {
+        QMutexLocker locker(&m_segmentationMutex);
+        m_currentSegmentations = results;
+        locker.unlock();
+        
+        qDebug() << "🔄 Segmentation results updated:" << results.size() << "segments";
+        
+        // Store combined segmented frame if we have valid results
+        if (!results.isEmpty()) {
+            qDebug() << "📊 Segmentation confidence scores:";
+            for (int i = 0; i < results.size(); ++i) {
+                const SegmentationResult& result = results[i];
+                if (result.isValid) {
+                    qDebug() << "  Segment" << i << "confidence:" << result.confidence 
+                             << "mask size:" << result.mask.cols << "x" << result.mask.rows;
+                }
+            }
+        }
+        
+    } catch (const std::exception& e) {
+        qWarning() << "❌ Exception updating segmentation results:" << e.what();
+    }
+}
+
+void Capture::applySegmentationToFrame(cv::Mat& frame, const QList<SegmentationResult>& results) {
+    if (!m_showPersonSegmentation || results.isEmpty() || frame.empty()) {
+        return;
+    }
+    
+    try {
+        // Create combined transparent background image
+        cv::Mat transparentFrame = m_segmentationProcessor->combineSegmentations(frame, results);
+        
+        if (!transparentFrame.empty()) {
+            // Store the segmented frame
+            QMutexLocker locker(&m_segmentationMutex);
+            m_lastSegmentedFrame = transparentFrame.clone();
+            locker.unlock();
+            
+            // For real-time display: show person on TRULY TRANSPARENT background
+            cv::Mat displayFrame;
+            if (transparentFrame.channels() == 4) {
+                // Create completely transparent background (black = transparent in display)
+                cv::Mat backgroundFrame = cv::Mat::zeros(frame.size(), CV_8UC3);
+                // Keep background completely black for transparency effect
+                
+                // Split channels
+                std::vector<cv::Mat> channels;
+                cv::split(transparentFrame, channels);
+                
+                if (channels.size() >= 4) {
+                    // Create RGB image of just the person
+                    cv::Mat rgbFrame;
+                    std::vector<cv::Mat> rgbChannels = {channels[0], channels[1], channels[2]};
+                    cv::merge(rgbChannels, rgbFrame);
+                    
+                    // Apply mask directly - only show person pixels
+                    cv::Mat alpha = channels[3];
+                    cv::Mat result = cv::Mat::zeros(frame.size(), CV_8UC3);
+                    
+                    // Copy person pixels where mask is white, leave rest transparent (black)
+                    rgbFrame.copyTo(result, alpha);
+                    
+                    displayFrame = result;
+                } else {
+                    displayFrame = transparentFrame;
+                }
+            } else {
+                displayFrame = transparentFrame;
+            }
+            
+            // Replace the original frame with segmented version (person only, transparent background)
+            displayFrame.copyTo(frame);
+            
+        }
+        
+    } catch (const cv::Exception& e) {
+        qWarning() << "❌ OpenCV error applying segmentation:" << e.what();
+    } catch (const std::exception& e) {
+        qWarning() << "❌ Standard error applying segmentation:" << e.what();
+    }
+}
+
+void Capture::showSegmentationNotification() {
+    // Create instant segmentation notification
+    QLabel* notificationLabel = new QLabel(this);
+    notificationLabel->setAlignment(Qt::AlignCenter);
+    notificationLabel->setStyleSheet(
+        "QLabel {"
+        "   background-color: rgba(0, 255, 0, 240);" // Bright lime green for instant speed
+        "   color: black;"
+        "   border-radius: 15px;"
+        "   padding: 25px;"
+        "   font-size: 22px;"
+        "   font-weight: bold;"
+        "   border: 3px solid rgba(0, 255, 0, 255);"
+        "}"
+    );
+    
+    QString message = m_showPersonSegmentation ? 
+        "🎯 REAL Person Shape: ON\nAccurate Contour Tracking" : 
+        "🎯 REAL Person Shape: OFF";
+    notificationLabel->setText(message);
+    
+    // Position the notification in the center of the widget
+    notificationLabel->adjustSize();
+    int x = (width() - notificationLabel->width()) / 2;
+    int y = (height() - notificationLabel->height()) / 2;
+    notificationLabel->move(x, y);
+    
+    // Show the notification
+    notificationLabel->show();
+    notificationLabel->raise(); // Bring to front
+    
+    // Set up a timer to hide the notification after 1.5 seconds
+    QTimer::singleShot(1500, [notificationLabel]() {
+        if (notificationLabel) {
+            notificationLabel->deleteLater();
+        }
+    });
+    
+    qDebug() << "🚀 INSTANT person segmentation" << (m_showPersonSegmentation ? "enabled" : "disabled") << "- transparent background extraction";
+}
+
+double Capture::getSegmentationProcessingTime() const {
+    if (m_segmentationProcessor) {
+        return m_segmentationProcessor->getAverageProcessingTime();
+    }
+    return 0.0;
+}
+
+// --- END: Person Segmentation Implementation ---
