@@ -16,6 +16,12 @@
 #include "foreground.h"
 #include "simplepersondetector.h"
 #include "personsegmentation.h"
+#include "optimized_detector.h"
+#include "fast_segmentation.h"
+#include "common_types.h"
+// #include "segmentation_manager.h"
+// #include "detection_manager.h"
+// Temporarily commented out to avoid circular dependencies
 
 // --- NEW INCLUDES FOR QPROCESS AND JSON ---
 #include <QProcess>
@@ -28,16 +34,6 @@
 #include <QElapsedTimer> // Include for QElapsedTimer
 #include <QMutex> // Include for thread-safe detection access
 // --- END NEW INCLUDES ---
-
-// --- NEW: Bounding Box Structure ---
-struct BoundingBox {
-    int x1, y1, x2, y2;  // Top-left and bottom-right coordinates
-    double confidence;
-    
-    BoundingBox(int x1, int y1, int x2, int y2, double conf) 
-        : x1(x1), y1(y1), x2(x2), y2(y2), confidence(conf) {}
-};
-// --- END NEW ---
 
 QT_BEGIN_NAMESPACE
 namespace Ui { class Capture; }
@@ -157,6 +153,11 @@ private:
     bool m_useCppDetector; // Flag to use C++ detector instead of Python
     // --- END NEW ---
 
+    // --- NEW: Optimized Detector ---
+    OptimizedPersonDetector *m_optimizedDetector; // High-performance ONNX detector
+    bool m_useOptimizedDetector; // Flag to use optimized detector
+    // --- END NEW ---
+
     // --- NEW: Bounding Box Members ---
     QList<BoundingBox> m_currentDetections; // Store current frame detections
     mutable QMutex m_detectionMutex; // Thread-safe access to detections
@@ -170,6 +171,12 @@ private:
     cv::Mat m_lastSegmentedFrame; // Store last segmented frame
     QList<SegmentationResult> m_currentSegmentations; // Store current segmentation results
     mutable QMutex m_segmentationMutex; // Thread-safe access to segmentation results
+    // --- END NEW ---
+
+    // --- NEW: Fast Segmentation Members ---
+    FastSegmentationProcessor *m_fastSegmentationProcessor; // Fast segmentation processor
+    QList<FastSegmentationResult> m_currentFastSegmentations; // Store current fast segmentation results
+    mutable QMutex m_fastSegmentationMutex; // Thread-safe access to fast segmentation results
     // --- END NEW ---
 
     // pass foreground
@@ -206,6 +213,12 @@ private:
     
     // --- NEW: Debug Display Methods ---
     void setupDebugDisplay();
+    // --- END NEW ---
+
+    // --- NEW: Optimized Detector Slots ---
+    void onOptimizedDetectionsReady(const QList<OptimizedDetection>& detections);
+    void onOptimizedProcessingFinished();
+    void processOptimizedSegmentation(const QList<OptimizedDetection>& detections);
     // --- END NEW ---
 
 signals:

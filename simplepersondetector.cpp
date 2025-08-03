@@ -7,9 +7,9 @@ SimplePersonDetector::SimplePersonDetector()
     try {
         m_hog.setSVMDetector(cv::HOGDescriptor::getDefaultPeopleDetector());
         m_initialized = true;
-    } catch (const cv::Exception& e) {
+    } catch (const cv::Exception&) {
         m_initialized = false;
-    } catch (const std::exception& e) {
+    } catch (const std::exception&) {
         m_initialized = false;
     }
 }
@@ -26,10 +26,10 @@ bool SimplePersonDetector::initialize() {
         m_hog.setSVMDetector(cv::HOGDescriptor::getDefaultPeopleDetector());
         m_initialized = true;
         return true;
-    } catch (const cv::Exception& e) {
+    } catch (const cv::Exception&) {
         m_initialized = false;
         return false;
-    } catch (const std::exception& e) {
+    } catch (const std::exception&) {
         m_initialized = false;
         return false;
     }
@@ -151,8 +151,10 @@ QList<SimpleDetection> SimplePersonDetector::detect(const cv::Mat& image) {
         
                 
         
+        // Use a single static variable to track consecutive empty detections
+        static int emptyDetectionCount = 0;
+        
         if (filteredDetections.isEmpty()) {
-            static int emptyDetectionCount = 0;
             emptyDetectionCount++;
             
             if (emptyDetectionCount >= 3) {
@@ -167,15 +169,15 @@ QList<SimpleDetection> SimplePersonDetector::detect(const cv::Mat& image) {
                 }
             }
         } else {
-            static int emptyDetectionCount = 0;
+            // Reset counter when we have successful detections
             emptyDetectionCount = 0;
         }
         
         return filteredDetections;
         
-    } catch (const cv::Exception& e) {
+    } catch (const cv::Exception&) {
         return detections;
-    } catch (const std::exception& e) {
+    } catch (const std::exception&) {
         return detections;
     }
 }

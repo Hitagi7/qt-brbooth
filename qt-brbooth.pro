@@ -30,7 +30,11 @@ SOURCES += \
     main.cpp \
     brbooth.cpp \
     simplepersondetector.cpp \
-    personsegmentation.cpp
+    personsegmentation.cpp \
+    optimized_detector.cpp \
+    fast_segmentation.cpp \
+    segmentation_manager.cpp \
+    detection_manager.cpp
 
 HEADERS += \
     background.h \
@@ -42,7 +46,12 @@ HEADERS += \
     iconhover.h \
     videotemplate.h \
     simplepersondetector.h \
-    personsegmentation.h
+    personsegmentation.h \
+    optimized_detector.h \
+    fast_segmentation.h \
+    segmentation_manager.h \
+    detection_manager.h \
+    common_types.h
 
 FORMS += \
     background.ui \

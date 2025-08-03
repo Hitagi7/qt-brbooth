@@ -51,10 +51,13 @@ Capture::Capture(QWidget *parent, Foreground *fg)
     , m_averageConfidence(0.0)
     , overlayImageLabel(nullptr)
     , m_personDetector(new SimplePersonDetector())
-    , m_useCppDetector(true) // Use C++ detector by default
+    , m_useCppDetector(false) // Disable simple detector in favor of optimized one
+    , m_optimizedDetector(new OptimizedPersonDetector(this)) // Initialize optimized detector
+    , m_useOptimizedDetector(true) // Enable optimized detector by default
     , m_segmentationProcessor(new PersonSegmentationProcessor())
     , m_showPersonSegmentation(false) // Start with segmentation disabled
-    , m_segmentationConfidenceThreshold(0.7) // Default high confidence threshold
+    , m_segmentationConfidenceThreshold(0.5) // Lower confidence for better detection
+    , m_fastSegmentationProcessor(new FastSegmentationProcessor()) // Initialize fast segmentation
 {
     ui->setupUi(this);
 
@@ -248,13 +251,42 @@ Capture::Capture(QWidget *parent, Foreground *fg)
         qDebug() << "YOLOv5 model found at:" << modelPath;
         qDebug() << "Model file size:" << modelFile.size() << "bytes";
         
-        // Initialize the C++ person detector
-        if (m_useCppDetector) {
-            qDebug() << "Initializing C++ person detector...";
-            if (m_personDetector->initialize()) {
-                qDebug() << "✅ C++ person detector initialized successfully!";
+        // Initialize the optimized ONNX detector first
+        if (m_useOptimizedDetector && m_optimizedDetector) {
+            qDebug() << "🚀 Initializing optimized ONNX detector...";
+            
+            // Connect optimized detector signals
+            connect(m_optimizedDetector, &OptimizedPersonDetector::detectionsReady,
+                    this, &Capture::onOptimizedDetectionsReady);
+            connect(m_optimizedDetector, &OptimizedPersonDetector::processingFinished,
+                    this, &Capture::onOptimizedProcessingFinished);
+            
+            // Initialize with segmentation model for real-time performance
+            if (m_optimizedDetector->initialize(OptimizedPersonDetector::YOLO_SEGMENTATION, 
+                                              OptimizedPersonDetector::REAL_TIME)) {
+                qDebug() << "✅ Optimized ONNX detector initialized successfully!";
+                qDebug() << "⚡ Real-time segmentation enabled with GPU acceleration";
+                
+                // Initialize fast segmentation processor
+                if (m_fastSegmentationProcessor) {
+                    m_fastSegmentationProcessor->setSegmentationMethod(FastSegmentationProcessor::YOLO_MASK_DIRECT);
+                    m_fastSegmentationProcessor->setMaxProcessingTime(5.0); // 5ms target
+                    qDebug() << "✅ Fast segmentation processor ready";
+                }
             } else {
-                qWarning() << "❌ Failed to initialize C++ person detector, falling back to Python";
+                qWarning() << "❌ Failed to initialize optimized detector, falling back to simple detector";
+                m_useOptimizedDetector = false;
+                m_useCppDetector = true;
+            }
+        }
+        
+        // Initialize the simple C++ person detector as fallback
+        if (m_useCppDetector) {
+            qDebug() << "Initializing simple C++ person detector...";
+            if (m_personDetector->initialize()) {
+                qDebug() << "✅ Simple C++ person detector initialized successfully!";
+            } else {
+                qWarning() << "❌ Failed to initialize simple C++ person detector, falling back to Python";
                 m_useCppDetector = false;
             }
         }
@@ -676,9 +708,27 @@ void Capture::updateCameraFeed()
     static int frameSkipCounter = 0;
     frameSkipCounter++;
     
-    // Run detection EVERY 2nd FRAME for GPU-accelerated fast & accurate segmentation 
-    if (frameSkipCounter % 2 == 0 && !isProcessingFrame) {
-        if (m_useCppDetector && m_personDetector && m_personDetector->isInitialized()) {
+    // Run detection EVERY FRAME with optimized ONNX detector for real-time performance 
+    if (!isProcessingFrame) {
+        if (m_useOptimizedDetector && m_optimizedDetector && m_optimizedDetector->isInitialized()) {
+            // Use optimized ONNX detector (fastest, most accurate)
+            isProcessingFrame = true;
+            
+            try {
+                // Store current frame for segmentation processing
+                m_lastSegmentedFrame = frame.clone();
+                
+                // Run async detection with built-in segmentation
+                m_optimizedDetector->detectPersonsAsync(frame, 0.5, 0.4);
+                
+                qDebug() << "🚀 Optimized ONNX detection started (frame" << frameSkipCounter << ")";
+                
+            } catch (const std::exception& e) {
+                qWarning() << "Exception in optimized detection:" << e.what();
+                isProcessingFrame = false;
+            }
+            
+        } else if (m_useCppDetector && m_personDetector && m_personDetector->isInitialized()) {
             // Use C++ person detector
             isProcessingFrame = true;
             
@@ -1866,3 +1916,104 @@ double Capture::getSegmentationProcessingTime() const {
 }
 
 // --- END: Person Segmentation Implementation ---
+
+// --- NEW: Optimized Detector Slot Implementations ---
+
+void Capture::onOptimizedDetectionsReady(const QList<OptimizedDetection>& detections) {
+    qDebug() << "🎯 Optimized detections ready:" << detections.size() << "persons detected";
+    
+    try {
+        // Convert OptimizedDetection to BoundingBox for compatibility
+        QList<BoundingBox> boundingBoxes;
+        
+        for (const OptimizedDetection& detection : detections) {
+            if (detection.confidence > 0.3) { // Filter low confidence detections
+                BoundingBox box(
+                    detection.boundingBox.x,
+                    detection.boundingBox.y,
+                    detection.boundingBox.x + detection.boundingBox.width,
+                    detection.boundingBox.y + detection.boundingBox.height,
+                    detection.confidence
+                );
+                boundingBoxes.append(box);
+                
+                qDebug() << "✅ Optimized detection:" << detection.boundingBox.x << detection.boundingBox.y 
+                         << detection.boundingBox.width << "x" << detection.boundingBox.height 
+                         << "conf:" << detection.confidence;
+            }
+        }
+        
+        // Update detection results for bounding box display
+        updateDetectionResults(boundingBoxes);
+        
+        // Process fast segmentation if enabled and we have detections
+        if (m_showPersonSegmentation && !detections.isEmpty()) {
+            processOptimizedSegmentation(detections);
+        }
+        
+        if (boundingBoxes.size() > 1) {
+            qDebug() << "👥 MULTIPLE PEOPLE DETECTED! Optimized detector found" << boundingBoxes.size() << "persons";
+        } else if (boundingBoxes.size() == 1) {
+            qDebug() << "👤 Single person detected with optimized detector";
+        }
+        
+        // Update performance stats
+        if (m_optimizedDetector) {
+            double avgTime = m_optimizedDetector->getAverageInferenceTime();
+            int currentFPS = m_optimizedDetector->getCurrentFPS();
+            
+            static int frameCounter = 0;
+            frameCounter++;
+            if (frameCounter % 30 == 0) { // Log every 30 frames
+                qDebug() << "📊 Optimized detector performance: avg" << avgTime << "ms, FPS:" << currentFPS;
+            }
+        }
+        
+    } catch (const std::exception& e) {
+        qWarning() << "❌ Error processing optimized detections:" << e.what();
+    }
+}
+
+void Capture::onOptimizedProcessingFinished() {
+    isProcessingFrame = false;
+    qDebug() << "🏁 Optimized detection processing finished";
+}
+
+void Capture::processOptimizedSegmentation(const QList<OptimizedDetection>& detections) {
+    if (!m_fastSegmentationProcessor) {
+        return;
+    }
+    
+    try {
+        // Get current frame for segmentation
+        if (m_lastSegmentedFrame.empty()) {
+            qWarning() << "⚠️ No frame available for segmentation";
+            return;
+        }
+        
+        // Process fast segmentation using optimized detections
+        QList<FastSegmentationResult> results = 
+            m_fastSegmentationProcessor->segmentFromOptimizedDetections(m_lastSegmentedFrame, detections);
+        
+        // Update fast segmentation results
+        {
+            QMutexLocker locker(&m_fastSegmentationMutex);
+            m_currentFastSegmentations = results;
+        }
+        
+        qDebug() << "⚡ Fast segmentation complete:" << results.size() << "masks generated";
+        
+        // Performance monitoring
+        double avgTime = m_fastSegmentationProcessor->getAverageProcessingTime();
+        int currentFPS = m_fastSegmentationProcessor->getCurrentFPS();
+        
+        if (avgTime > 0) {
+            qDebug() << "📊 Fast segmentation performance: avg" << avgTime << "ms, FPS:" << currentFPS;
+        }
+        
+    } catch (const std::exception& e) {
+        qWarning() << "❌ Error in optimized segmentation:" << e.what();
+    }
+}
+
+// --- END: Optimized Detector Implementation ---
