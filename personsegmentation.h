@@ -6,6 +6,12 @@
 #include <QList>
 #include <QDebug>
 
+// GPU acceleration support
+#ifdef CV_CUDA
+#include <opencv2/cudaimgproc.hpp>
+#include <opencv2/cudaarithm.hpp>
+#endif
+
 // Forward declaration for BoundingBox
 struct BoundingBox;
 
@@ -100,6 +106,7 @@ private:
     double m_lastProcessingTime;
     double m_averageProcessingTime;
     std::chrono::steady_clock::time_point m_timingStart;
+    bool m_gpuAvailable; // Whether GPU acceleration is available
     QList<double> m_processingTimes;
     static const int MAX_TIMING_SAMPLES = 30;
     

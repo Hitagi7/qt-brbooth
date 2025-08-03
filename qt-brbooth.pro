@@ -5,6 +5,14 @@ greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
 
 CONFIG += c++17
 
+# Enable OpenMP for multi-threading optimizations
+win32-msvc*: QMAKE_CXXFLAGS += /openmp
+win32-msvc*: LIBS += -llibomp
+win32-g++: QMAKE_CXXFLAGS += -fopenmp
+win32-g++: LIBS += -lgomp
+unix: QMAKE_CXXFLAGS += -fopenmp
+unix: LIBS += -lgomp
+
 # Config for OpenCV
 CONFIG += link_pkgconfig
 

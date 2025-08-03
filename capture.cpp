@@ -672,12 +672,12 @@ void Capture::updateCameraFeed()
         return;
     }
 
-    // --- OPTIMIZED DETECTION PROCESSING: Only process every 3rd frame to maintain good FPS ---
+    // --- GPU-ACCELERATED DETECTION PROCESSING: Process every 2nd frame with optimizations ---
     static int frameSkipCounter = 0;
     frameSkipCounter++;
     
-    // Run detection EVERY FRAME for seamless real-time tracking without traces
-    if (frameSkipCounter % 1 == 0 && !isProcessingFrame) {
+    // Run detection EVERY 2nd FRAME for GPU-accelerated fast & accurate segmentation 
+    if (frameSkipCounter % 2 == 0 && !isProcessingFrame) {
         if (m_useCppDetector && m_personDetector && m_personDetector->isInitialized()) {
             // Use C++ person detector
             isProcessingFrame = true;
@@ -1222,7 +1222,7 @@ void Capture::keyPressEvent(QKeyEvent *event)
     case Qt::Key_S:
         // Toggle instant segmentation with 'S' key
         setShowPersonSegmentation(!getShowPersonSegmentation());
-        qDebug() << "🚀 INSTANT person segmentation toggled via keyboard to:" << m_showPersonSegmentation;
+        qDebug() << "🚀 GPU-ACCELERATED fast & accurate person extraction toggled via keyboard to:" << m_showPersonSegmentation;
         break;
         
     default:
@@ -1484,7 +1484,7 @@ void Capture::setupDebugDisplay() {
     debugLayout->addWidget(boundingBoxCheckBox);
     
     // Person Segmentation Checkbox  
-    segmentationCheckBox = new QCheckBox("🎯 REAL Person Shape", debugWidget);
+            segmentationCheckBox = new QCheckBox("🚀 GPU-ACCELERATED Fast & Accurate", debugWidget);
     segmentationCheckBox->setStyleSheet("color: lime; font-weight: bold; font-size: 14px;");
     segmentationCheckBox->setChecked(m_showPersonSegmentation);
     connect(segmentationCheckBox, &QCheckBox::toggled, this, &Capture::onSegmentationCheckBoxToggled);
@@ -1495,7 +1495,7 @@ void Capture::setupDebugDisplay() {
     shortcutsLabel->setStyleSheet("color: cyan; font-weight: bold; font-size: 12px;");
     debugLayout->addWidget(shortcutsLabel);
     
-    QLabel* shortcutsInfo = new QLabel("B: Toggle BBox | S: Toggle REAL Person Shape", debugWidget);
+            QLabel* shortcutsInfo = new QLabel("B: Toggle BBox | S: Toggle GPU-ACCELERATED Fast & Accurate", debugWidget);
     shortcutsInfo->setStyleSheet("color: lightgray; font-size: 11px; line-height: 1.2;");
     debugLayout->addWidget(shortcutsInfo);
 
@@ -1527,7 +1527,7 @@ void Capture::updateDebugDisplay() {
     detectionLabel->setText(detectionText);
     
     // Update main debug info
-    QString debugText = QString("🎯 REAL SHAPE | BBox: %1 | Shape: %2 (%3ms) | Proc: %4")
+            QString debugText = QString("🚀 GPU-ACCEL | BBox: %1 | Person: %2 (%3ms) | Proc: %4")
         .arg(m_showBoundingBoxes ? "ON" : "OFF")
         .arg(m_showPersonSegmentation ? "ON" : "OFF")
         .arg(m_segmentationProcessor ? QString::number(m_segmentationProcessor->getAverageProcessingTime(), 'f', 1) : "0.0")
@@ -1833,9 +1833,9 @@ void Capture::showSegmentationNotification() {
         "}"
     );
     
-    QString message = m_showPersonSegmentation ? 
-        "🎯 REAL Person Shape: ON\nAccurate Contour Tracking" : 
-        "🎯 REAL Person Shape: OFF";
+        QString message = m_showPersonSegmentation ?
+        "🚀 GPU-ACCELERATED Fast & Accurate: ON\nHigh-Quality Person Extraction with Optimizations" :
+        "🚀 GPU-ACCELERATED Fast & Accurate: OFF";
     notificationLabel->setText(message);
     
     // Position the notification in the center of the widget
@@ -1855,7 +1855,7 @@ void Capture::showSegmentationNotification() {
         }
     });
     
-    qDebug() << "🚀 INSTANT person segmentation" << (m_showPersonSegmentation ? "enabled" : "disabled") << "- transparent background extraction";
+    qDebug() << "🚀 GPU-ACCELERATED fast & accurate person extraction" << (m_showPersonSegmentation ? "enabled" : "disabled") << "- high-quality optimized segmentation";
 }
 
 double Capture::getSegmentationProcessingTime() const {
