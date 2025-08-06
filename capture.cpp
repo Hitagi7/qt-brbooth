@@ -514,7 +514,7 @@ void Capture::onTFLiteModelLoaded(bool success)
 void Capture::updateDebugDisplay()
 {
     if (debugLabel) {
-        QString debugInfo = QString("FPS: %1 | Segmentation: %2 | Tracking | Seg FPS: %3")
+        QString debugInfo = QString("FPS: %1 | Working Seg: %2 | Improved | Seg FPS: %3")
                            .arg(m_currentFPS)
                            .arg(m_showSegmentation ? "ON" : "OFF")
                            .arg(QString::number(m_segmentationFPS, 'f', 1));

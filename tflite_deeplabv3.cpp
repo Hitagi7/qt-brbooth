@@ -14,9 +14,12 @@ TFLiteDeepLabv3::TFLiteDeepLabv3(QObject *parent)
     , m_inputWidth(513)
     , m_inputHeight(513)
     , m_confidenceThreshold(0.5f)
-    , m_processingInterval(33) // ~30 FPS
+         , m_processingInterval(16) // ~60 FPS for better performance
     , m_performanceMode(Balanced)
     , m_processingActive(false)
+    , hasValidTracking(false)
+    , trackerInitialized(false)
+    , trackingFrames(0)
 {
     m_processingTimer = new QTimer(this);
     m_processingTimer->setSingleShot(false);
@@ -109,15 +112,15 @@ cv::Mat TFLiteDeepLabv3::performOpenCVSegmentation(const cv::Mat &inputFrame)
     static int trackingFrames = 0;
     static bool trackerInitialized = false;
     
-    // Resize frame for faster detection
-    cv::Mat resizedFrame;
-    double scale = 0.5; // Process at half resolution for speed
-    cv::resize(frame, resizedFrame, cv::Size(), scale, scale);
+         // Resize frame for faster detection - use smaller scale for better performance
+     cv::Mat resizedFrame;
+     double scale = 0.25; // Process at quarter resolution for much better speed
+     cv::resize(frame, resizedFrame, cv::Size(), scale, scale);
     
-    // Detect people with HOG
-    std::vector<cv::Rect> foundLocations;
-    std::vector<double> weights;
-    hog.detectMultiScale(resizedFrame, foundLocations, weights, 0, cv::Size(8, 8), cv::Size(8, 8), 1.1, 1, false);
+                   // Detect people with HOG - simplified for better performance
+      std::vector<cv::Rect> foundLocations;
+      std::vector<double> weights;
+      hog.detectMultiScale(resizedFrame, foundLocations, weights, 0, cv::Size(8, 8), cv::Size(8, 8), 1.1, 1, false);
     
     // Debug output
     if (!foundLocations.empty()) {
@@ -137,8 +140,8 @@ cv::Mat TFLiteDeepLabv3::performOpenCVSegmentation(const cv::Mat &inputFrame)
             double confidence = weights[i];
             cv::Rect detection = foundLocations[i];
             
-            // Check if this detection is reasonable
-            if (confidence > 0.2 && detection.width > 20 && detection.height > 40) {
+                                                                                                                                                                                                               // More permissive person detection - back to working version
+                if (confidence > 0.1 && detection.width > 15 && detection.height > 30) {
                 if (confidence > bestConfidence) {
                     bestConfidence = confidence;
                     bestIndex = i;
@@ -146,7 +149,7 @@ cv::Mat TFLiteDeepLabv3::performOpenCVSegmentation(const cv::Mat &inputFrame)
             }
         }
         
-        if (bestConfidence > 0.2) {
+                                                                                                                                               if (bestConfidence > 0.1) {
             currentDetection = foundLocations[bestIndex];
             detectionSuccess = true;
             
@@ -160,13 +163,26 @@ cv::Mat TFLiteDeepLabv3::performOpenCVSegmentation(const cv::Mat &inputFrame)
         }
     }
     
-    // If no HOG detection, try to use last known position
-    if (!detectionSuccess && hasValidTracking && trackingFrames < 10) {
-        currentDetection = lastDetection;
-        detectionSuccess = true;
-        trackingFrames++;
-        qDebug() << "Using last known position, frames:" << trackingFrames;
-    }
+                             // If no HOG detection, try to use last known position - more permissive
+      if (!detectionSuccess && hasValidTracking && trackingFrames < 20 && !lastDetection.empty()) {
+          currentDetection = lastDetection;
+          detectionSuccess = true;
+          trackingFrames++;
+          qDebug() << "Using last known position, frames:" << trackingFrames;
+      }
+      
+                           // Fallback: if no detection at all, create a default detection in the center
+        if (!detectionSuccess) {
+            int centerX = resizedFrame.cols / 2;
+            int centerY = resizedFrame.rows / 2;
+            int defaultWidth = resizedFrame.cols / 3;
+            int defaultHeight = resizedFrame.rows / 2;
+            
+            currentDetection = cv::Rect(centerX - defaultWidth/2, centerY - defaultHeight/2, 
+                                       defaultWidth, defaultHeight);
+            detectionSuccess = true;
+            qDebug() << "Using fallback center detection";
+        }
     
     // Create person mask
     cv::Mat personMask = cv::Mat::zeros(resizedFrame.size(), CV_8UC1);
@@ -176,82 +192,82 @@ cv::Mat TFLiteDeepLabv3::performOpenCVSegmentation(const cv::Mat &inputFrame)
         lastDetection = currentDetection;
         trackingFrames = 0;
         
-        // Expand detection to include full person
-        cv::Rect expandedDetection = currentDetection;
-        int expandX = static_cast<int>(currentDetection.width * 0.15);
-        int expandY = static_cast<int>(currentDetection.height * 0.3);
+                                   // Balanced detection expansion for complete person
+          cv::Rect expandedDetection = currentDetection;
+          int expandX = static_cast<int>(currentDetection.width * 0.15);  // Moderate horizontal expansion
+          int expandY = static_cast<int>(currentDetection.height * 0.3);  // Moderate vertical expansion
+          
+          expandedDetection.x = std::max(0, expandedDetection.x - expandX);
+          expandedDetection.y = std::max(0, expandedDetection.y - expandY);
+          expandedDetection.width = std::min(resizedFrame.cols - expandedDetection.x, 
+                                            expandedDetection.width + 2 * expandX);
+          expandedDetection.height = std::min(resizedFrame.rows - expandedDetection.y, 
+                                             expandedDetection.height + 2 * expandY);
         
-        expandedDetection.x = std::max(0, expandedDetection.x - expandX);
-        expandedDetection.y = std::max(0, expandedDetection.y - expandY);
-        expandedDetection.width = std::min(resizedFrame.cols - expandedDetection.x, 
-                                          expandedDetection.width + 2 * expandX);
-        expandedDetection.height = std::min(resizedFrame.rows - expandedDetection.y, 
-                                           expandedDetection.height + 2 * expandY);
-        
-        // Extract the region of interest with some padding
-        cv::Mat roi = resizedFrame(expandedDetection);
-        
-        // Convert to grayscale for edge detection
-        cv::Mat gray;
-        cv::cvtColor(roi, gray, cv::COLOR_BGR2GRAY);
-        
-        // Apply Gaussian blur to reduce noise
-        cv::GaussianBlur(gray, gray, cv::Size(3, 3), 0);
-        
-        // Multi-scale edge detection for better person boundary detection
-        cv::Mat edges1, edges2, edges3, combinedEdges;
-        
-        // Detect edges at different scales
-        cv::Canny(gray, edges1, 30, 100);
-        cv::Canny(gray, edges2, 50, 150);
-        cv::Canny(gray, edges3, 70, 200);
-        
-        // Combine edges from different scales
-        cv::bitwise_or(edges1, edges2, combinedEdges);
-        cv::bitwise_or(combinedEdges, edges3, combinedEdges);
-        
-        // Apply morphological operations to connect broken edges
-        cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
-        cv::morphologyEx(combinedEdges, combinedEdges, cv::MORPH_CLOSE, kernel);
-        
-        // Find contours in the edge image
-        std::vector<std::vector<cv::Point>> edgeContours;
-        cv::findContours(combinedEdges, edgeContours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
-        
-        // Create a mask for the person silhouette
-        cv::Mat silhouetteMask = cv::Mat::zeros(roi.size(), CV_8UC1);
-        
-        // Filter and combine contours to form person silhouette
-        std::vector<std::vector<cv::Point>> validContours;
-        
-        for (const auto& contour : edgeContours) {
-            double area = cv::contourArea(contour);
-            cv::Rect boundingRect = cv::boundingRect(contour);
-            
-            // More relaxed filtering criteria
-            if (area > 100 && area < roi.rows * roi.cols * 0.9) {
-                double aspectRatio = static_cast<double>(boundingRect.height) / boundingRect.width;
-                
-                // Accept a wider range of aspect ratios
-                if (aspectRatio > 0.8 && aspectRatio < 5.0) {
-                    // Check if contour is within the detection area
-                    cv::Point2f roiCenter(roi.cols / 2.0, roi.rows / 2.0);
-                    cv::Point2f contourCenter;
-                    cv::Moments moments = cv::moments(contour);
-                    if (moments.m00 != 0) {
-                        contourCenter.x = moments.m10 / moments.m00;
-                        contourCenter.y = moments.m01 / moments.m00;
-                        
-                        double distance = cv::norm(roiCenter - contourCenter);
-                        double maxDistance = std::min(roi.cols, roi.rows) * 0.6; // More relaxed distance
-                        
-                        if (distance < maxDistance) {
-                            validContours.push_back(contour);
-                        }
-                    }
-                }
-            }
-        }
+                          // Extract the region of interest with some padding
+         cv::Mat roi = resizedFrame(expandedDetection);
+         
+         // Check if ROI is valid
+         if (roi.empty() || roi.cols <= 0 || roi.rows <= 0) {
+             qDebug() << "Invalid ROI, skipping processing";
+             return frame.clone();
+         }
+         
+         // Convert to grayscale for edge detection
+         cv::Mat gray;
+         cv::cvtColor(roi, gray, cv::COLOR_BGR2GRAY);
+         
+         // Apply Gaussian blur to reduce noise
+         cv::GaussianBlur(gray, gray, cv::Size(3, 3), 0);
+         
+                            // Enhanced edge detection for complete person capture
+          cv::Mat edges1, edges2, edges3, combinedEdges;
+          
+                                                                                       // Simplified single-scale edge detection for better performance
+             cv::Canny(gray, combinedEdges, 30, 90);   // Single scale for speed
+          
+                                           // Simplified morphological operations for better performance
+            cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
+            cv::morphologyEx(combinedEdges, combinedEdges, cv::MORPH_CLOSE, kernel);
+         
+         // Find contours in the edge image
+         std::vector<std::vector<cv::Point>> edgeContours;
+         cv::findContours(combinedEdges, edgeContours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+         
+         // Create a mask for the person silhouette
+         cv::Mat silhouetteMask = cv::Mat::zeros(roi.size(), CV_8UC1);
+    
+                           // Permissive contour filtering for complete person capture
+          std::vector<std::vector<cv::Point>> validContours;
+          
+          for (const auto& contour : edgeContours) {
+              double area = cv::contourArea(contour);
+              cv::Rect boundingRect = cv::boundingRect(contour);
+              
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               // More permissive contour filtering - back to working version
+                     if (area > 10 && area < roi.rows * roi.cols * 0.95) { // Very wide area range
+                         double aspectRatio = static_cast<double>(boundingRect.height) / boundingRect.width;
+                         
+                         // Accept very wide range of proportions
+                         if (aspectRatio > 0.1 && aspectRatio < 10.0) { // Very flexible proportions
+                          // Check if contour is within the detection area
+                          cv::Point2f roiCenter(roi.cols / 2.0, roi.rows / 2.0);
+                          cv::Point2f contourCenter;
+                          cv::Moments moments = cv::moments(contour);
+                          if (moments.m00 != 0) {
+                              contourCenter.x = moments.m10 / moments.m00;
+                              contourCenter.y = moments.m01 / moments.m00;
+                              
+                                                             double distance = cv::norm(roiCenter - contourCenter);
+                               double maxDistance = std::min(roi.cols, roi.rows) * 0.9; // Very relaxed distance constraint
+                              
+                              if (distance < maxDistance) {
+                                  validContours.push_back(contour);
+                              }
+                          }
+                      }
+                  }
+          }
         
         if (!validContours.empty()) {
             // Sort contours by area (largest first)
@@ -260,16 +276,19 @@ cv::Mat TFLiteDeepLabv3::performOpenCVSegmentation(const cv::Mat &inputFrame)
                          return cv::contourArea(a) > cv::contourArea(b);
                      });
             
-            // Draw all valid contours to create a complete silhouette
-            for (size_t i = 0; i < std::min(validContours.size(), size_t(3)); i++) {
-                cv::drawContours(silhouetteMask, validContours, static_cast<int>(i), cv::Scalar(255), -1);
-            }
+                                      // Aggressive silhouette formation for complete person capture
+              cv::Mat tempSilhouette = cv::Mat::zeros(roi.size(), CV_8UC1);
+              
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               // More aggressive silhouette formation - back to working version
+                   for (size_t i = 0; i < std::min(validContours.size(), size_t(8)); i++) {
+                       cv::drawContours(tempSilhouette, validContours, static_cast<int>(i), cv::Scalar(255), -1);
+                   }
+                  
+                  // Simplified morphological operations for speed
+                  cv::Mat closeKernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(7, 7));
+                  cv::morphologyEx(tempSilhouette, silhouetteMask, cv::MORPH_CLOSE, closeKernel);
             
-            // Apply morphological operations to fill gaps and smooth the silhouette
-            cv::Mat closeKernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
-            cv::morphologyEx(silhouetteMask, silhouetteMask, cv::MORPH_CLOSE, closeKernel);
-            
-            // Fill any remaining holes
+            // Fill holes gently
             cv::Mat floodFillMask = cv::Mat::zeros(silhouetteMask.rows + 2, silhouetteMask.cols + 2, CV_8UC1);
             silhouetteMask.copyTo(floodFillMask(cv::Rect(1, 1, silhouetteMask.cols, silhouetteMask.rows)));
             cv::floodFill(floodFillMask, cv::Point(0, 0), cv::Scalar(255));
@@ -277,49 +296,121 @@ cv::Mat TFLiteDeepLabv3::performOpenCVSegmentation(const cv::Mat &inputFrame)
             cv::bitwise_not(floodFillMask, floodFillMaskInverted);
             silhouetteMask = silhouetteMask | floodFillMaskInverted(cv::Rect(1, 1, silhouetteMask.cols, silhouetteMask.rows));
             
-            // Apply final smoothing
-            cv::Mat smoothKernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
-            cv::morphologyEx(silhouetteMask, silhouetteMask, cv::MORPH_OPEN, smoothKernel);
+                                                   // Simplified smoothing for better performance
+              cv::Mat smoothKernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
+              cv::morphologyEx(silhouetteMask, silhouetteMask, cv::MORPH_OPEN, smoothKernel);
+             
+             // Final refinement: keep only the largest connected region
+             std::vector<std::vector<cv::Point>> finalContours;
+             cv::findContours(silhouetteMask, finalContours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+             
+             if (!finalContours.empty()) {
+                 // Sort by area and keep the largest
+                 std::sort(finalContours.begin(), finalContours.end(), 
+                          [](const std::vector<cv::Point>& a, const std::vector<cv::Point>& b) {
+                              return cv::contourArea(a) > cv::contourArea(b);
+                          });
+                 
+                 cv::Mat refinedMask = cv::Mat::zeros(roi.size(), CV_8UC1);
+                 cv::drawContours(refinedMask, finalContours, 0, cv::Scalar(255), -1);
+                 silhouetteMask = refinedMask;
+             }
+             
+                                                                                                                                                                                                                                                                                                                                                                                                                                                               // Simplified background removal for better performance
+                 // Skip complex background removal for speed - just use the silhouette as is
             
-        } else {
-            // If no valid contours found, create a more sophisticated fallback
-            // Use the original detection rectangle but make it more person-shaped
-            
-            // Create a mask based on the detection area
-            cv::rectangle(silhouetteMask, cv::Rect(0, 0, roi.cols, roi.rows), cv::Scalar(255), -1);
-            
-            // Apply gradient mask to make it more person-shaped
-            cv::Mat gradientMask = cv::Mat::zeros(roi.size(), CV_8UC1);
-            for (int y = 0; y < roi.rows; y++) {
-                for (int x = 0; x < roi.cols; x++) {
-                    // Create a more person-like shape (narrower at top, wider at bottom)
-                    double centerX = roi.cols / 2.0;
-                    double centerY = roi.rows / 2.0;
-                    double distanceFromCenter = std::abs(x - centerX);
-                    double maxWidth = roi.cols * 0.4 * (1.0 + (y - centerY) / centerY);
-                    
-                    if (distanceFromCenter < maxWidth) {
-                        gradientMask.at<uchar>(y, x) = 255;
-                    }
-                }
-            }
-            
-            // Combine with the rectangle mask
-            cv::bitwise_and(silhouetteMask, gradientMask, silhouetteMask);
+                                   } else {
+              // Enhanced fallback for complete person capture
+              qDebug() << "No valid contours found, using fallback silhouette";
+              if (hasValidTracking && trackerInitialized && !lastSilhouette.empty()) {
+                 // Use previous silhouette as a guide for consistency
+                 cv::Mat previousSilhouette;
+                 cv::resize(lastSilhouette, previousSilhouette, roi.size(), 0, 0, cv::INTER_LINEAR);
+                 
+                 // Apply dilation to account for movement and ensure complete coverage
+                 cv::Mat dilatedPrevious;
+                 cv::dilate(previousSilhouette, dilatedPrevious, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(7, 7)));
+                 
+                 // Use the dilated previous silhouette as a starting point
+                 silhouetteMask = dilatedPrevious.clone();
+                 
+                           } else {
+                                                                       // Create a better person-shaped fallback using edge detection
+                   // Use the original detection rectangle as a starting point
+                   cv::rectangle(silhouetteMask, cv::Rect(0, 0, roi.cols, roi.rows), cv::Scalar(255), -1);
+                   
+                   // Apply edge-based refinement to make it more person-shaped
+                   cv::Mat edgeRefined = cv::Mat::zeros(roi.size(), CV_8UC1);
+                   
+                   // Use the existing edge detection to refine the shape
+                   if (!combinedEdges.empty()) {
+                       // Find contours in the edge image for refinement
+                       std::vector<std::vector<cv::Point>> refinementContours;
+                       cv::findContours(combinedEdges, refinementContours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+                       
+                       // Draw edge contours to refine the shape
+                       for (size_t i = 0; i < std::min(refinementContours.size(), size_t(3)); i++) {
+                           double area = cv::contourArea(refinementContours[i]);
+                           if (area > 50) { // Reasonable threshold for meaningful contours
+                               cv::drawContours(edgeRefined, refinementContours, static_cast<int>(i), cv::Scalar(255), -1);
+                           }
+                       }
+                       
+                       // Combine with the rectangle mask
+                       cv::Mat combinedMask;
+                       cv::bitwise_and(silhouetteMask, edgeRefined, combinedMask);
+                       silhouetteMask = combinedMask;
+                   }
+                   
+                                                           // Simplified morphological operations for speed
+                     cv::Mat closeKernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(7, 7));
+                     cv::morphologyEx(silhouetteMask, silhouetteMask, cv::MORPH_CLOSE, closeKernel);
+                     
+                                                                                       // Simple fallback rectangle
+                       if (cv::countNonZero(silhouetteMask) < 50) {
+                           cv::rectangle(silhouetteMask, cv::Rect(roi.cols/4, roi.rows/8, roi.cols/2, roi.rows*3/4), cv::Scalar(255), -1);
+                       }
+             }
         }
         
-        // Copy the silhouette to the main mask
-        cv::Mat roiMask = personMask(expandedDetection);
-        silhouetteMask.copyTo(roiMask);
-        
-        // Apply final smoothing to the complete mask
-        cv::Mat finalKernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
-        cv::morphologyEx(personMask, personMask, cv::MORPH_CLOSE, finalKernel);
-        cv::morphologyEx(personMask, personMask, cv::MORPH_OPEN, finalKernel);
+            // Copy the silhouette to the main mask
+    cv::Mat roiMask = personMask(expandedDetection);
+    silhouetteMask.copyTo(roiMask);
+    
+                                       // Simplified final smoothing for better performance
+       cv::Mat finalKernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
+       cv::morphologyEx(personMask, personMask, cv::MORPH_CLOSE, finalKernel);
+     
+           // Simple final refinement to keep only the largest connected region
+      std::vector<std::vector<cv::Point>> finalContours;
+      cv::findContours(personMask, finalContours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+      
+      if (!finalContours.empty()) {
+          // Sort by area and keep the largest
+          std::sort(finalContours.begin(), finalContours.end(), 
+                   [](const std::vector<cv::Point>& a, const std::vector<cv::Point>& b) {
+                       return cv::contourArea(a) > cv::contourArea(b);
+                   });
+          
+          cv::Mat refinedMask = cv::Mat::zeros(personMask.size(), CV_8UC1);
+          cv::drawContours(refinedMask, finalContours, 0, cv::Scalar(255), -1);
+          personMask = refinedMask;
+      }
+    
+         // Update tracking information for consistency
+     if (!silhouetteMask.empty()) {
+         lastSilhouette = silhouetteMask.clone();
+     }
+     lastDetection = expandedDetection;
+     lastCenter = cv::Point2f(expandedDetection.x + expandedDetection.width/2, 
+                             expandedDetection.y + expandedDetection.height/2);
+     hasValidTracking = true;
+     trackerInitialized = true;
+     trackingFrames = 0;
         
     } else {
-        // Reset tracking if no detection for too long
-        if (trackingFrames > 10) {
+                 // Reset tracking if no detection for too long - more permissive
+         if (trackingFrames > 20) {
             hasValidTracking = false;
             trackerInitialized = false;
             qDebug() << "Tracking lost, resetting";
@@ -343,12 +434,12 @@ cv::Mat TFLiteDeepLabv3::performOpenCVSegmentation(const cv::Mat &inputFrame)
     cv::addWeighted(frame, 0.1, cv::Mat::zeros(frame.size(), CV_8UC3), 0.9, 0, darkenedBackground);
     darkenedBackground.copyTo(blendedFrame, backgroundMask);
     
-    // Add green outline to person
-    cv::Mat outline;
-    cv::Canny(personMaskFinal, outline, 30, 100);
-    cv::cvtColor(outline, outline, cv::COLOR_GRAY2BGR);
-    outline.setTo(cv::Scalar(0, 255, 0), outline);
-    cv::addWeighted(blendedFrame, 1.0, outline, 0.8, 0, blendedFrame);
+                   // Simplified green outline for better performance
+      cv::Mat outline;
+      cv::Canny(personMaskFinal, outline, 30, 90);
+      cv::cvtColor(outline, outline, cv::COLOR_GRAY2BGR);
+      outline.setTo(cv::Scalar(0, 255, 0), outline);
+      cv::addWeighted(blendedFrame, 1.0, outline, 0.8, 0, blendedFrame);
     
     return blendedFrame;
 }
@@ -432,19 +523,19 @@ void TFLiteDeepLabv3::setPerformanceMode(PerformanceMode mode)
             m_processingInterval = 50; // 20 FPS
             m_confidenceThreshold = 0.7f;
             break;
-        case Balanced:
-            m_processingInterval = 33; // 30 FPS
-            m_confidenceThreshold = 0.5f;
-            break;
+                 case Balanced:
+             m_processingInterval = 16; // 60 FPS
+             m_confidenceThreshold = 0.5f;
+             break;
         case HighSpeed:
             m_processingInterval = 16; // 60 FPS
             m_confidenceThreshold = 0.3f;
             break;
-        case Adaptive:
-            // Will be adjusted dynamically based on performance
-            m_processingInterval = 33;
-            m_confidenceThreshold = 0.5f;
-            break;
+                 case Adaptive:
+             // Will be adjusted dynamically based on performance
+             m_processingInterval = 16;
+             m_confidenceThreshold = 0.5f;
+             break;
     }
     
     // Update timer interval if active
