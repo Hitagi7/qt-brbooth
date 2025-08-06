@@ -167,6 +167,7 @@ Capture::Capture(QWidget *parent,Foreground *fg,Camera *existingCameraWorker,QTh
 
     recordingFrameTimer = new QTimer(this);
     recordingFrameTimer->setTimerType(Qt::PreciseTimer);
+    recordingFrameTimer->setSingleShot(false); // Continuous timer
     connect(recordingFrameTimer, &QTimer::timeout, this, &Capture::captureRecordingFrame);
 
     connect(ui->back, &QPushButton::clicked, this, &Capture::on_back_clicked);
@@ -541,23 +542,26 @@ void Capture::captureRecordingFrame()
         // Use cached label size for better performance during recording
         QSize labelSize = m_cachedLabelSize.isValid() ? m_cachedLabelSize : ui->videoLabel->size();
 
-        // Apply the same scaling logic as the live display
-        // First scale to fit the label - use FastTransformation for better performance
-        QPixmap scaledPixmap = cameraPixmap.scaled(
-            labelSize,
-            Qt::KeepAspectRatioByExpanding,
-            Qt::FastTransformation
-        );
-
-        // Apply person scaling if needed
+        // Optimize scaling for recording - do both operations in one step if possible
+        QPixmap scaledPixmap;
+        
         if (qAbs(m_personScaleFactor - 1.0) > 0.01) {
-            QSize originalSize = scaledPixmap.size();
-            int newWidth = qRound(originalSize.width() * m_personScaleFactor);
-            int newHeight = qRound(originalSize.height() * m_personScaleFactor);
+            // Calculate final size directly to avoid double scaling
+            QSize finalSize = labelSize;
+            finalSize.setWidth(qRound(finalSize.width() * m_personScaleFactor));
+            finalSize.setHeight(qRound(finalSize.height() * m_personScaleFactor));
             
-            scaledPixmap = scaledPixmap.scaled(
-                newWidth, newHeight,
+            // Single scaling operation for better performance
+            scaledPixmap = cameraPixmap.scaled(
+                finalSize,
                 Qt::KeepAspectRatio,
+                Qt::FastTransformation
+            );
+        } else {
+            // No person scaling needed, just fit to label
+            scaledPixmap = cameraPixmap.scaled(
+                labelSize,
+                Qt::KeepAspectRatioByExpanding,
                 Qt::FastTransformation
             );
         }
@@ -648,13 +652,19 @@ void Capture::startRecording()
     m_isRecording = true;
     m_recordedSeconds = 0;
 
-    // Use the actual camera FPS for recording instead of the hardcoded target
-    double recordingFPS = m_actualCameraFPS;
-    int frameIntervalMs = qMax(1, static_cast<int>(1000.0 / recordingFPS));
+    // Use the original camera FPS for recording to maintain natural timing
+    // The scaling is applied to the frame content, not the timing
+    m_adjustedRecordingFPS = m_actualCameraFPS;
+    
+    qDebug() << "Recording with original camera FPS:" << m_adjustedRecordingFPS;
+    qDebug() << "  - Scale factor:" << m_personScaleFactor;
+    qDebug() << "  - Frame scaling will be applied during capture, not timing";
+    
+    int frameIntervalMs = qMax(1, static_cast<int>(1000.0 / m_adjustedRecordingFPS));
 
     recordTimer->start(1000);
     recordingFrameTimer->start(frameIntervalMs);
-    qDebug() << "Recording started at actual camera FPS: " + QString::number(recordingFPS)
+    qDebug() << "Recording started at adjusted FPS: " + QString::number(m_adjustedRecordingFPS)
                     + " frames/sec (interval: " + QString::number(frameIntervalMs) + "ms)";
     
     // Pre-calculate label size for better performance during recording
@@ -673,9 +683,10 @@ void Capture::stopRecording()
                     + " frames.";
 
     if (!m_recordedFrames.isEmpty()) {
-        // Emit the recording FPS (which should match the actual camera FPS)
-        // This ensures playback matches the recording rate
-        emit videoRecorded(m_recordedFrames, m_actualCameraFPS);
+        qDebug() << "Emitting video with adjusted FPS:" << m_adjustedRecordingFPS << "(base:" << m_actualCameraFPS << ")";
+        
+        // Emit the adjusted FPS to ensure playback matches the recording rate
+        emit videoRecorded(m_recordedFrames, m_adjustedRecordingFPS);
     }
     emit showFinalOutputPage();
     ui->capture->setEnabled(true);

@@ -460,53 +460,68 @@ void Final::saveVideoToFile()
         dir.mkpath(downloadsPath);
     }
 
-    // Define the FourCC code for the video codec (MJPG is widely supported)
-    int fourcc = cv::VideoWriter::fourcc('M', 'J', 'P', 'G');
-
     // Get frame size from the first pixmap
     QSize frameSize = m_videoFrames.first().size();
     int width = frameSize.width();
     int height = frameSize.height();
 
-    // Use the actual recorded FPS for correct playback speed
-    double frameRate = m_videoFPS;   // Use the stored video FPS for correct playback
-    qDebug() << "Saving video with " << m_videoFrames.size() << " frames at " << frameRate << " FPS";
+    // Smart frame rate selection: use original rate for standard rates, round for non-standard
+    double frameRate = m_videoFPS;
+    
+    // If it's already a standard rate, keep it
+    if (frameRate == 24.0 || frameRate == 25.0 || frameRate == 30.0 || 
+        frameRate == 50.0 || frameRate == 60.0) {
+        // Keep the original rate
+    }
+    // Otherwise, round to nearest standard rate to maintain speed while improving compatibility
+    else if (frameRate <= 26.0) {
+        frameRate = 25.0;  // PAL standard
+    } else if (frameRate <= 35.0) {
+        frameRate = 30.0;  // NTSC standard
+    } else if (frameRate <= 55.0) {
+        frameRate = 50.0;  // PAL HD standard
+    } else {
+        frameRate = 60.0;  // NTSC HD standard
+    }
+    
+    qDebug() << "Saving video with " << m_videoFrames.size() << " frames at " << frameRate << " FPS (original: " << m_videoFPS << " FPS)";
 
     cv::VideoWriter videoWriter;
 
-    // Open the video writer
-    // Parameters: filename, fourcc, fps, frame size, isColor
+    // Use MJPG codec for better compatibility and performance
+    int fourcc = cv::VideoWriter::fourcc('M', 'J', 'P', 'G'); // MJPG codec for better compatibility
+    
+    // Open the video writer with MJPG
     if (!videoWriter.open(fileName.toStdString(), fourcc, frameRate, cv::Size(width, height), true)) {
         QMessageBox::critical(this,
                               "Save Video",
                               "Failed to open video writer. Check codecs and file path.");
-        qWarning() << "Failed to open video writer for file: " << fileName.toStdString().c_str()
-                   << " with FOURCC: " << fourcc;
+        qWarning() << "Failed to open video writer for file: " << fileName.toStdString().c_str();
         return;
     }
 
-    // Write each frame
+    // Write each frame with optimized conversion
     for (const QPixmap &pixmap : m_videoFrames) {
-        QImage image = pixmap.toImage();
+        // Convert QPixmap to QImage with optimized format
+        QImage image = pixmap.toImage().convertToFormat(QImage::Format_RGB888);
         if (image.isNull()) {
             qWarning() << "Failed to convert QPixmap to QImage during video saving.";
             continue;
         }
 
-        cv::Mat frame = QImageToCvMat(image); // Convert QImage to OpenCV Mat
-        if (frame.empty()) {
+        // Convert QImage to OpenCV Mat more efficiently
+        cv::Mat frame(image.height(), image.width(), CV_8UC3, (void*)image.constBits(), image.bytesPerLine());
+        cv::Mat frameCopy = frame.clone(); // Create a copy to ensure data ownership
+
+        if (frameCopy.empty()) {
             qWarning() << "Failed to convert QImage to cv::Mat during video saving.";
             continue;
         }
 
-        // Ensure the frame is 3-channel BGR for the video writer (common requirement)
-        if (frame.channels() == 4) { // e.g., ARGB32
-            cv::cvtColor(frame, frame, cv::COLOR_BGRA2BGR);
-        } else if (frame.channels() == 1) { // e.g., grayscale
-            cv::cvtColor(frame, frame, cv::COLOR_GRAY2BGR);
-        }
+        // Convert RGB to BGR (OpenCV expects BGR)
+        cv::cvtColor(frameCopy, frameCopy, cv::COLOR_RGB2BGR);
 
-        videoWriter.write(frame);
+        videoWriter.write(frameCopy);
     }
 
     videoWriter.release(); // Release the video writer

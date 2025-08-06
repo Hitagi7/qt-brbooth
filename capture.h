@@ -125,6 +125,7 @@ private:
     double m_personScaleFactor;  // Current scaling factor for entire frame (1.0 to 0.5)
     QImage m_originalCameraImage;  // Store original camera image for capture (without display scaling)
     QSize m_cachedLabelSize;  // Cached label size for better recording performance
+    double m_adjustedRecordingFPS;  // Store the adjusted FPS used during recording
     // --- END FRAME SCALING MEMBERS ---
     
 
