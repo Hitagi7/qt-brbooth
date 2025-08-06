@@ -1,77 +1,225 @@
-# qt-brbooth with YOLOv5 Person Detection
+# qt-brbooth - Real-Time Person Segmentation Photo Booth
 
-## Setup
+A Qt-based photo booth application with real-time person segmentation using OpenCV-based edge detection and silhouette formation.
 
-1. **Install Python 3.x and pip.**
-   - Download from https://www.python.org/downloads/
-   - During installation, check the box to "Add Python to PATH".
+## Features
 
-2. **Install dependencies:**
-   ```sh
-   pip install -r yolov5/requirements.txt
+- **Real-Time Person Segmentation**: Advanced edge-based silhouette detection
+- **Background Replacement**: Seamless background substitution
+- **Foreground Overlays**: Add custom foreground elements
+- **Video Recording**: Capture videos with segmentation effects
+- **Multiple Capture Modes**: Image and video capture options
+- **Performance Optimization**: Multi-threaded processing for smooth real-time performance
+
+## Technology Stack
+
+- **Qt 6**: Cross-platform GUI framework
+- **OpenCV 4.11**: Computer vision and image processing
+- **C++17**: Modern C++ features
+- **OpenMP**: Multi-threading optimization
+
+## Prerequisites
+
+### Required Software
+- **Qt 6.5+** with MSVC 2019/2022 compiler
+- **OpenCV 4.11** (pre-built or compiled from source)
+- **Visual Studio 2019/2022** (Windows)
+- **CMake 3.16+**
+
+### System Requirements
+- **Windows 10/11** (64-bit)
+- **8GB RAM** minimum (16GB recommended)
+- **Webcam** for real-time capture
+- **OpenGL 3.3+** compatible graphics card
+
+## Installation & Setup
+
+### 1. Clone the Repository
+```bash
+git clone <your-repository-url>
+cd qt-brbooth
+```
+
+### 2. Install OpenCV
+
+#### Option A: Pre-built OpenCV (Recommended)
+1. Download OpenCV 4.11 from [opencv.org](https://opencv.org/releases/)
+2. Extract to `C:\opencv_build\install`
+3. Add `C:\opencv_build\install\x64\vc17\bin` to your system PATH
+
+#### Option B: Build OpenCV from Source
+```bash
+# Follow OpenCV build instructions for Windows
+# Ensure you build with MSVC 2019/2022 compatibility
+```
+
+### 3. Configure Qt Project
+1. Open `qt-brbooth.pro` in Qt Creator
+2. Update OpenCV paths if needed:
+   ```qmake
+   OPENCV_INSTALL_DIR = C:/opencv_build/install
    ```
+3. Build the project
 
-3. **Build the Qt project as usual in Qt Creator.**
+### 4. Build and Run
+```bash
+# Using Qt Creator
+# 1. Open qt-brbooth.pro
+# 2. Configure project
+# 3. Build (Ctrl+B)
+# 4. Run (Ctrl+R)
+
+# Using command line
+qmake qt-brbooth.pro
+make
+./qt-brbooth
+```
+
+## Project Structure
+
+```
+qt-brbooth/
+├── src/                    # Source files
+│   ├── main.cpp           # Application entry point
+│   ├── brbooth.cpp        # Main application window
+│   ├── capture.cpp        # Camera capture and segmentation
+│   ├── tflite_deeplabv3.cpp # Segmentation algorithm
+│   └── ...
+├── ui/                     # Qt UI files
+├── resources/              # Application resources
+├── templates/              # Background/foreground templates
+├── pics/                   # Sample images
+└── videos/                 # Sample videos
+```
 
 ## Usage
 
-- The app will call the Python script in `yolov5/detect.py` for person detection.
-- Make sure `yolov5n.pt` is present in the `yolov5/` folder.
-- Detection results are output as JSON to stdout for easy parsing in Qt/C++.
+### Basic Operation
+1. **Launch Application**: Run the compiled executable
+2. **Camera Setup**: Ensure webcam is connected and accessible
+3. **Segmentation**: Click "Start Segmentation" to begin real-time processing
+4. **Capture**: Use "Capture" button for images or "Record" for videos
+5. **Background**: Select backgrounds from the template library
+6. **Foreground**: Add overlay elements as needed
 
-## How Integration Works
+### Segmentation Controls
+- **Confidence Threshold**: Adjust detection sensitivity (0.1-1.0)
+- **Performance Mode**: Choose between Speed/Balanced/Quality
+- **Show Segmentation**: Toggle green outline display
 
-- Qt/C++ uses `QProcess` to run the Python script:
-  ```sh
-  python yolov5/detect.py --weights yolov5/yolov5n.pt --source <image_path> --classes 0 --nosave
-  ```
-- The script outputs detection results as JSON, e.g.:
-  ```json
-  [
-    {
-      "image": "image1.jpg",
-      "detections": [
-        {"bbox": [x1, y1, x2, y2], "confidence": 0.95},
-        ...
-      ]
-    }
-  ]
-  ```
-- Qt parses this output and can display bounding boxes or use the results as needed.
+### Advanced Features
+- **Real-time FPS**: Monitor processing performance
+- **Debug Display**: View technical information
+- **Template Management**: Add custom backgrounds/foregrounds
 
-## Notes
-- Only the "person" class (class 0) is detected.
-- You can train your own model or use the pre-trained YOLOv5n weights.
-- For custom training, see the YOLOv5 documentation.
+## Configuration
 
-## Bounding Box Features
+### OpenCV Path Configuration
+If OpenCV is installed in a different location, update `qt-brbooth.pro`:
+```qmake
+OPENCV_INSTALL_DIR = C:/your/opencv/path
+```
 
-The application now includes real-time bounding box visualization for detected persons:
+### Performance Tuning
+Adjust segmentation parameters in `tflite_deeplabv3.cpp`:
+- Edge detection thresholds
+- Contour filtering criteria
+- Morphological operation kernels
 
-### Features:
-- **Real-time Detection**: Bounding boxes are drawn around detected persons in real-time
-- **Confidence-based Colors**: 
-  - 🟢 Green: High confidence (>80%)
-  - 🟡 Yellow: Medium confidence (60-80%)
-  - 🔴 Red: Low confidence (<60%)
-- **Person Numbering**: Each detected person is numbered (Person 1, Person 2, etc.)
-- **Confidence Display**: Shows confidence percentage for each detection
-- **Box Dimensions**: Displays the width x height of each bounding box
-- **Toggle Control**: Checkbox to enable/disable bounding box display
-- **Auto-cleanup**: Old detections are automatically cleared after 0.5 seconds
+## Troubleshooting
 
-### Usage:
-1. Start the camera feed
-2. **Press 'B' key** or check "Show Bounding Boxes (B)" to enable visualization
-3. Stand in front of the camera to see bounding boxes appear
-4. **Press 'B' key** again or uncheck to hide bounding boxes
+### Common Issues
 
-### Keyboard Shortcuts:
-- **B** - Toggle bounding boxes on/off
-- Shows on-screen notification when toggled
+#### 1. OpenCV Not Found
+```
+Error: Cannot find OpenCV
+```
+**Solution**: Verify OpenCV installation path and update `qt-brbooth.pro`
 
-### Technical Details:
-- Uses Qt's QPainter for efficient drawing
-- Thread-safe detection storage with QMutex
-- Asynchronous YOLO processing to maintain UI responsiveness
-- Automatic scaling with camera resolution 
+#### 2. Camera Access Denied
+```
+Error: Cannot access camera
+```
+**Solution**: Check camera permissions and ensure no other applications are using the camera
+
+#### 3. Segmentation Not Working
+```
+Error: No person detected
+```
+**Solution**: 
+- Ensure good lighting
+- Person should be clearly visible
+- Adjust confidence threshold
+- Check camera positioning
+
+#### 4. Performance Issues
+```
+Error: Low FPS or lag
+```
+**Solution**:
+- Reduce camera resolution
+- Switch to "Speed" performance mode
+- Close other applications
+- Check system resources
+
+### Build Issues
+
+#### Compilation Errors
+```bash
+# Clean and rebuild
+make clean
+qmake qt-brbooth.pro
+make
+```
+
+#### Missing Dependencies
+```bash
+# Ensure all Qt modules are installed
+# Check OpenCV installation
+# Verify compiler compatibility
+```
+
+## Development
+
+### Adding New Features
+1. Follow Qt coding standards
+2. Use C++17 features
+3. Implement proper error handling
+4. Add debug output for troubleshooting
+
+### Code Structure
+- **UI Logic**: Separate from business logic
+- **Segmentation**: Modular algorithm implementation
+- **Resource Management**: Proper memory management
+- **Error Handling**: Comprehensive error checking
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Implement changes
+4. Test thoroughly
+5. Submit pull request
+
+## License
+
+[Your License Here]
+
+## Support
+
+For issues and questions:
+- Create GitHub issue
+- Check troubleshooting section
+- Review documentation
+
+## Changelog
+
+### Version 2.0 (Current)
+- ✅ Replaced YOLOv5 with OpenCV-based segmentation
+- ✅ Improved real-time performance
+- ✅ Enhanced silhouette detection
+- ✅ Better edge-based person segmentation
+- ✅ Simplified deployment (no Python dependencies)
+
+### Version 1.0
+- Initial release with YOLOv5 integration 

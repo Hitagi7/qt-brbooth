@@ -17,4 +17,4 @@ public:
 signals:
 };
 
-#endif // ICONHOVER_H
+#endif // ICONHOVER_Hd

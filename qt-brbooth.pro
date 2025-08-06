@@ -29,12 +29,8 @@ SOURCES += \
     iconhover.cpp \
     main.cpp \
     brbooth.cpp \
-    simplepersondetector.cpp \
-    personsegmentation.cpp \
-    optimized_detector.cpp \
-    fast_segmentation.cpp \
-    segmentation_manager.cpp \
-    detection_manager.cpp
+    tflite_deeplabv3.cpp \
+    tflite_segmentation_widget.cpp
 
 HEADERS += \
     background.h \
@@ -45,13 +41,9 @@ HEADERS += \
     foreground.h \
     iconhover.h \
     videotemplate.h \
-    simplepersondetector.h \
-    personsegmentation.h \
-    optimized_detector.h \
-    fast_segmentation.h \
-    segmentation_manager.h \
-    detection_manager.h \
-    common_types.h
+    common_types.h \
+    tflite_deeplabv3.h \
+    tflite_segmentation_widget.h
 
 FORMS += \
     background.ui \
@@ -69,7 +61,7 @@ else: unix:!android: target.path = /opt/$${TARGET}/bin
 RESOURCES += \
     resources.qrc
 
-
+# OpenCV Configuration
 INCLUDEPATH += C:\opencv_build\install\include
 DEPENDPATH += C:\opencv_build\install\include
 
@@ -78,7 +70,6 @@ OPENCV_INSTALL_DIR = C:/opencv_build/install
 # Add OpenCV include paths
 INCLUDEPATH += $$OPENCV_INSTALL_DIR/include \
                $$OPENCV_INSTALL_DIR/include/opencv2
-
 
 LIBS += -L$$OPENCV_INSTALL_DIR/x64/vc17/lib \
         -lopencv_core4110d \
@@ -95,4 +86,25 @@ LIBS += -L$$OPENCV_INSTALL_DIR/x64/vc17/lib \
         -lopencv_objdetect4110d \
         -lopencv_photo4110d \
         -lopencv_stitching4110d
+
+# TensorFlow Lite configuration (commented out for OpenCV fallback)
+# TENSORFLOW_DIR = C:/tensorflow-2.18.1
+# INCLUDEPATH += $$TENSORFLOW_DIR/tensorflow
+# INCLUDEPATH += $$TENSORFLOW_DIR/tensorflow/lite
+# INCLUDEPATH += $$TENSORFLOW_DIR/tensorflow/lite/core
+# INCLUDEPATH += $$TENSORFLOW_DIR/tensorflow/lite/kernels
+# INCLUDEPATH += $$TENSORFLOW_DIR/tensorflow/lite/delegates
+# INCLUDEPATH += $$TENSORFLOW_DIR/tensorflow/lite/delegates/gpu
+# INCLUDEPATH += $$TENSORFLOW_DIR/tensorflow/lite/delegates/hexagon
+# INCLUDEPATH += $$TENSORFLOW_DIR/tensorflow/lite/tools
+# INCLUDEPATH += $$TENSORFLOW_DIR/tensorflow/lite/schema
+# INCLUDEPATH += $$TENSORFLOW_DIR/tensorflow/lite/experimental
+# INCLUDEPATH += $$TENSORFLOW_DIR/tensorflow/lite/async
+# INCLUDEPATH += $$TENSORFLOW_DIR/tensorflow/lite/acceleration
+# INCLUDEPATH += $$TENSORFLOW_DIR/tensorflow/lite/string_util
+# INCLUDEPATH += $$TENSORFLOW_DIR/tensorflow/lite/error_reporter
+
+# Define TFLite availability (using OpenCV fallback)
+DEFINES += TFLITE_AVAILABLE
+DEFINES += TFLITE_DEEPLABV3_ENABLED
 

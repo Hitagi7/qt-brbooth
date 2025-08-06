@@ -4,7 +4,12 @@
 #include <QRegularExpression>
 #include <QStyle>
 #include <QVBoxLayout> // For arranging video
+#include <QHBoxLayout>
+#include <QTabWidget>
 #include "iconhover.h"
+#ifdef TFLITE_AVAILABLE
+#include "tflite_segmentation_widget.h"
+#endif
 #include "ui_dynamic.h"
 
 Dynamic::Dynamic(QWidget *parent)
@@ -30,6 +35,7 @@ Dynamic::Dynamic(QWidget *parent)
     currentSelectedVideoWidget = nullptr;
 
     setupVideoPlayers();
+    setupTFLiteSegmentation();
 }
 
 Dynamic::~Dynamic()
@@ -291,4 +297,62 @@ void Dynamic::showThumbnail(QObject *videoWidgetObj, bool show)
             videoWidget->raise();
         }
     }
+}
+
+void Dynamic::setupTFLiteSegmentation()
+{
+#ifdef TFLITE_AVAILABLE
+    // Create tab widget to organize content
+    m_tabWidget = new QTabWidget(this);
+    
+    // Create the original video content widget
+    QWidget *videoContentWidget = new QWidget();
+    QVBoxLayout *videoLayout = new QVBoxLayout(videoContentWidget);
+    
+    // Move all existing video placeholders to the video content widget
+    QList<QWidget *> videoPlaceholders;
+    videoPlaceholders << ui->videoPlaceholder1 << ui->videoPlaceholder2 << ui->videoPlaceholder3
+                      << ui->videoPlaceholder4 << ui->videoPlaceholder5;
+    
+    for (QWidget *placeholder : videoPlaceholders) {
+        if (placeholder && placeholder->parent() == this) {
+            placeholder->setParent(videoContentWidget);
+            videoLayout->addWidget(placeholder);
+        }
+    }
+    
+    // Add back button to video content
+    videoLayout->addWidget(ui->back);
+    
+    // Create TFLite segmentation widget
+    m_segmentationWidget = new TFLiteSegmentationWidget();
+    
+    // Add tabs
+    m_tabWidget->addTab(videoContentWidget, "Videos");
+    m_tabWidget->addTab(m_segmentationWidget, "TFLite Segmentation");
+    
+    // Replace the main layout with tab widget
+    QVBoxLayout *mainLayout = new QVBoxLayout(this);
+    mainLayout->addWidget(m_tabWidget);
+    
+    // Connect segmentation signals
+    connect(m_segmentationWidget, &TFLiteSegmentationWidget::segmentationStarted,
+            this, [this]() {
+                qDebug() << "TFLite segmentation started";
+            });
+    
+    connect(m_segmentationWidget, &TFLiteSegmentationWidget::segmentationStopped,
+            this, [this]() {
+                qDebug() << "TFLite segmentation stopped";
+            });
+    
+    connect(m_segmentationWidget, &TFLiteSegmentationWidget::segmentationError,
+            this, [this](const QString &error) {
+                qWarning() << "TFLite segmentation error:" << error;
+            });
+#else
+    // Fallback: Use OpenCV-based segmentation or just show videos
+    qDebug() << "TensorFlow Lite not available. Using fallback segmentation.";
+    // The original video layout remains unchanged
+#endif
 }

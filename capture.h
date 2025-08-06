@@ -14,26 +14,21 @@
 #include <opencv2/opencv.hpp>
 #include "videotemplate.h"
 #include "foreground.h"
-#include "simplepersondetector.h"
-#include "personsegmentation.h"
-#include "optimized_detector.h"
-#include "fast_segmentation.h"
 #include "common_types.h"
-// #include "segmentation_manager.h"
-// #include "detection_manager.h"
-// Temporarily commented out to avoid circular dependencies
+#include "tflite_deeplabv3.h"
+#include "tflite_segmentation_widget.h"
 
-// --- NEW INCLUDES FOR QPROCESS AND JSON ---
+// Qt includes for threading and processing
 #include <QProcess>
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QDir>
 #include <QDateTime>
-#include <QCoreApplication> // For applicationDirPath()
-#include <QElapsedTimer> // Include for QElapsedTimer
-#include <QMutex> // Include for thread-safe detection access
-// --- END NEW INCLUDES ---
+#include <QCoreApplication>
+#include <QElapsedTimer>
+#include <QMutex>
+#include <QMessageBox>
 
 QT_BEGIN_NAMESPACE
 namespace Ui { class Capture; }
@@ -54,31 +49,26 @@ public:
         VideoRecordMode
     };
 
-    explicit Capture(QWidget *parent = nullptr, Foreground *fg = nullptr); //pass foreground class
+    explicit Capture(QWidget *parent = nullptr, Foreground *fg = nullptr);
     ~Capture();
 
     void setCaptureMode(CaptureMode mode);
     void setVideoTemplate(const VideoTemplate &templateData);
     
-    // --- NEW: Bounding Box Control Methods ---
-    void setShowBoundingBoxes(bool show);
-    bool getShowBoundingBoxes() const;
-    int getDetectionCount() const;
-    double getAverageConfidence() const;
-    void onBoundingBoxCheckBoxToggled(bool checked);
-    void testYoloDetection(); // Test method for YOLO detection
-    // --- END NEW ---
-    
-    // --- NEW: Person Segmentation Methods ---
-    void setShowPersonSegmentation(bool show);
-    bool getShowPersonSegmentation() const;
-    void onSegmentationCheckBoxToggled(bool checked);
+    // TFLite Deeplabv3 Segmentation Control Methods
+    void setShowSegmentation(bool show);
+    bool getShowSegmentation() const;
     void setSegmentationConfidenceThreshold(double threshold);
     double getSegmentationConfidenceThreshold() const;
     cv::Mat getLastSegmentedFrame() const;
     void saveSegmentedFrame(const QString& filename = "");
     double getSegmentationProcessingTime() const;
-    // --- END NEW ---
+    void setSegmentationPerformanceMode(TFLiteDeepLabv3::PerformanceMode mode);
+    bool isTFLiteModelLoaded() const;
+    void initializeTFLiteSegmentation();
+    void toggleSegmentation();
+    void updateSegmentationButton();
+    cv::Mat qImageToCvMat(const QImage &image);
 
 protected:
     void resizeEvent(QResizeEvent *event) override;
@@ -95,19 +85,13 @@ private slots:
     void updateRecordTimer();
     void on_verticalSlider_valueChanged(int value);
     void updateForegroundOverlay(const QString &path);
-
-    // --- NEW SLOTS FOR ASYNCHRONOUS QPROCESS ---
-    void handleYoloOutput();
-    void handleYoloError();
-    void handleYoloFinished(int exitCode, QProcess::ExitStatus exitStatus);
-    void handleYoloErrorOccurred(QProcess::ProcessError error);
-    void printPerformanceStats(); // <-- ADDED THIS DECLARATION
-    // --- END NEW SLOTS ---
     
-    // --- NEW: Debug Display Slots ---
+    // TFLite Segmentation Slots
+    void onSegmentationResultReady(const QImage &segmentedImage);
+    void onSegmentationError(const QString &error);
+    void onTFLiteModelLoaded(bool success);
     void updateDebugDisplay();
-    // --- END NEW ---
-    
+
 private:
     Ui::Capture *ui;
     cv::VideoCapture cap;
@@ -129,8 +113,8 @@ private:
     void stopRecording();
     void performImageCapture();
     QImage cvMatToQImage(const cv::Mat &mat);
-    void setupStackedLayoutHybrid(); // New method for hybrid approach
-    void updateOverlayStyles();      // New method to update overlay styles
+    void setupStackedLayoutHybrid();
+    void updateOverlayStyles();
 
     // Hybrid stacked layout components
     QStackedLayout *stackedLayout;
@@ -142,92 +126,47 @@ private:
     int frameCount;
     QElapsedTimer frameTimer;
 
-    // --- MODIFIED/NEW MEMBERS FOR ASYNCHRONOUS YOLO ---
-    QProcess *yoloProcess; // QProcess member (keeping for fallback)
-    bool isProcessingFrame; // Flag to manage concurrent detection calls
-    QString currentTempImagePath; // To keep track of the temp image being processed
-    // --- END MODIFIED/NEW MEMBERS ---
-    
-    // --- NEW: C++ Person Detector ---
-    SimplePersonDetector *m_personDetector; // Simple person detector
-    bool m_useCppDetector; // Flag to use C++ detector instead of Python
-    // --- END NEW ---
-
-    // --- NEW: Optimized Detector ---
-    OptimizedPersonDetector *m_optimizedDetector; // High-performance ONNX detector
-    bool m_useOptimizedDetector; // Flag to use optimized detector
-    // --- END NEW ---
-
-    // --- NEW: Bounding Box Members ---
-    QList<BoundingBox> m_currentDetections; // Store current frame detections
-    mutable QMutex m_detectionMutex; // Thread-safe access to detections
-    bool m_showBoundingBoxes; // Toggle for showing/hiding boxes
-    // --- END NEW ---
-
-    // --- NEW: Person Segmentation Members ---
-    PersonSegmentationProcessor *m_segmentationProcessor; // Segmentation processor
-    bool m_showPersonSegmentation; // Toggle for showing/hiding segmentation
-    double m_segmentationConfidenceThreshold; // Minimum confidence for segmentation
-    cv::Mat m_lastSegmentedFrame; // Store last segmented frame
-    QList<SegmentationResult> m_currentSegmentations; // Store current segmentation results
-    mutable QMutex m_segmentationMutex; // Thread-safe access to segmentation results
-    // --- END NEW ---
-
-    // --- NEW: Fast Segmentation Members ---
-    FastSegmentationProcessor *m_fastSegmentationProcessor; // Fast segmentation processor
-    QList<FastSegmentationResult> m_currentFastSegmentations; // Store current fast segmentation results
-    mutable QMutex m_fastSegmentationMutex; // Thread-safe access to fast segmentation results
-    // --- END NEW ---
+    // TFLite Deeplabv3 Segmentation Members
+    TFLiteDeepLabv3 *m_tfliteSegmentation;
+    TFLiteSegmentationWidget *m_segmentationWidget;
+    bool m_showSegmentation;
+    double m_segmentationConfidenceThreshold;
+    cv::Mat m_currentFrame;
+    cv::Mat m_lastSegmentedFrame;
+    mutable QMutex m_segmentationMutex;
+    QElapsedTimer m_segmentationTimer;
+    double m_lastSegmentationTime;
+    int m_segmentationFPS;
+    bool m_tfliteModelLoaded;
 
     // pass foreground
     Foreground *foreground;
     QLabel* overlayImageLabel;
-    // --- MODIFIED: detectPersonInImage now returns void, processing done in slot ---
-    void detectPersonInImage(const QString& imagePath);
 
-    // --- NEW: Bounding Box Drawing Methods ---
-    void drawBoundingBoxes(QPixmap& pixmap, const QList<BoundingBox>& detections);
-    void updateDetectionResults(const QList<BoundingBox>& detections);
-    void showBoundingBoxNotification();
-    // --- END NEW ---
-
-    // --- NEW: Person Segmentation Methods ---
-    void processPersonSegmentation(const cv::Mat& frame, const QList<BoundingBox>& detections);
-    void updateSegmentationResults(const QList<SegmentationResult>& results);
-    void applySegmentationToFrame(cv::Mat& frame, const QList<SegmentationResult>& results);
+    // TFLite Segmentation Methods
+    void processFrameWithTFLite(const cv::Mat &frame);
+    void applySegmentationToFrame(cv::Mat &frame);
+    void updateSegmentationDisplay(const QImage &segmentedImage);
     void showSegmentationNotification();
-    // --- END NEW ---
 
-    // --- NEW: Debug Display Members ---
+    // Debug Display Members
     QWidget *debugWidget;
     QLabel *debugLabel;
     QLabel *fpsLabel;
-    QLabel *detectionLabel;
-    QCheckBox *boundingBoxCheckBox;
-    QCheckBox *segmentationCheckBox;
+    QLabel *segmentationLabel;
+    QPushButton *segmentationButton;
     QTimer *debugUpdateTimer;
     int m_currentFPS;
-    bool m_personDetected;
-    int m_detectionCount;
-    double m_averageConfidence;
     
-    // --- NEW: Debug Display Methods ---
+    // Debug Display Methods
     void setupDebugDisplay();
-    // --- END NEW ---
-
-    // --- NEW: Optimized Detector Slots ---
-    void onOptimizedDetectionsReady(const QList<OptimizedDetection>& detections);
-    void onOptimizedProcessingFinished();
-    void processOptimizedSegmentation(const QList<OptimizedDetection>& detections);
-    // --- END NEW ---
 
 signals:
     void backtoPreviousPage();
     void imageCaptured(const QPixmap &image);
     void videoRecorded(const QList<QPixmap> &frames);
     void showFinalOutputPage();
-    // --- NEW SIGNAL (optional) to notify UI of person detection ---
-    void personDetectedInFrame();
+    void segmentationCompleted();
 };
 
 #endif // CAPTURE_H
