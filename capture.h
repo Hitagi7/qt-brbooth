@@ -48,7 +48,7 @@ protected:
 signals:
     void backtoPreviousPage();
     void imageCaptured(const QPixmap &image);
-    void videoRecorded(const QList<QPixmap> &frames);
+    void videoRecorded(const QList<QPixmap> &frames, double fps);
     void showFinalOutputPage();
     void personDetectedInFrame();
     void foregroundPathChanged(const QString &foregroundPath);
@@ -100,6 +100,7 @@ private:
     QTimer *recordTimer;
     QTimer *recordingFrameTimer;
     int m_targetRecordingFPS;
+    double m_actualCameraFPS;  // Store the actual camera FPS for correct playback
     VideoTemplate m_currentVideoTemplate;
     int m_recordedSeconds;
     QList<QPixmap> m_recordedFrames;
@@ -123,6 +124,7 @@ private:
     // --- FRAME SCALING MEMBERS ---
     double m_personScaleFactor;  // Current scaling factor for entire frame (1.0 to 0.5)
     QImage m_originalCameraImage;  // Store original camera image for capture (without display scaling)
+    QSize m_cachedLabelSize;  // Cached label size for better recording performance
     // --- END FRAME SCALING MEMBERS ---
     
 

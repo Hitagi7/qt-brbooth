@@ -32,6 +32,7 @@ Capture::Capture(QWidget *parent,Foreground *fg,Camera *existingCameraWorker,QTh
     , recordTimer(nullptr)
     , recordingFrameTimer(nullptr)
     , m_targetRecordingFPS(60)
+    , m_actualCameraFPS(30.0)  // Default to 30 FPS
     , m_currentVideoTemplate("Default", 5) // Assuming a constructor for VideoTemplate
     , m_recordedSeconds(0)
     , m_recordedFrames()
@@ -213,7 +214,10 @@ void Capture::handleCameraOpened(bool success,
 {
     Q_UNUSED(actual_width);
     Q_UNUSED(actual_height);
-    Q_UNUSED(actual_fps);
+    
+    // Store the actual camera FPS for correct video playback speed
+    m_actualCameraFPS = actual_fps;
+    qDebug() << "Capture: Stored actual camera FPS:" << m_actualCameraFPS;
 
     if (success) {
         qDebug() << "Capture: Camera worker reported open success. Enabling capture button.";
@@ -533,14 +537,16 @@ void Capture::captureRecordingFrame()
     // Capture the scaled frame exactly as it appears in the UI (ignoring foreground template)
     if (!m_originalCameraImage.isNull()) {
         QPixmap cameraPixmap = QPixmap::fromImage(m_originalCameraImage);
-        QSize labelSize = ui->videoLabel->size();
+
+        // Use cached label size for better performance during recording
+        QSize labelSize = m_cachedLabelSize.isValid() ? m_cachedLabelSize : ui->videoLabel->size();
 
         // Apply the same scaling logic as the live display
-        // First scale to fit the label
+        // First scale to fit the label - use FastTransformation for better performance
         QPixmap scaledPixmap = cameraPixmap.scaled(
             labelSize,
             Qt::KeepAspectRatioByExpanding,
-            Qt::SmoothTransformation
+            Qt::FastTransformation
         );
 
         // Apply person scaling if needed
@@ -552,7 +558,7 @@ void Capture::captureRecordingFrame()
             scaledPixmap = scaledPixmap.scaled(
                 newWidth, newHeight,
                 Qt::KeepAspectRatio,
-                Qt::SmoothTransformation
+                Qt::FastTransformation
             );
         }
         
@@ -642,12 +648,17 @@ void Capture::startRecording()
     m_isRecording = true;
     m_recordedSeconds = 0;
 
-    int frameIntervalMs = 1000 / m_targetRecordingFPS;
+    // Use the actual camera FPS for recording instead of the hardcoded target
+    double recordingFPS = m_actualCameraFPS;
+    int frameIntervalMs = qMax(1, static_cast<int>(1000.0 / recordingFPS));
 
     recordTimer->start(1000);
     recordingFrameTimer->start(frameIntervalMs);
-    qDebug() << "Recording started at target FPS: " + QString::number(m_targetRecordingFPS)
-                    + " frames/sec";
+    qDebug() << "Recording started at actual camera FPS: " + QString::number(recordingFPS)
+                    + " frames/sec (interval: " + QString::number(frameIntervalMs) + "ms)";
+    
+    // Pre-calculate label size for better performance during recording
+    m_cachedLabelSize = ui->videoLabel->size();
 }
 
 void Capture::stopRecording()
@@ -662,7 +673,9 @@ void Capture::stopRecording()
                     + " frames.";
 
     if (!m_recordedFrames.isEmpty()) {
-        emit videoRecorded(m_recordedFrames);
+        // Emit the recording FPS (which should match the actual camera FPS)
+        // This ensures playback matches the recording rate
+        emit videoRecorded(m_recordedFrames, m_actualCameraFPS);
     }
     emit showFinalOutputPage();
     ui->capture->setEnabled(true);
@@ -676,11 +689,11 @@ void Capture::performImageCapture()
         QSize labelSize = ui->videoLabel->size();
 
         // Apply the same scaling logic as the live display
-        // First scale to fit the label
+        // First scale to fit the label - use FastTransformation for better performance
         QPixmap scaledPixmap = cameraPixmap.scaled(
             labelSize,
             Qt::KeepAspectRatioByExpanding,
-            Qt::SmoothTransformation
+            Qt::FastTransformation
         );
 
         // Apply person scaling if needed
@@ -692,7 +705,7 @@ void Capture::performImageCapture()
             scaledPixmap = scaledPixmap.scaled(
                 newWidth, newHeight,
                 Qt::KeepAspectRatio,
-                Qt::SmoothTransformation
+                Qt::FastTransformation
             );
         }
         

@@ -27,7 +27,7 @@ public:
     ~Final();
 
     void setImage(const QPixmap &image);
-    void setVideo(const QList<QPixmap> &frames);
+    void setVideo(const QList<QPixmap> &frames, double fps = 30.0);
     void setForegroundOverlay(const QString &foregroundPath);
 
 signals:
@@ -48,6 +48,7 @@ private:
     QTimer *videoPlaybackTimer;
     QList<QPixmap> m_videoFrames; // Stores frames for video playback/saving
     int m_currentFrameIndex;
+    double m_videoFPS; // Store the FPS for video playback
 
     QStackedLayout *m_stackedLayout = nullptr; // Member for the stacked layout
 

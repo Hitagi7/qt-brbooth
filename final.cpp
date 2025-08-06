@@ -23,6 +23,7 @@ Final::Final(QWidget *parent)
     , ui(new Ui::Final)
     , videoPlaybackTimer(nullptr)
     , m_currentFrameIndex(0)
+    , m_videoFPS(30.0)
     , m_stackedLayout(nullptr)
     , m_lastLoadedImage() // Initialize the QPixmap member
     , overlayImageLabel(nullptr)
@@ -126,6 +127,7 @@ Final::Final(QWidget *parent)
                             "}");
 
     videoPlaybackTimer = new QTimer(this);
+    videoPlaybackTimer->setTimerType(Qt::PreciseTimer); // Use precise timer for better timing accuracy
     connect(videoPlaybackTimer, &QTimer::timeout, this, &Final::playNextFrame);
 
     // <== CRITICAL: Defer the initial display refresh to ensure layout has settled
@@ -159,7 +161,9 @@ void Final::refreshDisplay()
         // playNextFrame() will handle getting the current frame and scaling it.
         // We ensure the timer is running for continuous playback.
         if (!videoPlaybackTimer->isActive()) {
-            videoPlaybackTimer->start(1000 / 60); // Start if not already playing
+            // Use the stored video FPS for correct playback speed
+            int playbackIntervalMs = qMax(1, static_cast<int>(1000.0 / m_videoFPS));
+            videoPlaybackTimer->start(playbackIntervalMs);
         }
         playNextFrame(); // Display the current frame (and advance for next call)
     }
@@ -177,7 +181,7 @@ void Final::refreshDisplay()
             QPixmap scaledImage = m_lastLoadedImage.scaled(
                 labelSize,
                 Qt::KeepAspectRatio,
-                Qt::SmoothTransformation
+                Qt::FastTransformation
             );
             ui->videoLabel->setPixmap(scaledImage);
             qDebug() << "Image was re-scaled down to:" << scaledImage.size();
@@ -240,7 +244,7 @@ void Final::setImage(const QPixmap &image)
     refreshDisplay(); // Display the image immediately with proper scaling
 }
 
-void Final::setVideo(const QList<QPixmap> &frames)
+void Final::setVideo(const QList<QPixmap> &frames, double fps)
 {
     // Stop any current playback
     if (videoPlaybackTimer->isActive()) {
@@ -249,11 +253,16 @@ void Final::setVideo(const QList<QPixmap> &frames)
 
     m_videoFrames = frames; // Store the list of video frames
     m_currentFrameIndex = 0;
+    m_videoFPS = fps; // Store the FPS for debugging and potential future use
     m_lastLoadedImage = QPixmap(); // Clear last image if switching to video
 
     if (!m_videoFrames.isEmpty()) {
-        qDebug() << "Playing back video with " << m_videoFrames.size() << " frames.";
-        videoPlaybackTimer->start(1000 / 60); // Start timer for continuous playback
+        qDebug() << "Playing back video with " << m_videoFrames.size() << " frames at " << fps << " FPS.";
+        
+        // Calculate the correct playback interval based on the actual camera FPS
+        int playbackIntervalMs = qMax(1, static_cast<int>(1000.0 / fps));
+        videoPlaybackTimer->start(playbackIntervalMs);
+        
         refreshDisplay(); // Display the first frame immediately with proper scaling
     } else {
         qWarning() << "No video frames provided for playback!";
@@ -318,7 +327,7 @@ void Final::playNextFrame()
         QPixmap scaledFrame = currentFrame.scaled(
             labelSize,
             Qt::KeepAspectRatio,
-            Qt::SmoothTransformation
+            Qt::FastTransformation
         );
         ui->videoLabel->setPixmap(scaledFrame);
     } else {
@@ -459,15 +468,9 @@ void Final::saveVideoToFile()
     int width = frameSize.width();
     int height = frameSize.height();
 
-    // Assuming video was captured at 60 FPS for 10 seconds, adjust if different
-    double frameRate = 60.0;         // The target playback frame rate for the saved video
-    if (m_videoFrames.size() > 10) { // If you have enough frames for 10 seconds at 60fps
-        // Adjust frameRate based on how many frames collected over 10s or similar,
-        // or hardcode based on your capture rate.
-        // This 'actualFPS' calculation was previously `(double)m_videoFrames.size() / 10.0;`
-        // which implies frames were captured over 10 seconds.
-        // It's crucial to match the capture rate or desired playback rate.
-    }
+    // Use the actual recorded FPS for correct playback speed
+    double frameRate = m_videoFPS;   // Use the stored video FPS for correct playback
+    qDebug() << "Saving video with " << m_videoFrames.size() << " frames at " << frameRate << " FPS";
 
     cv::VideoWriter videoWriter;
 
