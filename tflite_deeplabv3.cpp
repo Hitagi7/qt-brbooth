@@ -14,9 +14,12 @@ TFLiteDeepLabv3::TFLiteDeepLabv3(QObject *parent)
     , m_inputWidth(513)
     , m_inputHeight(513)
     , m_confidenceThreshold(0.5f)
-    , m_processingInterval(33) // ~30 FPS
+         , m_processingInterval(16) // ~60 FPS for better performance
     , m_performanceMode(Balanced)
     , m_processingActive(false)
+    , hasValidTracking(false)
+    , trackerInitialized(false)
+    , trackingFrames(0)
 {
     m_processingTimer = new QTimer(this);
     m_processingTimer->setSingleShot(false);
@@ -432,19 +435,19 @@ void TFLiteDeepLabv3::setPerformanceMode(PerformanceMode mode)
             m_processingInterval = 50; // 20 FPS
             m_confidenceThreshold = 0.7f;
             break;
-        case Balanced:
-            m_processingInterval = 33; // 30 FPS
-            m_confidenceThreshold = 0.5f;
-            break;
+                 case Balanced:
+             m_processingInterval = 16; // 60 FPS
+             m_confidenceThreshold = 0.5f;
+             break;
         case HighSpeed:
             m_processingInterval = 16; // 60 FPS
             m_confidenceThreshold = 0.3f;
             break;
-        case Adaptive:
-            // Will be adjusted dynamically based on performance
-            m_processingInterval = 33;
-            m_confidenceThreshold = 0.5f;
-            break;
+                 case Adaptive:
+             // Will be adjusted dynamically based on performance
+             m_processingInterval = 16;
+             m_confidenceThreshold = 0.5f;
+             break;
     }
     
     // Update timer interval if active

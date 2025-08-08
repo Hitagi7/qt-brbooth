@@ -73,6 +73,14 @@ private:
     QWaitCondition m_frameCondition;
     bool m_processingActive;
     
+    // Tracking and consistency
+    cv::Mat lastSilhouette;
+    bool hasValidTracking;
+    bool trackerInitialized;
+    int trackingFrames;
+    cv::Rect lastDetection;
+    cv::Point2f lastCenter;
+    
     // Helper methods
     bool loadModel(const QString &modelPath);
     cv::Mat preprocessFrame(const cv::Mat &inputFrame);

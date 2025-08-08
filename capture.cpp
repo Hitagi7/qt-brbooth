@@ -114,6 +114,13 @@ Capture::Capture(QWidget *parent, Foreground *fg)
     // Initialize TFLite Segmentation
     initializeTFLiteSegmentation();
 
+    // Run segmentation in a background thread so UI stays responsive (Debug-safe)
+    m_segmentationThread = new QThread(this);
+    m_tfliteSegmentation->moveToThread(m_segmentationThread);
+    connect(m_segmentationThread, &QThread::started, m_tfliteSegmentation, &TFLiteDeepLabv3::startRealtimeProcessing);
+    connect(m_segmentationThread, &QThread::finished, m_tfliteSegmentation, &TFLiteDeepLabv3::stopRealtimeProcessing);
+    m_segmentationThread->start();
+
     // Connect TFLite signals
     connect(m_tfliteSegmentation, &TFLiteDeepLabv3::segmentationResultReady,
             this, &Capture::onSegmentationResultReady);
@@ -166,7 +173,7 @@ Capture::Capture(QWidget *parent, Foreground *fg)
     // Debug update timer
     debugUpdateTimer = new QTimer(this);
     connect(debugUpdateTimer, &QTimer::timeout, this, &Capture::updateDebugDisplay);
-    debugUpdateTimer->start(500); // Update every 500ms for more responsive feedback
+    debugUpdateTimer->start(1000); // Lighter UI updates in Debug
 
     // Initialize async processing
     m_segmentationWatcher = new QFutureWatcher<cv::Mat>(this);
@@ -181,6 +188,14 @@ Capture::Capture(QWidget *parent, Foreground *fg)
 
 Capture::~Capture()
 {
+    if (cameraTimer && cameraTimer->isActive()) {
+        cameraTimer->stop();
+    }
+    if (m_segmentationThread) {
+        m_segmentationThread->quit();
+        m_segmentationThread->wait();
+        m_segmentationThread = nullptr;
+    }
     if (cap.isOpened()) {
         cap.release();
     }
@@ -358,7 +373,7 @@ void Capture::showEvent(QShowEvent *event)
 {
     QWidget::showEvent(event);
     if (cameraTimer && !cameraTimer->isActive()) {
-        cameraTimer->start(16); // ~60 FPS for real-time processing
+        cameraTimer->start(50); // ~20 FPS
     }
 }
 
@@ -413,12 +428,12 @@ void Capture::updateCameraFeed()
                 ui->videoLabel->setPixmap(pixmap.scaled(ui->videoLabel->size(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
             }
         } else {
-            // Display original frame when segmentation is disabled - MAXIMUM OPTIMIZED
+            // Display original frame when segmentation is disabled
             QImage qImage = cvMatToQImage(frame);
             QPixmap pixmap = QPixmap::fromImage(qImage);
             
             if (ui->videoLabel) {
-                ui->videoLabel->setPixmap(pixmap.scaled(ui->videoLabel->size(), Qt::IgnoreAspectRatio, Qt::FastTransformation));
+                ui->videoLabel->setPixmap(pixmap.scaled(ui->videoLabel->size(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
             }
         }
 
@@ -426,7 +441,7 @@ void Capture::updateCameraFeed()
         frameCount++;
         if (frameCount % 10 == 0) { // Update FPS every 10 frames instead of 30
             qint64 elapsed = loopTimer.elapsed();
-            m_currentFPS = (elapsed > 0) ? (10 * 1000) / elapsed : 0;
+            m_currentFPS = (elapsed > 0) ? static_cast<int>((10 * 1000) / elapsed) : 0;
             loopTimer.restart();
         }
     }
@@ -593,7 +608,7 @@ void Capture::onTFLiteModelLoaded(bool success)
 void Capture::updateDebugDisplay()
 {
     if (debugLabel) {
-        QString debugInfo = QString("FPS: %1 | Segmentation: %2 | Tracking | Seg FPS: %3")
+        QString debugInfo = QString("FPS: %1 | Working Seg: %2 | Improved | Seg FPS: %3")
                            .arg(m_currentFPS)
                            .arg(m_showSegmentation ? "ON" : "OFF")
                            .arg(QString::number(m_segmentationFPS, 'f', 1));

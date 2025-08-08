@@ -143,6 +143,7 @@ private:
     double m_lastSegmentationTime;
     int m_segmentationFPS;
     bool m_tfliteModelLoaded;
+    QThread *m_segmentationThread;
 
     // pass foreground
     Foreground *foreground;
