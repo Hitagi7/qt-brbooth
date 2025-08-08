@@ -1,5 +1,6 @@
 QT       += core gui
 QT       += multimedia multimediawidgets
+QT       += concurrent
 
 greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
 

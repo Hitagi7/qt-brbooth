@@ -20,6 +20,7 @@
 #include <QDateTime>
 #include <QStackedLayout>
 #include <opencv2/opencv.hpp>
+#include <QtConcurrent/QtConcurrent>
 
 Capture::Capture(QWidget *parent, Foreground *fg)
     : QWidget(parent)
@@ -59,6 +60,10 @@ Capture::Capture(QWidget *parent, Foreground *fg)
     , segmentationButton(nullptr)
     , debugUpdateTimer(nullptr)
     , m_currentFPS(0)
+    , m_segmentationWatcher(nullptr)
+    , m_processingAsync(false)
+    , m_asyncMutex()
+    , m_lastProcessedFrame()
 {
     ui->setupUi(this);
 
@@ -137,11 +142,13 @@ Capture::Capture(QWidget *parent, Foreground *fg)
     cap.set(cv::CAP_PROP_FRAME_WIDTH, 640);
     cap.set(cv::CAP_PROP_FRAME_HEIGHT, 480);
     cap.set(cv::CAP_PROP_FPS, 30);
+    cap.set(cv::CAP_PROP_BUFFERSIZE, 1); // Minimize buffer to reduce latency
+    cap.set(cv::CAP_PROP_FOURCC, cv::VideoWriter::fourcc('M', 'J', 'P', 'G')); // Use MJPG for better performance
 
     // Setup timers
     cameraTimer = new QTimer(this);
     connect(cameraTimer, &QTimer::timeout, this, &Capture::updateCameraFeed);
-    cameraTimer->start(16); // ~60 FPS for more responsive real-time processing
+    cameraTimer->start(16); // ~60 FPS for real-time processing
 
     countdownTimer = new QTimer(this);
     connect(countdownTimer, &QTimer::timeout, this, &Capture::updateCountdown);
@@ -161,6 +168,14 @@ Capture::Capture(QWidget *parent, Foreground *fg)
     connect(debugUpdateTimer, &QTimer::timeout, this, &Capture::updateDebugDisplay);
     debugUpdateTimer->start(500); // Update every 500ms for more responsive feedback
 
+    // Initialize async processing
+    m_segmentationWatcher = new QFutureWatcher<cv::Mat>(this);
+    connect(m_segmentationWatcher, &QFutureWatcher<cv::Mat>::finished, 
+            this, &Capture::onSegmentationFinished);
+            
+    // Pre-allocate pixmap for better performance
+    m_cachedPixmap = QPixmap(640, 480);
+
     qDebug() << "Capture widget initialized successfully with TRUE REAL-TIME frame-by-frame segmentation";
 }
 
@@ -169,6 +184,13 @@ Capture::~Capture()
     if (cap.isOpened()) {
         cap.release();
     }
+    
+    // Cancel any running async operations
+    if (m_segmentationWatcher && m_segmentationWatcher->isRunning()) {
+        m_segmentationWatcher->cancel();
+        m_segmentationWatcher->waitForFinished();
+    }
+    
     delete ui;
 }
 
@@ -188,6 +210,11 @@ void Capture::initializeTFLiteSegmentation()
     // Set initial parameters
     m_tfliteSegmentation->setConfidenceThreshold(m_segmentationConfidenceThreshold);
     m_tfliteSegmentation->setPerformanceMode(TFLiteDeepLabv3::Balanced);
+
+    // Initialize async processing
+    m_segmentationWatcher = new QFutureWatcher<cv::Mat>(this);
+    connect(m_segmentationWatcher, &QFutureWatcher<cv::Mat>::finished, 
+            this, &Capture::onSegmentationFinished);
 }
 
 void Capture::setCaptureMode(CaptureMode mode)
@@ -354,34 +381,44 @@ void Capture::updateCameraFeed()
         // Store current frame for TFLite processing
         m_currentFrame = frame.clone();
 
-        // Process frame with segmentation if enabled - TRUE REAL-TIME FRAME-BY-FRAME
+        // Process frame with segmentation if enabled - ASYNC PROCESSING
         if (m_showSegmentation) {
-            // Process segmentation immediately on this frame
-            m_segmentationTimer.start();
-            cv::Mat segmentedFrame = m_tfliteSegmentation->segmentFrame(frame);
-            m_lastSegmentationTime = m_segmentationTimer.elapsed() / 1000.0;
-            m_segmentationFPS = (m_lastSegmentationTime > 0) ? 1.0 / m_lastSegmentationTime : 0;
-            
-            // Store the segmented frame
-            {
-        QMutexLocker locker(&m_segmentationMutex);
-                m_lastSegmentedFrame = segmentedFrame.clone();
+            // Check if we should start a new async processing
+            QMutexLocker locker(&m_asyncMutex);
+            if (!m_processingAsync && m_segmentationWatcher && !m_segmentationWatcher->isRunning()) {
+                m_processingAsync = true;
+                m_lastProcessedFrame = frame.clone();
+                
+                // Start async processing
+                QFuture<cv::Mat> future = QtConcurrent::run(processFrameAsync, frame, m_tfliteSegmentation);
+                m_segmentationWatcher->setFuture(future);
             }
             
-            // Display the segmented frame immediately
-            QImage qImage = cvMatToQImage(segmentedFrame);
-            QPixmap pixmap = QPixmap::fromImage(qImage);
+            // Display the last available segmented frame or original frame
+            QPixmap pixmap;
+            {
+                QMutexLocker segLocker(&m_segmentationMutex);
+                if (!m_lastSegmentedFrame.empty()) {
+                    QImage qImage = cvMatToQImage(m_lastSegmentedFrame);
+                    pixmap = QPixmap::fromImage(qImage);
+                }
+            }
+            
+            if (pixmap.isNull()) {
+                QImage qImage = cvMatToQImage(frame);
+                pixmap = QPixmap::fromImage(qImage);
+            }
             
             if (ui->videoLabel) {
                 ui->videoLabel->setPixmap(pixmap.scaled(ui->videoLabel->size(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
             }
         } else {
-            // Display original frame when segmentation is disabled
+            // Display original frame when segmentation is disabled - MAXIMUM OPTIMIZED
             QImage qImage = cvMatToQImage(frame);
             QPixmap pixmap = QPixmap::fromImage(qImage);
             
             if (ui->videoLabel) {
-                ui->videoLabel->setPixmap(pixmap.scaled(ui->videoLabel->size(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
+                ui->videoLabel->setPixmap(pixmap.scaled(ui->videoLabel->size(), Qt::IgnoreAspectRatio, Qt::FastTransformation));
             }
         }
 
@@ -393,6 +430,48 @@ void Capture::updateCameraFeed()
             loopTimer.restart();
         }
     }
+}
+
+// Static function for async processing
+cv::Mat Capture::processFrameAsync(const cv::Mat &frame, TFLiteDeepLabv3 *segmentation)
+{
+    if (!segmentation) {
+        return frame.clone();
+    }
+    
+    try {
+        return segmentation->segmentFrame(frame);
+    } catch (const std::exception& e) {
+        qWarning() << "Exception in async segmentation:" << e.what();
+        return frame.clone();
+    }
+}
+
+// Slot to handle finished async segmentation
+void Capture::onSegmentationFinished()
+{
+    if (m_segmentationWatcher && m_segmentationWatcher->isFinished()) {
+        try {
+            cv::Mat result = m_segmentationWatcher->result();
+            
+            // Store the result
+            {
+                QMutexLocker locker(&m_segmentationMutex);
+                m_lastSegmentedFrame = result.clone();
+            }
+            
+            // Update timing info
+            m_lastSegmentationTime = m_segmentationTimer.elapsed() / 1000.0;
+            m_segmentationFPS = (m_lastSegmentationTime > 0) ? 1.0 / m_lastSegmentationTime : 0;
+            
+        } catch (const std::exception& e) {
+            qWarning() << "Exception getting async result:" << e.what();
+        }
+    }
+    
+    // Mark as not processing
+    QMutexLocker locker(&m_asyncMutex);
+    m_processingAsync = false;
 }
 
 // These methods are no longer needed since we process frames directly in updateCameraFeed
@@ -572,18 +651,33 @@ void Capture::performImageCapture()
 
 QImage Capture::cvMatToQImage(const cv::Mat &mat)
 {
-    switch (mat.type()) {
-    case CV_8UC3: {
-        QImage img(mat.data, mat.cols, mat.rows, mat.step, QImage::Format_RGB888);
-        return img.rgbSwapped();
-    }
-    case CV_8UC4: {
-        QImage img(mat.data, mat.cols, mat.rows, mat.step, QImage::Format_ARGB32);
-        return img;
-    }
-    default:
-        qWarning() << "Unsupported image format for conversion";
+    if (mat.empty()) {
         return QImage();
+    }
+
+    // Optimize for BGR format (most common from camera)
+    if (mat.type() == CV_8UC3) {
+        // Use faster conversion for BGR
+        QImage qImage(mat.data, mat.cols, mat.rows, mat.step, QImage::Format_RGB888);
+        return qImage.rgbSwapped(); // Convert BGR to RGB
+    }
+    
+    // Fallback for other formats
+    switch (mat.type()) {
+        case CV_8UC1: {
+            QImage qImage(mat.data, mat.cols, mat.rows, mat.step, QImage::Format_Grayscale8);
+            return qImage.copy(); // Need to copy for grayscale
+        }
+        case CV_8UC4: {
+            QImage qImage(mat.data, mat.cols, mat.rows, mat.step, QImage::Format_RGBA8888);
+            return qImage.copy(); // Need to copy for RGBA
+        }
+        default: {
+            cv::Mat converted;
+            cv::cvtColor(mat, converted, cv::COLOR_BGR2RGB);
+            QImage qImage(converted.data, converted.cols, converted.rows, converted.step, QImage::Format_RGB888);
+            return qImage.copy();
+        }
     }
 }
 

@@ -468,7 +468,7 @@ void TFLiteDeepLabv3::processFrame(const cv::Mat &frame)
     QMutexLocker locker(&m_frameMutex);
     
     // Keep only the latest frame to avoid queue buildup
-    m_frameQueue.clear();
+        m_frameQueue.clear();
     m_frameQueue.enqueue(frame.clone());
     
     m_frameCondition.wakeOne();

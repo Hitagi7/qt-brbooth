@@ -28,7 +28,11 @@
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QMutex>
+#include <QThread>
 #include <QMessageBox>
+#include <QFuture>
+#include <QFutureWatcher>
+#include <QtConcurrent>
 
 QT_BEGIN_NAMESPACE
 namespace Ui { class Capture; }
@@ -91,6 +95,7 @@ private slots:
     void onSegmentationError(const QString &error);
     void onTFLiteModelLoaded(bool success);
     void updateDebugDisplay();
+    void onSegmentationFinished();
 
 private:
     Ui::Capture *ui;
@@ -160,6 +165,14 @@ private:
     
     // Debug Display Methods
     void setupDebugDisplay();
+
+    // Async processing members
+    QFutureWatcher<cv::Mat> *m_segmentationWatcher;
+    QMutex m_asyncMutex;
+    bool m_processingAsync;
+    cv::Mat m_lastProcessedFrame;
+    QPixmap m_cachedPixmap;
+    static cv::Mat processFrameAsync(const cv::Mat &frame, TFLiteDeepLabv3 *segmentation);
 
 signals:
     void backtoPreviousPage();
