@@ -44,12 +44,14 @@
         <file>templates/foreground/2.png</file>
         <file>templates/foreground/3.png</file>
         <file>templates/foreground/4.png</file>
+        <file>templates/foreground/5.png</file>
     </qresource>
     <qresource prefix="/background">
         <file>templates/background/bg1.png</file>
         <file>templates/background/bg2.png</file>
         <file>templates/background/bg3.png</file>
         <file>templates/background/bg4.png</file>
+        <file>templates/background/bg5.png</file>
     </qresource>
     <qresource prefix="/gif">
         <file>test.gif</file>
