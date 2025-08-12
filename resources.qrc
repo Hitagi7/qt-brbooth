@@ -55,12 +55,11 @@
         <file>templates/background/bg5.png</file>
     </qresource>
     <qresource prefix="/gif">
-        <file>test.gif</file>
-        <file>test1.gif</file>
-        <file>test2.gif</file>
-        <file>test3.gif</file>
-        <file>test4.gif</file>
-        <file>test5.gif</file>
+        <file>gif templates/dynamicbg1.gif</file>
+        <file>gif templates/dynamicbg2.gif</file>
+        <file>gif templates/dynamicbg3.gif</file>
+        <file>gif templates/dynamicbg4.gif</file>
+        <file>gif templates/dynamicbg5.gif</file>
     </qresource>
     <qresource prefix="/new/prefix1"/>
 </RCC>

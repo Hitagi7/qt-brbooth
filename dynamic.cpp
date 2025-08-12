@@ -178,11 +178,11 @@ void Dynamic::setupVideoPlayers()
 
     // Define GIF paths for thumbnails
     QStringList gifPaths;
-    gifPaths << ":/gif/test1.gif"
-             << ":/gif/test2.gif"
-             << ":/gif/test3.gif"
-             << ":/gif/test4.gif"
-             << ":/gif/test5.gif";
+    gifPaths << ":/gif/gif templates/dynamicbg1.gif"
+             << ":/gif/gif templates/dynamicbg2.gif"
+             << ":/gif/gif templates/dynamicbg3.gif"
+             << ":/gif/gif templates/dynamicbg4.gif"
+             << ":/gif/gif templates/dynamicbg5.gif";
 
     // List of QPushButton pointers from the UI
     QList<QPushButton*> buttons;

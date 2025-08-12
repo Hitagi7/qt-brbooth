@@ -54,7 +54,7 @@ BRBooth::BRBooth(QWidget *parent)
         gifLabel->lower(); // Put it behind the button's text
 
         // Load and play the GIF from resources (assuming :/gif/test.gif is in your Qt resource file)
-        QMovie* gifMovie = new QMovie(":/gif/test.gif", QByteArray(), gifLabel);
+        QMovie* gifMovie = new QMovie(":/gif/gif templates/dynamicbg3.gif", QByteArray(), gifLabel);
         if (!gifMovie->isValid()) {
             qWarning() << "Failed to load GIF: :/gif/test.gif" << gifMovie->lastErrorString();
             delete gifMovie; // Clean up if GIF is invalid
