@@ -22,6 +22,7 @@
         <file>pics/dynamic4.png</file>
         <file>pics/dynamic5.png</file>
         <file>pics/bg6.png</file>
+        <file>pics/staticlandingbg.png</file>
     </qresource>
     <qresource prefix="/fonts">
         <file>Fonts/static/RobotoCondensed-BoldItalic.ttf</file>
@@ -61,4 +62,5 @@
         <file>test4.gif</file>
         <file>test5.gif</file>
     </qresource>
+    <qresource prefix="/new/prefix1"/>
 </RCC>

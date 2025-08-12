@@ -118,7 +118,7 @@
               </property>
               <property name="styleSheet">
                <string notr="true">#staticButton {
-    background: url(:/images/pics/mickey.png);
+    background: url(:/images/pics/staticlandingbg.png);
     background-repeat: no-repeat;
     background-position: center;
     background-size: contain;
