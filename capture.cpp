@@ -560,7 +560,6 @@ void Capture::updateCameraFeed()
         } else {
             qDebug() << "🖐️ Hand detection DISABLED - skipping processing";
         }
-
         // Process frame with segmentation if enabled - ASYNC PROCESSING
         if (m_showSegmentation) {
             // Check if we should start a new async processing
@@ -734,7 +733,6 @@ void Capture::drawHandBoundingBoxes(cv::Mat &/*frame*/, const QList<AdvancedHand
         }
     }
 }
-
 // These methods are no longer needed since we process frames directly in updateCameraFeed
 // Keeping them for compatibility but they're not used in the new real-time implementation
 

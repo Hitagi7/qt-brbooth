@@ -215,7 +215,6 @@ private:
     double m_lastHandDetectionTime;
     int m_handDetectionFPS;
     HandTrackerMP m_handTracker; // MediaPipe-like motion+ROI tracker
-
 signals:
     void backtoPreviousPage();
     void imageCaptured(const QPixmap &image);

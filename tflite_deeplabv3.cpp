@@ -14,7 +14,7 @@ TFLiteDeepLabv3::TFLiteDeepLabv3(QObject *parent)
     , m_inputWidth(513)
     , m_inputHeight(513)
     , m_confidenceThreshold(0.5f)
-         , m_processingInterval(33) // ~30 FPS for better performance
+    , m_processingInterval(33) // ~30 FPS for better performance
     , m_performanceMode(Balanced)
     , m_processingActive(false)
     , hasValidTracking(false)
