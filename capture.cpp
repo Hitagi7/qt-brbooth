@@ -20,6 +20,8 @@
 #include <QDateTime>
 #include <QStackedLayout>
 #include <opencv2/opencv.hpp>
+#include <QtConcurrent/QtConcurrent>
+#include <QMutexLocker>
 
 Capture::Capture(QWidget *parent, Foreground *fg)
     : QWidget(parent)
@@ -59,6 +61,16 @@ Capture::Capture(QWidget *parent, Foreground *fg)
     , segmentationButton(nullptr)
     , debugUpdateTimer(nullptr)
     , m_currentFPS(0)
+    , m_segmentationWatcher(nullptr)
+    , m_processingAsync(false)
+    , m_asyncMutex()
+    , m_lastProcessedFrame()
+    , m_handDetector(new AdvancedHandDetector())
+    , m_showHandDetection(true)
+    , m_handDetectionMutex()
+    , m_handDetectionTimer()
+    , m_lastHandDetectionTime(0.0)
+    , m_handDetectionFPS(0)
 {
     ui->setupUi(this);
 
@@ -77,6 +89,9 @@ Capture::Capture(QWidget *parent, Foreground *fg)
     
     // Update segmentation button to reflect initial state
     updateSegmentationButton();
+    
+    // Update hand detection button to reflect initial state
+    updateHandDetectionButton();
     
     // Ensure video label fills the entire window
     if (ui->videoLabel) {
@@ -108,6 +123,19 @@ Capture::Capture(QWidget *parent, Foreground *fg)
 
     // Initialize TFLite Segmentation
     initializeTFLiteSegmentation();
+    
+    // Initialize Hand Detection (disabled by default)
+    initializeHandDetection();
+    m_handDetectionEnabled = false; // Start with hand detection disabled
+    // Initialize MediaPipe-like tracker
+    m_handTracker.initialize(640, 480);
+
+    // Run segmentation in a background thread so UI stays responsive (Debug-safe)
+    m_segmentationThread = new QThread(this);
+    m_tfliteSegmentation->moveToThread(m_segmentationThread);
+    connect(m_segmentationThread, &QThread::started, m_tfliteSegmentation, &TFLiteDeepLabv3::startRealtimeProcessing);
+    connect(m_segmentationThread, &QThread::finished, m_tfliteSegmentation, &TFLiteDeepLabv3::stopRealtimeProcessing);
+    m_segmentationThread->start();
 
     // Connect TFLite signals
     connect(m_tfliteSegmentation, &TFLiteDeepLabv3::segmentationResultReady,
@@ -137,11 +165,13 @@ Capture::Capture(QWidget *parent, Foreground *fg)
     cap.set(cv::CAP_PROP_FRAME_WIDTH, 640);
     cap.set(cv::CAP_PROP_FRAME_HEIGHT, 480);
     cap.set(cv::CAP_PROP_FPS, 30);
+    cap.set(cv::CAP_PROP_BUFFERSIZE, 1); // Minimize buffer to reduce latency
+    cap.set(cv::CAP_PROP_FOURCC, cv::VideoWriter::fourcc('M', 'J', 'P', 'G')); // Use MJPG for better performance
 
     // Setup timers
     cameraTimer = new QTimer(this);
     connect(cameraTimer, &QTimer::timeout, this, &Capture::updateCameraFeed);
-    cameraTimer->start(16); // ~60 FPS for more responsive real-time processing
+    cameraTimer->start(16); // ~60 FPS - ULTRA-LIGHT processing
 
     countdownTimer = new QTimer(this);
     connect(countdownTimer, &QTimer::timeout, this, &Capture::updateCountdown);
@@ -159,16 +189,39 @@ Capture::Capture(QWidget *parent, Foreground *fg)
     // Debug update timer
     debugUpdateTimer = new QTimer(this);
     connect(debugUpdateTimer, &QTimer::timeout, this, &Capture::updateDebugDisplay);
-    debugUpdateTimer->start(500); // Update every 500ms for more responsive feedback
+    debugUpdateTimer->start(1000); // Lighter UI updates in Debug
+
+    // Initialize async processing
+    m_segmentationWatcher = new QFutureWatcher<cv::Mat>(this);
+    connect(m_segmentationWatcher, &QFutureWatcher<cv::Mat>::finished, 
+            this, &Capture::onSegmentationFinished);
+            
+    // Pre-allocate pixmap for better performance
+    m_cachedPixmap = QPixmap(640, 480);
 
     qDebug() << "Capture widget initialized successfully with TRUE REAL-TIME frame-by-frame segmentation";
 }
 
 Capture::~Capture()
 {
+    if (cameraTimer && cameraTimer->isActive()) {
+        cameraTimer->stop();
+    }
+    if (m_segmentationThread) {
+        m_segmentationThread->quit();
+        m_segmentationThread->wait();
+        m_segmentationThread = nullptr;
+    }
     if (cap.isOpened()) {
         cap.release();
     }
+    
+    // Cancel any running async operations
+    if (m_segmentationWatcher && m_segmentationWatcher->isRunning()) {
+        m_segmentationWatcher->cancel();
+        m_segmentationWatcher->waitForFinished();
+    }
+    
     delete ui;
 }
 
@@ -188,6 +241,56 @@ void Capture::initializeTFLiteSegmentation()
     // Set initial parameters
     m_tfliteSegmentation->setConfidenceThreshold(m_segmentationConfidenceThreshold);
     m_tfliteSegmentation->setPerformanceMode(TFLiteDeepLabv3::Balanced);
+
+    // Initialize async processing
+    m_segmentationWatcher = new QFutureWatcher<cv::Mat>(this);
+    connect(m_segmentationWatcher, &QFutureWatcher<cv::Mat>::finished, 
+            this, &Capture::onSegmentationFinished);
+}
+
+void Capture::initializeHandDetection()
+{
+    if (m_handDetector) {
+        if (m_handDetector->initialize()) {
+            qDebug() << "Advanced hand detector initialized successfully";
+            m_handDetector->setConfidenceThreshold(0.8); // STRICT threshold to prevent false positives
+            m_handDetector->setShowBoundingBox(true);
+            m_handDetector->setPerformanceMode(1); // Set to Balanced mode
+        } else {
+            qWarning() << "Failed to initialize hand detector";
+        }
+    }
+}
+
+void Capture::enableHandDetection(bool enable)
+{
+    m_handDetectionEnabled = enable;
+    if (enable && m_handDetector) {
+        // Reset hand detection state when enabling to prevent false triggers
+        m_handDetector->resetGestureState();
+        // Initially disable detection to prevent false triggers
+        m_handDetectionEnabled = false;
+        qDebug() << "🖐️ Hand detection DISABLED during initialization";
+        
+        // Add a longer delay before enabling detection to prevent false triggers
+        QTimer::singleShot(5000, [this]() {
+            // Re-arm trackers cleanly
+            m_handDetector->resetGestureState();
+            m_handTracker.reset();
+            m_handDetectionEnabled = true;
+            qDebug() << "🖐️ Hand detection now ACTIVE - ready for gestures";
+        });
+    }
+    if (enable) {
+        qDebug() << "🖐️ Hand detection ENABLED - State reset (5 second delay with proper disable)";
+    } else {
+        qDebug() << "🖐️ Hand detection DISABLED";
+    }
+}
+
+void Capture::setHandDetectionEnabled(bool enabled)
+{
+    enableHandDetection(enabled);
 }
 
 void Capture::setCaptureMode(CaptureMode mode)
@@ -288,6 +391,66 @@ bool Capture::isTFLiteModelLoaded() const
     return m_tfliteModelLoaded;
 }
 
+// Hand Detection Control Methods
+void Capture::setShowHandDetection(bool show)
+{
+    m_showHandDetection = show;
+    updateHandDetectionButton();
+    qDebug() << "Hand detection display set to:" << show;
+}
+
+bool Capture::getShowHandDetection() const
+{
+    return m_showHandDetection;
+}
+
+void Capture::setHandDetectionConfidenceThreshold(double threshold)
+{
+    if (m_handDetector) {
+        m_handDetector->setConfidenceThreshold(threshold);
+        qDebug() << "Hand detection confidence threshold set to:" << threshold;
+    }
+}
+
+double Capture::getHandDetectionConfidenceThreshold() const
+{
+    if (m_handDetector) {
+        return m_handDetector->getConfidenceThreshold();
+    }
+    return 0.5;
+}
+
+QList<AdvancedHandDetection> Capture::getLastHandDetections() const
+{
+    QMutexLocker locker(&m_handDetectionMutex);
+    return m_lastHandDetections;
+}
+
+void Capture::toggleHandDetection()
+{
+    m_showHandDetection = !m_showHandDetection;
+    updateHandDetectionButton();
+    qDebug() << "Hand detection toggled to:" << (m_showHandDetection ? "ON" : "OFF");
+}
+
+void Capture::updateHandDetectionButton()
+{
+    if (handDetectionButton) {
+        if (m_showHandDetection) {
+            handDetectionButton->setText("Disable Hand Detection");
+            handDetectionButton->setStyleSheet("QPushButton { color: white; font-size: 12px; background-color: #d32f2f; border: 1px solid white; padding: 5px; }");
+        } else {
+            handDetectionButton->setText("Enable Hand Detection");
+            handDetectionButton->setStyleSheet("QPushButton { color: white; font-size: 12px; background-color: #388e3c; border: 1px solid white; padding: 5px; }");
+        }
+    }
+}
+
+double Capture::getHandDetectionProcessingTime() const
+{
+    return m_lastHandDetectionTime;
+}
+
 void Capture::resizeEvent(QResizeEvent *event)
 {
     QWidget::resizeEvent(event);
@@ -322,6 +485,23 @@ void Capture::keyPressEvent(QKeyEvent *event)
             // Toggle segmentation
             toggleSegmentation();
             break;
+        case Qt::Key_H:
+            // Toggle hand detection
+            toggleHandDetection();
+            break;
+        case Qt::Key_F12:
+            // Save debug frame
+            if (!m_currentFrame.empty()) {
+                cv::imwrite("debug_current_frame.png", m_currentFrame);
+                qDebug() << "Saved debug frame to debug_current_frame.png";
+                
+                // Also trigger hand detection on this frame for debugging
+                if (m_handDetector && m_handDetector->isInitialized()) {
+                    QList<AdvancedHandDetection> debugDetections = m_handDetector->detect(m_currentFrame);
+                    qDebug() << "Manual hand detection test found" << debugDetections.size() << "hands";
+                }
+            }
+            break;
         default:
             QWidget::keyPressEvent(event);
     }
@@ -331,8 +511,10 @@ void Capture::showEvent(QShowEvent *event)
 {
     QWidget::showEvent(event);
     if (cameraTimer && !cameraTimer->isActive()) {
-        cameraTimer->start(16); // ~60 FPS for real-time processing
+        cameraTimer->start(16); // ~60 FPS - ULTRA-LIGHT processing
     }
+    qDebug() << "Capture widget shown - ENABLING hand detection with 5-second delay";
+    enableHandDetection(true); // Enable hand detection when page is shown
 }
 
 void Capture::hideEvent(QHideEvent *event)
@@ -341,6 +523,8 @@ void Capture::hideEvent(QHideEvent *event)
     if (cameraTimer && cameraTimer->isActive()) {
         cameraTimer->stop();
     }
+    qDebug() << "Capture widget hidden - DISABLING hand detection";
+    enableHandDetection(false); // Disable hand detection when page is hidden
 }
 
 void Capture::updateCameraFeed()
@@ -351,33 +535,82 @@ void Capture::updateCameraFeed()
 
     cv::Mat frame;
     if (cap.read(frame)) {
+        // Mirror the camera frame horizontally
+        cv::flip(frame, frame, 1);
+        
         // Store current frame for TFLite processing
         m_currentFrame = frame.clone();
 
-        // Process frame with segmentation if enabled - TRUE REAL-TIME FRAME-BY-FRAME
+        cv::Mat displayFrame = frame.clone();
+        bool frameProcessed = false;
+
+        // Process frame with hand detection if enabled (optimized performance)
+        if (m_handDetectionEnabled) {
+            // Update MediaPipe-like tracker first
+            m_handTracker.update(frame);
+            if (m_handTracker.shouldTriggerCapture()) {
+                startCountdown();
+            }
+            // Keep existing detector as secondary signal (can be disabled later)
+            if (m_handDetector && m_handDetector->isInitialized()) {
+                qDebug() << "🖐️ Processing hand detection - ENABLED";
+                processFrameWithHandDetection(displayFrame);
+                frameProcessed = true;
+            }
+        } else {
+            qDebug() << "🖐️ Hand detection DISABLED - skipping processing";
+        }
+
+        // Process frame with segmentation if enabled - ASYNC PROCESSING
         if (m_showSegmentation) {
-            // Process segmentation immediately on this frame
-            m_segmentationTimer.start();
-            cv::Mat segmentedFrame = m_tfliteSegmentation->segmentFrame(frame);
-            m_lastSegmentationTime = m_segmentationTimer.elapsed() / 1000.0;
-            m_segmentationFPS = (m_lastSegmentationTime > 0) ? 1.0 / m_lastSegmentationTime : 0;
-            
-            // Store the segmented frame
-            {
-        QMutexLocker locker(&m_segmentationMutex);
-                m_lastSegmentedFrame = segmentedFrame.clone();
+            // Check if we should start a new async processing
+            QMutexLocker locker(&m_asyncMutex);
+            if (!m_processingAsync && m_segmentationWatcher && !m_segmentationWatcher->isRunning()) {
+                m_processingAsync = true;
+                m_lastProcessedFrame = frame.clone();
+                
+                // Start async processing
+                QFuture<cv::Mat> future = QtConcurrent::run(processFrameAsync, frame, m_tfliteSegmentation);
+                m_segmentationWatcher->setFuture(future);
             }
             
-            // Display the segmented frame immediately
-            QImage qImage = cvMatToQImage(segmentedFrame);
-            QPixmap pixmap = QPixmap::fromImage(qImage);
+            // Display the last available segmented frame or original frame
+            QPixmap pixmap;
+            cv::Mat segmentedFrame;
+            QList<AdvancedHandDetection> handDetections;
+            
+            {
+                QMutexLocker segLocker(&m_segmentationMutex);
+                if (!m_lastSegmentedFrame.empty()) {
+                    segmentedFrame = m_lastSegmentedFrame.clone();
+                }
+            }
+            
+            if (!segmentedFrame.empty()) {
+                // Apply hand detection to segmented frame if enabled
+                if (m_handDetectionEnabled && m_handDetector && m_handDetector->isInitialized()) {
+                    QMutexLocker handLocker(&m_handDetectionMutex);
+                    handDetections = m_lastHandDetections;
+                } else {
+                    // Clear hand detections when disabled
+                    handDetections.clear();
+                }
+                drawHandBoundingBoxes(segmentedFrame, handDetections);
+                QImage qImage = cvMatToQImage(segmentedFrame);
+                pixmap = QPixmap::fromImage(qImage);
+            }
+            
+            if (pixmap.isNull()) {
+                QImage qImage = cvMatToQImage(displayFrame);
+                pixmap = QPixmap::fromImage(qImage);
+            }
             
             if (ui->videoLabel) {
                 ui->videoLabel->setPixmap(pixmap.scaled(ui->videoLabel->size(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
             }
         } else {
             // Display original frame when segmentation is disabled
-            QImage qImage = cvMatToQImage(frame);
+            QImage qImage = cvMatToQImage(displayFrame);
             QPixmap pixmap = QPixmap::fromImage(qImage);
             
             if (ui->videoLabel) {
@@ -389,8 +622,115 @@ void Capture::updateCameraFeed()
         frameCount++;
         if (frameCount % 10 == 0) { // Update FPS every 10 frames instead of 30
             qint64 elapsed = loopTimer.elapsed();
-            m_currentFPS = (elapsed > 0) ? (10 * 1000) / elapsed : 0;
+            m_currentFPS = (elapsed > 0) ? static_cast<int>((10 * 1000) / elapsed) : 0;
             loopTimer.restart();
+        }
+    }
+}
+
+// Static function for async processing
+cv::Mat Capture::processFrameAsync(const cv::Mat &frame, TFLiteDeepLabv3 *segmentation)
+{
+    if (!segmentation) {
+        return frame.clone();
+    }
+    
+    try {
+        return segmentation->segmentFrame(frame);
+    } catch (const std::exception& e) {
+        qWarning() << "Exception in async segmentation:" << e.what();
+        return frame.clone();
+    }
+}
+
+// Slot to handle finished async segmentation
+void Capture::onSegmentationFinished()
+{
+    if (m_segmentationWatcher && m_segmentationWatcher->isFinished()) {
+        try {
+            cv::Mat result = m_segmentationWatcher->result();
+            
+            // Store the result
+            {
+                QMutexLocker locker(&m_segmentationMutex);
+                m_lastSegmentedFrame = result.clone();
+            }
+            
+            // Update timing info
+            m_lastSegmentationTime = m_segmentationTimer.elapsed() / 1000.0;
+            m_segmentationFPS = (m_lastSegmentationTime > 0) ? 1.0 / m_lastSegmentationTime : 0;
+            
+        } catch (const std::exception& e) {
+            qWarning() << "Exception getting async result:" << e.what();
+        }
+    }
+    
+    // Mark as not processing
+    QMutexLocker locker(&m_asyncMutex);
+    m_processingAsync = false;
+}
+
+void Capture::onHandDetectionFinished()
+{
+    // This slot can be used for async hand detection if needed in the future
+    qDebug() << "Hand detection processing completed";
+}
+
+void Capture::processFrameWithHandDetection(const cv::Mat &frame)
+{
+    if (!m_handDetector || !m_handDetector->isInitialized()) {
+        return;
+    }
+    
+    m_handDetectionTimer.start();
+    
+    try {
+        // Detect hands in the frame
+        QList<AdvancedHandDetection> detections = m_handDetector->detect(frame);
+        
+        // Store the detections
+        {
+            QMutexLocker locker(&m_handDetectionMutex);
+            m_lastHandDetections = detections;
+        }
+        
+        // Update timing info
+        m_lastHandDetectionTime = m_handDetectionTimer.elapsed() / 1000.0;
+        m_handDetectionFPS = (m_lastHandDetectionTime > 0) ? 1.0 / m_lastHandDetectionTime : 0;
+        
+        // Apply hand detection visualization to the frame
+        cv::Mat displayFrame = frame.clone();
+        drawHandBoundingBoxes(displayFrame, detections);
+        
+    } catch (const std::exception& e) {
+        qWarning() << "Exception in hand detection:" << e.what();
+    }
+}
+
+void Capture::drawHandBoundingBoxes(cv::Mat &/*frame*/, const QList<AdvancedHandDetection> &detections)
+{
+    // REMOVED: No more bounding box drawing to avoid conflicts with segmentation
+    // Only show gesture status in console for debugging
+    for (const auto& detection : detections) {
+        if (detection.confidence >= m_handDetector->getConfidenceThreshold()) {
+            // Check if capture should be triggered
+            if (m_handDetector->shouldTriggerCapture()) {
+                qDebug() << "🎯 CAPTURE TRIGGERED! Hand closed gesture detected!";
+                // Trigger countdown and capture
+                startCountdown();
+            }
+            
+            // Show gesture status in console only
+            bool isOpen = m_handDetector->isHandOpen(detection.landmarks);
+            bool isClosed = m_handDetector->isHandClosed(detection.landmarks);
+            double closureRatio = m_handDetector->calculateHandClosureRatio(detection.landmarks);
+            
+            if (isOpen || isClosed) {
+                QString gestureStatus = isOpen ? "OPEN" : "CLOSED";
+                qDebug() << "Hand detected - Gesture:" << gestureStatus 
+                         << "Confidence:" << static_cast<int>(detection.confidence * 100) << "%"
+                         << "Closure ratio:" << closureRatio;
+            }
         }
     }
 }
@@ -440,6 +780,21 @@ void Capture::on_capture_clicked()
                 }
             } else {
         performImageCapture();
+    }
+}
+
+void Capture::startCountdown()
+{
+    // Only start countdown if not already running
+    if (countdownTimer && !countdownTimer->isActive()) {
+        countdownValue = 3; // 3 second countdown to prepare
+        if (countdownLabel) {
+            countdownLabel->setText(QString::number(countdownValue));
+            countdownLabel->show();
+            countdownLabel->raise(); // Bring to front
+        }
+        countdownTimer->start(1000); // 1 second intervals
+        qDebug() << "🎬 Countdown started! 3 seconds to prepare...";
     }
 }
 
@@ -514,10 +869,12 @@ void Capture::onTFLiteModelLoaded(bool success)
 void Capture::updateDebugDisplay()
 {
     if (debugLabel) {
-        QString debugInfo = QString("FPS: %1 | Segmentation: %2 | Tracking | Seg FPS: %3")
+        QString debugInfo = QString("FPS: %1 | Seg: %2 | Hand: %3 | Seg FPS: %4 | Hand FPS: %5")
                            .arg(m_currentFPS)
                            .arg(m_showSegmentation ? "ON" : "OFF")
-                           .arg(QString::number(m_segmentationFPS, 'f', 1));
+                           .arg(m_showHandDetection ? "ON" : "OFF")
+                           .arg(QString::number(m_segmentationFPS, 'f', 1))
+                           .arg(QString::number(m_handDetectionFPS, 'f', 1));
         debugLabel->setText(debugInfo);
     }
     
@@ -528,6 +885,11 @@ void Capture::updateDebugDisplay()
     if (segmentationLabel) {
         QString segStatus = m_showSegmentation ? "ON (Tracking)" : "OFF";
         segmentationLabel->setText(QString("Segmentation: %1").arg(segStatus));
+    }
+    
+    if (handDetectionLabel) {
+        QString handStatus = m_showHandDetection ? "ON (Tracking)" : "OFF";
+        handDetectionLabel->setText(QString("Hand Detection: %1").arg(handStatus));
     }
 }
 
@@ -572,18 +934,33 @@ void Capture::performImageCapture()
 
 QImage Capture::cvMatToQImage(const cv::Mat &mat)
 {
-    switch (mat.type()) {
-    case CV_8UC3: {
-        QImage img(mat.data, mat.cols, mat.rows, mat.step, QImage::Format_RGB888);
-        return img.rgbSwapped();
-    }
-    case CV_8UC4: {
-        QImage img(mat.data, mat.cols, mat.rows, mat.step, QImage::Format_ARGB32);
-        return img;
-    }
-    default:
-        qWarning() << "Unsupported image format for conversion";
+    if (mat.empty()) {
         return QImage();
+    }
+
+    // Optimize for BGR format (most common from camera)
+    if (mat.type() == CV_8UC3) {
+        // Use faster conversion for BGR
+        QImage qImage(mat.data, mat.cols, mat.rows, mat.step, QImage::Format_RGB888);
+        return qImage.rgbSwapped(); // Convert BGR to RGB
+    }
+    
+    // Fallback for other formats
+    switch (mat.type()) {
+        case CV_8UC1: {
+            QImage qImage(mat.data, mat.cols, mat.rows, mat.step, QImage::Format_Grayscale8);
+            return qImage.copy(); // Need to copy for grayscale
+        }
+        case CV_8UC4: {
+            QImage qImage(mat.data, mat.cols, mat.rows, mat.step, QImage::Format_RGBA8888);
+            return qImage.copy(); // Need to copy for RGBA
+        }
+        default: {
+            cv::Mat converted;
+            cv::cvtColor(mat, converted, cv::COLOR_BGR2RGB);
+            QImage qImage(converted.data, converted.cols, converted.rows, converted.step, QImage::Format_RGB888);
+            return qImage.copy();
+        }
     }
 }
 
@@ -667,11 +1044,22 @@ void Capture::setupDebugDisplay()
     connect(segmentationButton, &QPushButton::clicked, this, &Capture::toggleSegmentation);
     debugLayout->addWidget(segmentationButton);
     
+    // Hand detection label
+    handDetectionLabel = new QLabel("Hand Detection: OFF", debugWidget);
+    handDetectionLabel->setStyleSheet("QLabel { color: white; font-size: 12px; }");
+    debugLayout->addWidget(handDetectionLabel);
+    
+    // Hand detection button
+    handDetectionButton = new QPushButton("Disable Hand Detection", debugWidget);
+    handDetectionButton->setStyleSheet("QPushButton { color: white; font-size: 12px; background-color: #d32f2f; border: 1px solid white; padding: 5px; }");
+    connect(handDetectionButton, &QPushButton::clicked, this, &Capture::toggleHandDetection);
+    debugLayout->addWidget(handDetectionButton);
+    
     // Add debug widget to the main widget instead of videoLabel's layout
     debugWidget->setParent(this);
     debugWidget->move(10, 10); // Position in top-left corner
-    debugWidget->resize(200, 100); // Set a reasonable size
+    debugWidget->resize(200, 150); // Increased size for hand detection controls
     debugWidget->raise(); // Ensure it's on top
     
-    debugWidget->show(); // Show debug widget so user can enable segmentation
+    debugWidget->show(); // Show debug widget so user can enable segmentation and hand detection
 }

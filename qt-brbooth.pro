@@ -1,5 +1,6 @@
 QT       += core gui
 QT       += multimedia multimediawidgets
+QT       += concurrent
 
 greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
 
@@ -26,11 +27,13 @@ SOURCES += \
     dynamic.cpp \
     final.cpp \
     foreground.cpp \
+    advanced_hand_detector.cpp \
     iconhover.cpp \
     main.cpp \
     brbooth.cpp \
     tflite_deeplabv3.cpp \
-    tflite_segmentation_widget.cpp
+    tflite_segmentation_widget.cpp \
+    mediapipe_like_hand_tracker.cpp
 
 HEADERS += \
     background.h \
@@ -39,11 +42,13 @@ HEADERS += \
     dynamic.h \
     final.h \
     foreground.h \
+    advanced_hand_detector.h \
     iconhover.h \
     videotemplate.h \
     common_types.h \
     tflite_deeplabv3.h \
-    tflite_segmentation_widget.h
+    tflite_segmentation_widget.h \
+    mediapipe_like_hand_tracker.h
 
 FORMS += \
     background.ui \
@@ -76,6 +81,7 @@ LIBS += -L$$OPENCV_INSTALL_DIR/x64/vc17/lib \
         -lopencv_highgui4110d \
         -lopencv_imgproc4110d \
         -lopencv_videoio4110d \
+        -lopencv_video4110d \
         -lopencv_calib3d4110d \
         -lopencv_dnn4110d \
         -lopencv_features2d4110d \
@@ -107,4 +113,5 @@ LIBS += -L$$OPENCV_INSTALL_DIR/x64/vc17/lib \
 # Define TFLite availability (using OpenCV fallback)
 DEFINES += TFLITE_AVAILABLE
 DEFINES += TFLITE_DEEPLABV3_ENABLED
+DEFINES += DEBUG_THROTTLE
 

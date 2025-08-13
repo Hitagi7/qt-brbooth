@@ -14,9 +14,12 @@ TFLiteDeepLabv3::TFLiteDeepLabv3(QObject *parent)
     , m_inputWidth(513)
     , m_inputHeight(513)
     , m_confidenceThreshold(0.5f)
-    , m_processingInterval(33) // ~30 FPS
+         , m_processingInterval(33) // ~30 FPS for better performance
     , m_performanceMode(Balanced)
     , m_processingActive(false)
+    , hasValidTracking(false)
+    , trackerInitialized(false)
+    , trackingFrames(0)
 {
     m_processingTimer = new QTimer(this);
     m_processingTimer->setSingleShot(false);
@@ -109,15 +112,20 @@ cv::Mat TFLiteDeepLabv3::performOpenCVSegmentation(const cv::Mat &inputFrame)
     static int trackingFrames = 0;
     static bool trackerInitialized = false;
     
-    // Resize frame for faster detection
+    // Resize frame for BALANCED performance and accuracy
     cv::Mat resizedFrame;
-    double scale = 0.5; // Process at half resolution for speed
+    double scale = 0.6; // Reduced from 0.9 to 0.6 for better performance
     cv::resize(frame, resizedFrame, cv::Size(), scale, scale);
     
-    // Detect people with HOG
+    // Apply histogram equalization for better contrast
+    cv::Mat grayFrame;
+    cv::cvtColor(resizedFrame, grayFrame, cv::COLOR_BGR2GRAY);
+    cv::equalizeHist(grayFrame, grayFrame);
+    
+    // Detect people with HOG - BALANCED parameters for performance
     std::vector<cv::Rect> foundLocations;
     std::vector<double> weights;
-    hog.detectMultiScale(resizedFrame, foundLocations, weights, 0, cv::Size(8, 8), cv::Size(8, 8), 1.1, 1, false);
+    hog.detectMultiScale(grayFrame, foundLocations, weights, -0.1, cv::Size(4, 4), cv::Size(4, 4), 1.05, 2, false);
     
     // Debug output
     if (!foundLocations.empty()) {
@@ -137,16 +145,16 @@ cv::Mat TFLiteDeepLabv3::performOpenCVSegmentation(const cv::Mat &inputFrame)
             double confidence = weights[i];
             cv::Rect detection = foundLocations[i];
             
-            // Check if this detection is reasonable
-            if (confidence > 0.2 && detection.width > 20 && detection.height > 40) {
-                if (confidence > bestConfidence) {
-                    bestConfidence = confidence;
-                    bestIndex = i;
-                }
+                    // Check if this detection is reasonable - BALANCED for performance
+        if (confidence > 0.1 && detection.width > 15 && detection.height > 30) {
+            if (confidence > bestConfidence) {
+                bestConfidence = confidence;
+                bestIndex = i;
             }
         }
+        }
         
-        if (bestConfidence > 0.2) {
+        if (bestConfidence > 0.1) {
             currentDetection = foundLocations[bestIndex];
             detectionSuccess = true;
             
@@ -161,7 +169,7 @@ cv::Mat TFLiteDeepLabv3::performOpenCVSegmentation(const cv::Mat &inputFrame)
     }
     
     // If no HOG detection, try to use last known position
-    if (!detectionSuccess && hasValidTracking && trackingFrames < 10) {
+    if (!detectionSuccess && hasValidTracking && trackingFrames < 15) {
         currentDetection = lastDetection;
         detectionSuccess = true;
         trackingFrames++;
@@ -432,19 +440,19 @@ void TFLiteDeepLabv3::setPerformanceMode(PerformanceMode mode)
             m_processingInterval = 50; // 20 FPS
             m_confidenceThreshold = 0.7f;
             break;
-        case Balanced:
-            m_processingInterval = 33; // 30 FPS
-            m_confidenceThreshold = 0.5f;
-            break;
+                 case Balanced:
+             m_processingInterval = 16; // 60 FPS
+             m_confidenceThreshold = 0.5f;
+             break;
         case HighSpeed:
             m_processingInterval = 16; // 60 FPS
             m_confidenceThreshold = 0.3f;
             break;
-        case Adaptive:
-            // Will be adjusted dynamically based on performance
-            m_processingInterval = 33;
-            m_confidenceThreshold = 0.5f;
-            break;
+                 case Adaptive:
+             // Will be adjusted dynamically based on performance
+             m_processingInterval = 16;
+             m_confidenceThreshold = 0.5f;
+             break;
     }
     
     // Update timer interval if active
@@ -468,7 +476,7 @@ void TFLiteDeepLabv3::processFrame(const cv::Mat &frame)
     QMutexLocker locker(&m_frameMutex);
     
     // Keep only the latest frame to avoid queue buildup
-    m_frameQueue.clear();
+        m_frameQueue.clear();
     m_frameQueue.enqueue(frame.clone());
     
     m_frameCondition.wakeOne();

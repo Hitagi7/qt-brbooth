@@ -17,6 +17,8 @@
 #include "common_types.h"
 #include "tflite_deeplabv3.h"
 #include "tflite_segmentation_widget.h"
+#include "advanced_hand_detector.h"
+#include "mediapipe_like_hand_tracker.h"
 
 // Qt includes for threading and processing
 #include <QProcess>
@@ -28,7 +30,11 @@
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QMutex>
+#include <QThread>
 #include <QMessageBox>
+#include <QFuture>
+#include <QFutureWatcher>
+#include <QtConcurrent>
 
 QT_BEGIN_NAMESPACE
 namespace Ui { class Capture; }
@@ -69,6 +75,16 @@ public:
     void toggleSegmentation();
     void updateSegmentationButton();
     cv::Mat qImageToCvMat(const QImage &image);
+    
+    // Hand Detection Control Methods
+    void setShowHandDetection(bool show);
+    bool getShowHandDetection() const;
+    void setHandDetectionConfidenceThreshold(double threshold);
+    double getHandDetectionConfidenceThreshold() const;
+    QList<AdvancedHandDetection> getLastHandDetections() const;
+    void toggleHandDetection();
+    void updateHandDetectionButton();
+    double getHandDetectionProcessingTime() const;
 
 protected:
     void resizeEvent(QResizeEvent *event) override;
@@ -82,6 +98,7 @@ private slots:
     void on_back_clicked();
     void on_capture_clicked();
     void updateCountdown();
+    void startCountdown();
     void updateRecordTimer();
     void on_verticalSlider_valueChanged(int value);
     void updateForegroundOverlay(const QString &path);
@@ -91,6 +108,10 @@ private slots:
     void onSegmentationError(const QString &error);
     void onTFLiteModelLoaded(bool success);
     void updateDebugDisplay();
+    void onSegmentationFinished();
+    
+    // Hand Detection Slots
+    void onHandDetectionFinished();
 
 private:
     Ui::Capture *ui;
@@ -138,6 +159,7 @@ private:
     double m_lastSegmentationTime;
     int m_segmentationFPS;
     bool m_tfliteModelLoaded;
+    QThread *m_segmentationThread;
 
     // pass foreground
     Foreground *foreground;
@@ -149,17 +171,50 @@ private:
     void updateSegmentationDisplay(const QImage &segmentedImage);
     void showSegmentationNotification();
 
+    // Hand Detection Methods
+    void processFrameWithHandDetection(const cv::Mat &frame);
+    void applyHandDetectionToFrame(cv::Mat &frame);
+    void drawHandBoundingBoxes(cv::Mat &frame, const QList<AdvancedHandDetection> &detections);
+    void initializeHandDetection();
+    void enableHandDetection(bool enable);
+    
+    // Public method to control hand detection
+    void setHandDetectionEnabled(bool enabled);
+    
+    // Hand detection state
+    bool m_handDetectionEnabled;
+
     // Debug Display Members
     QWidget *debugWidget;
     QLabel *debugLabel;
     QLabel *fpsLabel;
     QLabel *segmentationLabel;
     QPushButton *segmentationButton;
+    QLabel *handDetectionLabel;
+    QPushButton *handDetectionButton;
     QTimer *debugUpdateTimer;
     int m_currentFPS;
     
     // Debug Display Methods
     void setupDebugDisplay();
+
+    // Async processing members
+    QFutureWatcher<cv::Mat> *m_segmentationWatcher;
+    QMutex m_asyncMutex;
+    bool m_processingAsync;
+    cv::Mat m_lastProcessedFrame;
+    QPixmap m_cachedPixmap;
+    static cv::Mat processFrameAsync(const cv::Mat &frame, TFLiteDeepLabv3 *segmentation);
+
+    // Hand Detection Members
+    AdvancedHandDetector *m_handDetector;
+    bool m_showHandDetection;
+    QList<AdvancedHandDetection> m_lastHandDetections;
+    mutable QMutex m_handDetectionMutex;
+    QElapsedTimer m_handDetectionTimer;
+    double m_lastHandDetectionTime;
+    int m_handDetectionFPS;
+    HandTrackerMP m_handTracker; // MediaPipe-like motion+ROI tracker
 
 signals:
     void backtoPreviousPage();
