@@ -2,7 +2,6 @@
     <qresource prefix="/images">
         <file>pics/usc_logo.png</file>
         <file>pics/ballerina.png</file>
-        <file>pics/mickey.png</file>
         <file>pics/1.png</file>
         <file>pics/2.png</file>
         <file>pics/3.png</file>
@@ -15,12 +14,6 @@
         <file>pics/bg3.png</file>
         <file>pics/bg4.png</file>
         <file>pics/bg5.png</file>
-        <file>pics/capture.png</file>
-        <file>pics/dynamic1.png</file>
-        <file>pics/dynamic2.png</file>
-        <file>pics/dynamic3.png</file>
-        <file>pics/dynamic4.png</file>
-        <file>pics/dynamic5.png</file>
         <file>pics/bg6.png</file>
         <file>pics/staticlandingbg.png</file>
     </qresource>
@@ -61,5 +54,11 @@
         <file>gif templates/dynamicbg4.gif</file>
         <file>gif templates/dynamicbg5.gif</file>
     </qresource>
-    <qresource prefix="/new/prefix1"/>
+    <qresource prefix="/dynamic">
+        <file>templates/dynamic/vidtemplate1.mp4</file>
+        <file>templates/dynamic/vidtemplate2.mp4</file>
+        <file>templates/dynamic/vidtemplate3.mp4</file>
+        <file>templates/dynamic/vidtemplate4.mp4</file>
+        <file>templates/dynamic/vidtemplate5.mp4</file>
+    </qresource>
 </RCC>
