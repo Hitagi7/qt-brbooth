@@ -21,46 +21,61 @@ CONFIG += link_pkgconfig
 # In order to do so, uncomment the following line.
 #DEFINES += QT_DISABLE_DEPRECATED_BEFORE=0x060000    # disables all the APIs deprecated before Qt 6.0.0
 
+# Include paths for the new directory structure
+INCLUDEPATH += include \
+               include/algorithms \
+               include/core \
+               include/ui \
+               ui \
+               .
+
+# Source files organized by category
 SOURCES += \
-    background.cpp \
-    camera.cpp \
-    capture.cpp \
-    dynamic.cpp \
-    final.cpp \
-    foreground.cpp \
-    advanced_hand_detector.cpp \
-    iconhover.cpp \
-    main.cpp \
-    brbooth.cpp \
-    simplepersondetector.cpp \
-    tflite_deeplabv3.cpp \
-    tflite_segmentation_widget.cpp \
-    mediapipe_like_hand_tracker.cpp
+    src/main.cpp \
+    src/core/brbooth.cpp \
+    src/core/camera.cpp \
+    src/core/capture.cpp \
+    src/ui/background.cpp \
+    src/ui/foreground.cpp \
+    src/ui/dynamic.cpp \
+    src/ui/final.cpp \
+    src/ui/iconhover.cpp \
+    src/ui/ui_manager.cpp \
+    src/algorithms/segmentation/tflite_deeplabv3.cpp \
+    src/algorithms/segmentation/tflite_segmentation_widget.cpp \
+    src/algorithms/hand_detection/advanced_hand_detector.cpp \
+    src/algorithms/hand_detection/mediapipe_like_hand_tracker.cpp \
+    src/algorithms/person_detection/simplepersondetector.cpp \
+    src/algorithms/person_detection/personsegmentation.cpp \
+    src/algorithms/person_detection/segmentation_manager.cpp
 
 HEADERS += \
-    background.h \
-    brbooth.h \
-    camera.h \
-    capture.h \
-    dynamic.h \
-    final.h \
-    foreground.h \
-    advanced_hand_detector.h \
-    iconhover.h \
-    videotemplate.h \
-    simplepersondetector.h \
-    common_types.h \
-    tflite_deeplabv3.h \
-    tflite_segmentation_widget.h \
-    mediapipe_like_hand_tracker.h
+    include/core/brbooth.h \
+    include/core/camera.h \
+    include/core/capture.h \
+    include/core/videotemplate.h \
+    include/core/common_types.h \
+    include/ui/background.h \
+    include/ui/foreground.h \
+    include/ui/dynamic.h \
+    include/ui/final.h \
+    include/ui/iconhover.h \
+    include/ui/ui_manager.h \
+    include/algorithms/tflite_deeplabv3.h \
+    include/algorithms/tflite_segmentation_widget.h \
+    include/algorithms/advanced_hand_detector.h \
+    include/algorithms/mediapipe_like_hand_tracker.h \
+    include/algorithms/simplepersondetector.h \
+    include/algorithms/personsegmentation.h \
+    include/algorithms/segmentation_manager.h
 
 FORMS += \
-    background.ui \
-    brbooth.ui \
-    capture.ui \
-    dynamic.ui \
-    final.ui \
-    foreground.ui
+    ui/background.ui \
+    ui/brbooth.ui \
+    ui/capture.ui \
+    ui/dynamic.ui \
+    ui/final.ui \
+    ui/foreground.ui
 
 # Default rules for deployment.
 qnx: target.path = /tmp/$${TARGET}/bin
