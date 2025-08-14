@@ -396,6 +396,7 @@ height: 101px;
           </property>
          </widget>
         </item>
+
         <item>
          <spacer name="horizontalSpacer_3">
           <property name="orientation">

@@ -1,0 +1,157 @@
+cmake_minimum_required(VERSION 3.16)
+project(qt-brbooth-tflite)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Find Qt6
+find_package(Qt6 REQUIRED COMPONENTS Core Widgets Multimedia MultimediaWidgets)
+
+# Find OpenCV
+find_package(OpenCV REQUIRED)
+
+# Find TensorFlow Lite
+# You may need to adjust these paths based on your installation
+set(TFLITE_DIR "C:/tensorflow_lite")
+set(TFLITE_INCLUDE_DIR "${TFLITE_DIR}/include")
+set(TFLITE_LIB_DIR "${TFLITE_DIR}/lib")
+
+# Check if TensorFlow Lite is found
+if(NOT EXISTS ${TFLITE_INCLUDE_DIR})
+    message(FATAL_ERROR "TensorFlow Lite include directory not found at ${TFLITE_INCLUDE_DIR}")
+endif()
+
+# Include directories
+include_directories(${OpenCV_INCLUDE_DIRS} ${TFLITE_INCLUDE_DIR})
+
+# Source files
+set(SOURCES
+    main.cpp
+    brbooth.cpp
+    background.cpp
+    capture.cpp
+    dynamic.cpp
+    final.cpp
+    foreground.cpp
+    iconhover.cpp
+    simplepersondetector.cpp
+    personsegmentation.cpp
+    optimized_detector.cpp
+    fast_segmentation.cpp
+    segmentation_manager.cpp
+    detection_manager.cpp
+    tflite_deeplabv3.cpp
+    tflite_segmentation_widget.cpp
+)
+
+# Header files
+set(HEADERS
+    brbooth.h
+    background.h
+    capture.h
+    dynamic.h
+    final.h
+    foreground.h
+    iconhover.h
+    videotemplate.h
+    simplepersondetector.h
+    personsegmentation.h
+    optimized_detector.h
+    fast_segmentation.h
+    segmentation_manager.h
+    detection_manager.h
+    common_types.h
+    tflite_deeplabv3.h
+    tflite_segmentation_widget.h
+)
+
+# UI files
+set(UI_FILES
+    brbooth.ui
+    background.ui
+    capture.ui
+    dynamic.ui
+    final.ui
+    foreground.ui
+)
+
+# Resource files
+set(RESOURCE_FILES
+    resources.qrc
+)
+
+# Create executable
+add_executable(${PROJECT_NAME} ${SOURCES} ${HEADERS} ${UI_FILES} ${RESOURCE_FILES})
+
+# Link libraries
+target_link_libraries(${PROJECT_NAME}
+    Qt6::Core
+    Qt6::Widgets
+    Qt6::Multimedia
+    Qt6::MultimediaWidgets
+    ${OpenCV_LIBS}
+)
+
+# Link TensorFlow Lite libraries
+if(WIN32)
+    target_link_libraries(${PROJECT_NAME}
+        ${TFLITE_LIB_DIR}/tensorflowlite.lib
+        ${TFLITE_LIB_DIR}/tensorflowlite_gpu_delegate.lib
+        ${TFLITE_LIB_DIR}/tensorflowlite_hexagon_delegate.lib
+    )
+else()
+    target_link_libraries(${PROJECT_NAME}
+        ${TFLITE_LIB_DIR}/libtensorflowlite.a
+        ${TFLITE_LIB_DIR}/libtensorflowlite_gpu_delegate.a
+        ${TFLITE_LIB_DIR}/libtensorflowlite_hexagon_delegate.a
+    )
+endif()
+
+# Compiler-specific flags
+if(MSVC)
+    target_compile_options(${PROJECT_NAME} PRIVATE /openmp)
+else()
+    target_compile_options(${PROJECT_NAME} PRIVATE -fopenmp)
+    target_link_libraries(${PROJECT_NAME} gomp)
+endif()
+
+# Set output directory
+set_target_properties(${PROJECT_NAME} PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+)
+
+# Copy TensorFlow Lite libraries to output directory (Windows)
+if(WIN32)
+    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${TFLITE_LIB_DIR}/tensorflowlite.dll
+        ${CMAKE_BINARY_DIR}/bin/
+    )
+    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${TFLITE_LIB_DIR}/tensorflowlite_gpu_delegate.dll
+        ${CMAKE_BINARY_DIR}/bin/
+    )
+endif()
+
+# Install target
+install(TARGETS ${PROJECT_NAME}
+    RUNTIME DESTINATION bin
+)
+
+# Install TensorFlow Lite libraries
+if(WIN32)
+    install(FILES
+        ${TFLITE_LIB_DIR}/tensorflowlite.dll
+        ${TFLITE_LIB_DIR}/tensorflowlite_gpu_delegate.dll
+        DESTINATION bin
+    )
+endif()
+
+# Print configuration summary
+message(STATUS "Configuration Summary:")
+message(STATUS "  Project: ${PROJECT_NAME}")
+message(STATUS "  C++ Standard: ${CMAKE_CXX_STANDARD}")
+message(STATUS "  OpenCV: ${OpenCV_VERSION}")
+message(STATUS "  TensorFlow Lite: ${TFLITE_DIR}")
+message(STATUS "  Build Type: ${CMAKE_BUILD_TYPE}") 

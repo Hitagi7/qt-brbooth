@@ -4,6 +4,8 @@
 #include <QList>
 #include <QString>
 #include <opencv2/opencv.hpp>
+#include <opencv2/objdetect.hpp>
+#include <QMutex>
 
 struct SimpleDetection {
     cv::Rect boundingBox;
@@ -22,8 +24,7 @@ struct SimpleDetection {
     }
 };
 
-class SimplePersonDetector
-{
+class SimplePersonDetector {
 public:
     SimplePersonDetector();
     ~SimplePersonDetector();

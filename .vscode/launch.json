@@ -8,8 +8,13 @@
       "args": [],
       "stopAtEntry": false,
       "externalConsole": true,
+<<<<<<< HEAD
       "cwd": "c:/Users/ninki/Documents/qt-brbooth",
       "program": "c:/Users/ninki/Documents/qt-brbooth/build/Debug/outDebug",
+=======
+      "cwd": "c:/Thesis/repos/qt-brbooth",
+      "program": "c:/Thesis/repos/qt-brbooth/build/Debug/outDebug",
+>>>>>>> tf-lite
       "MIMode": "gdb",
       "miDebuggerPath": "gdb",
       "setupCommands": [

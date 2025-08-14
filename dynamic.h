@@ -9,14 +9,16 @@
 #include <QMovie>
 #include <QPushButton> // Required for QPushButton* member
 #include <QTimer> // Required for QTimer* member
+#include <QTabWidget>
+#include <QVBoxLayout>
 
 // Forward declaration for Ui::Dynamic
 namespace Ui {
 class Dynamic;
 }
 
-class Iconhover; // Forward declaration if you use Iconhover in the .h (e.g., as a member)
-// If only used in .cpp, it's fine to just include there.
+// Forward declaration of Iconhover if it's used
+class Iconhover;
 
 class Dynamic : public QWidget
 {
