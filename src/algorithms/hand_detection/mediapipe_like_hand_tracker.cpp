@@ -1,218 +1,192 @@
 #include "algorithms/mediapipe_like_hand_tracker.h"
+#include <QDebug>
+#include <cmath>
 
-using std::vector;
-
-namespace {
-static inline cv::Rect clampRect(const cv::Rect& r, int w, int h) {
-	int x = std::max(0, r.x);
-	int y = std::max(0, r.y);
-	int rw = std::min(r.width, w - x);
-	int rh = std::min(r.height, h - y);
-	return cv::Rect(x, y, std::max(0, rw), std::max(0, rh));
-}
-}
-
-HandTrackerMP::HandTrackerMP()
-	: m_wasOpen(false)
-	, m_wasClosed(false)
-	, m_stableFrames(0)
-	, m_triggered(false)
-	, m_hasLock(false)
-	, m_bgInit(false)
-	, m_frameWidth(0)
-	, m_frameHeight(0)
-	, m_frameCount(0)
-    , m_motionThreshold(14)
-    , m_minMotionArea(250)
-    , m_redetectInterval(1)
-	, m_minRoiSize(48)
-	, m_maxRoiSize(360)
-    , m_requiredStableFrames(1) {
-	m_timer.start();
+HandTrackerMP::HandTrackerMP(QObject *parent)
+    : QObject(parent)
+    , m_initialized(false)
+    , m_width(640)
+    , m_height(480)
+    , m_triggerThreshold(30)
+    , m_stableFrameCount(0)
+    , m_triggerReady(false)
+{
 }
 
-void HandTrackerMP::reset() {
-	m_wasOpen = false;
-	m_wasClosed = false;
-	m_stableFrames = 0;
-	m_triggered = false;
-	m_hasLock = false;
-	m_prevPts.clear();
-    m_prevGray.release();
-    m_bgFloat.release();
-	m_bgInit = false;
-	m_roi = cv::Rect();
+HandTrackerMP::~HandTrackerMP()
+{
 }
 
-void HandTrackerMP::initialize(int frameWidth, int frameHeight) {
-	m_frameWidth = frameWidth;
-	m_frameHeight = frameHeight;
-	reset();
+bool HandTrackerMP::initialize(int width, int height)
+{
+    m_width = width;
+    m_height = height;
+    m_initialized = true;
+    reset();
+    
+    qDebug() << "HandTrackerMP initialized with size:" << width << "x" << height;
+    return true;
 }
 
-bool HandTrackerMP::detectMotion(const cv::Mat& gray, cv::Mat& motionMask) {
-    // Downscale for faster motion estimation
-    cv::Mat small;
-    const int targetW = std::max(160, gray.cols / 2);
-    const int targetH = std::max(120, gray.rows / 2);
-    cv::resize(gray, small, cv::Size(targetW, targetH), 0, 0, cv::INTER_AREA);
-
-    if (!m_bgInit) {
-        small.convertTo(m_bgFloat, CV_32F);
-        m_bgInit = true;
-        return false;
+void HandTrackerMP::update(const cv::Mat &frame)
+{
+    if (!m_initialized || frame.empty()) {
+        return;
     }
-    cv::Mat bg8;
-    m_bgFloat.convertTo(bg8, CV_8U);
-    cv::Mat diffSmall;
-    cv::absdiff(small, bg8, diffSmall);
-    cv::Mat maskSmall;
-    cv::threshold(diffSmall, maskSmall, m_motionThreshold, 255, cv::THRESH_BINARY);
-    cv::morphologyEx(maskSmall, maskSmall, cv::MORPH_OPEN,
-        cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3,3)));
-    // Upscale mask to original size
-    cv::resize(maskSmall, motionMask, gray.size(), 0, 0, cv::INTER_NEAREST);
-    int area = cv::countNonZero(maskSmall);
-    // Slowly update background (EMA) in small scale
-    cv::Mat smallF; small.convertTo(smallF, CV_32F);
-    cv::accumulateWeighted(smallF, m_bgFloat, 0.02);
-    return area > m_minMotionArea;
-}
 
-bool HandTrackerMP::acquireRoiFromMotion(const cv::Mat& gray, const cv::Mat& motionMask) {
-	vector<vector<cv::Point>> contours;
-	cv::findContours(motionMask, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
-	int bestIdx = -1; double bestArea = 0;
-	for (int i = 0; i < (int)contours.size(); ++i) {
-		double a = cv::contourArea(contours[i]);
-		if (a > bestArea) { bestArea = a; bestIdx = i; }
-	}
-	if (bestIdx < 0) return false;
-	cv::Rect r = cv::boundingRect(contours[bestIdx]);
-	r = clampRect(r, gray.cols, gray.rows);
-	if (r.width < m_minRoiSize || r.height < m_minRoiSize) return false;
-	if (r.width > m_maxRoiSize || r.height > m_maxRoiSize) return false;
-	m_roi = r;
-	m_hasLock = true;
-	// initialize track points inside ROI
-	vector<cv::Point2f> pts;
-	cv::goodFeaturesToTrack(gray(m_roi), pts, 60, 0.01, 3);
-	for (auto& p : pts) p += cv::Point2f((float)m_roi.x, (float)m_roi.y);
-	m_prevPts = std::move(pts);
-	return !m_prevPts.empty();
-}
-
-void HandTrackerMP::trackRoiLK(const cv::Mat& grayPrev, const cv::Mat& grayCurr) {
-	if (m_prevPts.empty()) { m_hasLock = false; return; }
-	vector<cv::Point2f> nextPts; vector<unsigned char> status; vector<float> err;
-	cv::calcOpticalFlowPyrLK(grayPrev, grayCurr, m_prevPts, nextPts, status, err,
-		cv::Size(15,15), 2);
-	vector<cv::Point2f> kept; kept.reserve(nextPts.size());
-	for (size_t i = 0; i < nextPts.size(); ++i) if (status[i]) kept.push_back(nextPts[i]);
-	if (kept.size() < 8) { m_hasLock = false; return; }
-	// Fit new ROI to tracked points
-	cv::Rect r = cv::boundingRect(kept);
-	r = clampRect(r, grayCurr.cols, grayCurr.rows);
-	// EMA smoothing
-	if (m_roi.area() > 0) {
-		r.x = (int)(0.7 * m_roi.x + 0.3 * r.x);
-		r.y = (int)(0.7 * m_roi.y + 0.3 * r.y);
-		r.width = (int)(0.7 * m_roi.width + 0.3 * r.width);
-		r.height = (int)(0.7 * m_roi.height + 0.3 * r.height);
-	}
-	m_roi = r;
-	m_prevPts = std::move(kept);
-}
-
-bool HandTrackerMP::analyzeGestureClosed(const cv::Mat& gray, const cv::Rect& roi) const {
-    cv::Rect r = clampRect(roi, gray.cols, gray.rows);
-    if (r.area() <= 0) return false;
-    cv::Mat patch = gray(r);
-    // Light denoise for robust contours
-    cv::GaussianBlur(patch, patch, cv::Size(3,3), 0);
-    // Binary inverse: hand darker becomes white
-    cv::Mat bin; cv::threshold(patch, bin, 0, 255, cv::THRESH_BINARY_INV|cv::THRESH_OTSU);
-    vector<vector<cv::Point>> cs; cv::findContours(bin, cs, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
-    if (cs.empty()) return false;
-    int k = -1; double best = 0; for (int i=0;i<(int)cs.size();++i){ double a=cv::contourArea(cs[i]); if (a>best){best=a;k=i;} }
-    if (k<0) return false;
-    vector<int> hullIdx; cv::convexHull(cs[k], hullIdx);
-    vector<cv::Point> hull; hull.reserve(hullIdx.size()); for (int idx: hullIdx) hull.push_back(cs[k][idx]);
-    vector<cv::Vec4i> defects; if (hullIdx.size() >= 3) cv::convexityDefects(cs[k], hullIdx, defects);
-    int significantDef = 0; for (auto &d : defects) { if (d[3] / 256.0 > 10) significantDef++; }
-    double area = cv::contourArea(cs[k]); double harea = std::max(1.0, cv::contourArea(hull));
-    double ratio = area / harea; // closed -> ratio high (compact)
-    // More permissive: allow side-on fists; also use few defects as closed cue
-    return (ratio > 0.62) || (significantDef <= 1 && ratio > 0.52);
-}
-
-bool HandTrackerMP::analyzeGestureOpen(const cv::Mat& gray, const cv::Rect& roi) const {
-    cv::Rect r = clampRect(roi, gray.cols, gray.rows);
-    if (r.area() <= 0) return false;
-    cv::Mat patch = gray(r);
-    cv::GaussianBlur(patch, patch, cv::Size(3,3), 0);
-    cv::Mat bin; cv::threshold(patch, bin, 0, 255, cv::THRESH_BINARY_INV|cv::THRESH_OTSU);
-    vector<vector<cv::Point>> cs; cv::findContours(bin, cs, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
-    if (cs.empty()) return false;
-    int k = -1; double best = 0; for (int i=0;i<(int)cs.size();++i){ double a=cv::contourArea(cs[i]); if (a>best){best=a;k=i;} }
-    if (k<0) return false;
-    vector<int> hullIdx; cv::convexHull(cs[k], hullIdx);
-    vector<cv::Point> hull; hull.reserve(hullIdx.size()); for (int idx: hullIdx) hull.push_back(cs[k][idx]);
-    vector<cv::Vec4i> defects; if (hullIdx.size() >= 3) cv::convexityDefects(cs[k], hullIdx, defects);
-    int significantDef = 0; for (auto &d : defects) { if (d[3] / 256.0 > 10) significantDef++; }
-    double area = cv::contourArea(cs[k]); double harea = std::max(1.0, cv::contourArea(hull));
-    double ratio = area / harea; // open -> ratio lower (fingers spread)
-    return (ratio < 0.68) || (significantDef >= 2);
-}
-
-void HandTrackerMP::update(const cv::Mat& frameBgr) {
-	m_frameCount++;
-	if (frameBgr.empty()) return;
-	cv::Mat gray; cv::cvtColor(frameBgr, gray, cv::COLOR_BGR2GRAY);
-
-	// Try to keep/refresh lock
-	if (!m_hasLock) {
-		cv::Mat motionMask;
-        bool hasMotion = detectMotion(gray, motionMask);
-		if (hasMotion && (m_frameCount % m_redetectInterval == 0)) {
-			m_hasLock = acquireRoiFromMotion(gray, motionMask);
-		}
-	} else {
-        if (!m_prevGray.empty()) trackRoiLK(m_prevGray, gray);
-		// refresh features if needed
-		if (m_prevPts.size() < 12) {
-			vector<cv::Point2f> pts; cv::goodFeaturesToTrack(gray(m_roi), pts, 60, 0.01, 3);
-			for (auto& p : pts) p += cv::Point2f((float)m_roi.x, (float)m_roi.y);
-			m_prevPts = std::move(pts);
-		}
-	}
-
-    // Gesture logic only when we have a stable ROI
-    if (m_hasLock) {
-        bool isOpen = analyzeGestureOpen(gray, m_roi);
-        bool isClosed = analyzeGestureClosed(gray, m_roi);
-        if (isOpen) {
-            m_wasOpen = true; m_wasClosed = false; m_stableFrames = 0; m_triggered = false;
-        } else if (isClosed) {
-            // Trigger if we previously saw OPEN, or if closed is stable by itself
-            m_stableFrames++;
-            if ((m_wasOpen && m_stableFrames >= m_requiredStableFrames) || m_stableFrames >= 2) {
-                m_wasClosed = true; m_triggered = true; m_wasOpen = false; m_stableFrames = 0;
-            }
-        } else {
-            m_stableFrames = 0;
+    // Detect hand position
+    cv::Point currentPos = detectHandPosition(frame);
+    
+    // Check if hand is stable
+    if (isHandStable(currentPos)) {
+        m_stableFrameCount++;
+        if (m_stableFrameCount >= m_triggerThreshold) {
+            m_triggerReady = true;
+        }
+    } else {
+        m_stableFrameCount = 0;
+        m_triggerReady = false;
+    }
+    
+    // Store position history
+    m_previousHandPositions.push_back(currentPos);
+    if (m_previousHandPositions.size() > 10) {
+        m_previousHandPositions.erase(m_previousHandPositions.begin());
+    }
+    
+    // Classify gesture if we have enough history
+    if (m_previousHandPositions.size() >= 5) {
+        QString gesture = classifyGesture(m_previousHandPositions);
+        if (!gesture.isEmpty()) {
+            emit handGestureDetected(gesture);
         }
     }
-
-	m_prevGray = gray.clone();
 }
 
-bool HandTrackerMP::shouldTriggerCapture() {
-	if (m_triggered) {
-		m_triggered = false; // one-shot
+bool HandTrackerMP::shouldTriggerCapture() const
+{
+    return m_triggerReady;
+}
+
+void HandTrackerMP::setTriggerThreshold(int threshold)
+{
+    m_triggerThreshold = qBound(10, threshold, 100);
+}
+
+int HandTrackerMP::getTriggerThreshold() const
+{
+    return m_triggerThreshold;
+}
+
+void HandTrackerMP::reset()
+{
+    m_previousHandPositions.clear();
+    m_stableFrameCount = 0;
+    m_triggerReady = false;
+}
+
+cv::Point HandTrackerMP::detectHandPosition(const cv::Mat &frame)
+{
+    // Simple hand detection using skin color
+    cv::Mat hsv;
+    cv::cvtColor(frame, hsv, cv::COLOR_BGR2HSV);
+    
+    // Define skin color range
+    cv::Scalar lowerSkin(0, 20, 70);
+    cv::Scalar upperSkin(20, 255, 255);
+    
+    cv::Mat skinMask;
+    cv::inRange(hsv, lowerSkin, upperSkin, skinMask);
+    
+    // Apply morphological operations
+    cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
+    cv::morphologyEx(skinMask, skinMask, cv::MORPH_OPEN, kernel);
+    cv::morphologyEx(skinMask, skinMask, cv::MORPH_CLOSE, kernel);
+    
+    // Find contours
+    std::vector<std::vector<cv::Point>> contours;
+    cv::findContours(skinMask, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+    
+    if (contours.empty()) {
+        return cv::Point(-1, -1); // No hand detected
+    }
+    
+    // Find the largest contour (likely the hand)
+    int maxArea = 0;
+    int maxIdx = -1;
+    
+    for (int i = 0; i < contours.size(); i++) {
+        double area = cv::contourArea(contours[i]);
+        if (area > maxArea && area > 1000) { // Minimum area threshold
+            maxArea = area;
+            maxIdx = i;
+        }
+    }
+    
+    if (maxIdx == -1) {
+        return cv::Point(-1, -1);
+    }
+    
+    // Calculate centroid of the hand
+    cv::Moments moments = cv::moments(contours[maxIdx]);
+    if (moments.m00 != 0) {
+        int centerX = static_cast<int>(moments.m10 / moments.m00);
+        int centerY = static_cast<int>(moments.m01 / moments.m00);
+        return cv::Point(centerX, centerY);
+    }
+    
+    return cv::Point(-1, -1);
+}
+
+bool HandTrackerMP::isHandStable(const cv::Point &currentPos)
+{
+    if (currentPos.x == -1 || currentPos.y == -1) {
+        return false; // No hand detected
+    }
+    
+    if (m_previousHandPositions.empty()) {
 		return true;
 	}
-	return false;
+    
+    // Check if current position is close to the last position
+    cv::Point lastPos = m_previousHandPositions.back();
+    double distance = std::sqrt(std::pow(currentPos.x - lastPos.x, 2) + 
+                               std::pow(currentPos.y - lastPos.y, 2));
+    
+    // Consider stable if movement is less than 20 pixels
+    return distance < 20;
 }
 
-
+QString HandTrackerMP::classifyGesture(const std::vector<cv::Point> &positions)
+{
+    if (positions.size() < 5) {
+        return QString();
+    }
+    
+    // Simple gesture classification based on movement pattern
+    cv::Point first = positions.front();
+    cv::Point last = positions.back();
+    
+    double distance = std::sqrt(std::pow(last.x - first.x, 2) + 
+                               std::pow(last.y - first.y, 2));
+    
+    // Calculate movement direction
+    double dx = last.x - first.x;
+    double dy = last.y - first.y;
+    
+    if (distance < 30) {
+        return "stable"; // Hand is stable
+    } else if (std::abs(dx) > std::abs(dy)) {
+        if (dx > 0) {
+            return "right"; // Moving right
+        } else {
+            return "left"; // Moving left
+        }
+    } else {
+        if (dy > 0) {
+            return "down"; // Moving down
+        } else {
+            return "up"; // Moving up
+        }
+    }
+}

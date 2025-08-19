@@ -1,6 +1,5 @@
 #include "core/camera.h"
 #include <QBuffer>
-#include <chrono>
 
 QImage cvMatToQImage(const cv::Mat &mat)
 {

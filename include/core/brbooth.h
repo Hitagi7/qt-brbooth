@@ -25,6 +25,9 @@ class BRBooth : public QMainWindow
 public:
     BRBooth(QWidget *parent = nullptr);
     ~BRBooth();
+    
+    // CUDA test function
+    void testCudaFunctionality();
 
 protected:
     void resizeEvent(QResizeEvent *event) override;

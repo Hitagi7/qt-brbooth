@@ -10,10 +10,15 @@
 #include <QThread>
 #include <QDebug>
 #include <opencv2/opencv.hpp> // Using CV_VERSION for debug
+#include <opencv2/cudaimgproc.hpp> // For CUDA image processing functions
+#include <opencv2/cudafilters.hpp> // For CUDA filter functions
+#include <opencv2/cudawarping.hpp> // For CUDA resize and other warping functions
 #include <QMessageBox>
 #include <QTimer>
+#include <QStyle>
+#include <QShortcut>
 #include "core/videotemplate.h"
-#include <opencv2/opencv.hpp> // Keep if CV_VERSION is directly used or other OpenCV types/functions are used
+#include <chrono>
 
 BRBooth::BRBooth(QWidget *parent)
     : QMainWindow(parent)
@@ -24,6 +29,18 @@ BRBooth::BRBooth(QWidget *parent)
           0) // Initialize lastVisitedPageIndex (will be overwritten by initial showLandingPage)
 {
     qDebug() << "OpenCV Version: " << CV_VERSION;
+    
+    // Check CUDA availability at startup
+    int cudaDevices = cv::cuda::getCudaEnabledDeviceCount();
+    if (cudaDevices > 0) {
+        qDebug() << "🎮 CUDA GPU Acceleration: ENABLED (" << cudaDevices << " device(s) found)";
+        cv::cuda::setDevice(0);
+        cv::cuda::DeviceInfo deviceInfo(0);
+        qDebug() << "   GPU: " << deviceInfo.name();
+        qDebug() << "   Memory: " << deviceInfo.totalMemory() / (1024*1024) << " MB";
+    } else {
+        qDebug() << "⚠️  CUDA GPU Acceleration: DISABLED (no CUDA devices found)";
+    }
     ui->setupUi(this);
     setCentralWidget(ui->stackedWidget); // Set the stacked widget as the central widget
 
@@ -136,6 +153,10 @@ BRBooth::BRBooth(QWidget *parent)
     // Connect signals for page navigation and actions
     connect(foregroundPage, &Foreground::backtoLandingPage, this, &BRBooth::showLandingPage);
     connect(foregroundPage, &Foreground::imageSelectedTwice, this, &BRBooth::showBackgroundPage);
+    
+    // Add keyboard shortcut for CUDA testing (Ctrl+T)
+    QShortcut *cudaTestShortcut = new QShortcut(QKeySequence("Ctrl+T"), this);
+    connect(cudaTestShortcut, &QShortcut::activated, this, &BRBooth::testCudaFunctionality);
 
     if (dynamicPage) {
         connect(dynamicPage, &Dynamic::backtoLandingPage, this, &BRBooth::showLandingPage);
@@ -293,4 +314,70 @@ void BRBooth::on_staticButton_clicked()
 void BRBooth::on_dynamicButton_clicked()
 {
     showDynamicPage();
+}
+
+void BRBooth::testCudaFunctionality()
+{
+    qDebug() << "=== BRBooth CUDA Test Function ===";
+    
+    try {
+        // Check if CUDA is available
+        int cudaDevices = cv::cuda::getCudaEnabledDeviceCount();
+        if (cudaDevices == 0) {
+            qDebug() << "No CUDA devices found";
+            return;
+        }
+        
+        qDebug() << "CUDA devices found:" << cudaDevices;
+        
+        // Set device
+        cv::cuda::setDevice(0);
+        
+        // Create a test image
+        cv::Mat testImage(480, 640, CV_8UC3, cv::Scalar(100, 150, 200));
+        
+        // Test GPU upload
+        cv::cuda::GpuMat gpuImage;
+        gpuImage.upload(testImage);
+        qDebug() << "✓ GPU upload successful";
+        
+        // Test CUDA image processing operations
+        cv::cuda::GpuMat gpuGray, gpuBlurred, gpuResized;
+        
+        // Color conversion
+        cv::cuda::cvtColor(gpuImage, gpuGray, cv::COLOR_BGR2GRAY);
+        qDebug() << "✓ CUDA color conversion successful";
+        
+        // Gaussian blur
+        cv::Ptr<cv::cuda::Filter> gaussianFilter = cv::cuda::createGaussianFilter(gpuGray.type(), gpuGray.type(), cv::Size(15, 15), 2.0);
+        gaussianFilter->apply(gpuGray, gpuBlurred);
+        qDebug() << "✓ CUDA Gaussian blur successful";
+        
+        // Resize
+        cv::cuda::resize(gpuBlurred, gpuResized, cv::Size(320, 240));
+        qDebug() << "✓ CUDA resize successful";
+        
+        // Download result
+        cv::Mat result;
+        gpuResized.download(result);
+        qDebug() << "✓ GPU download successful";
+        
+        // Test performance
+        auto start = std::chrono::high_resolution_clock::now();
+        for (int i = 0; i < 100; i++) {
+            cv::cuda::cvtColor(gpuImage, gpuGray, cv::COLOR_BGR2GRAY);
+            gaussianFilter->apply(gpuGray, gpuBlurred);
+            cv::cuda::resize(gpuBlurred, gpuResized, cv::Size(320, 240));
+        }
+        auto end = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+        qDebug() << "✓ Performance test: 100 iterations completed in" << duration.count() << "ms";
+        
+        qDebug() << "=== All CUDA tests passed! ===";
+        
+    } catch (const cv::Exception& e) {
+        qDebug() << "✗ CUDA test failed:" << e.what();
+    } catch (const std::exception& e) {
+        qDebug() << "✗ CUDA test failed with exception:" << e.what();
+    }
 }

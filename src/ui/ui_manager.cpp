@@ -2,6 +2,13 @@
 
 #include <QDebug>
 #include <QShortcut>
+#include <QTimer>
+#include <QCheckBox>
+#include <QLabel>
+#include <QPushButton>
+#include <QSlider>
+#include <QWidget>
+#include <QCoreApplication>
 
 UiManager::UiManager(QObject *parent)
     : QObject(parent)
@@ -14,6 +21,7 @@ UiManager::UiManager(QObject *parent)
     , debugUpdateTimer(nullptr)
     , stackedLayout(nullptr)
 {
+    qDebug() << "UiManager constructor called";
 }
 
 UiManager::~UiManager() {}
@@ -140,6 +148,11 @@ void UiManager::createDebugCheckboxes()
         segmentationCheckBox = new QCheckBox(debugWidget);
         connect(segmentationCheckBox, &QCheckBox::toggled, this, &UiManager::onSegmentationCheckBoxToggled);
     }
+}
+
+void UiManager::createKeyboardShortcutsInfo()
+{
+    // No-op stub; real implementation can create keyboard shortcuts info
 }
 
 
