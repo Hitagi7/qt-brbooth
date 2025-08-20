@@ -30,6 +30,7 @@ public:
 
     void resetPage();
     void onDynamicPageShown(); // Slot to call when this page becomes visible
+    void stopAllGifs(); // Public method to stop all GIFs
 
 signals:
     void backtoLandingPage();

@@ -41,13 +41,7 @@ SOURCES += \
     src/ui/final.cpp \
     src/ui/iconhover.cpp \
     src/ui/ui_manager.cpp \
-    src/algorithms/segmentation/tflite_deeplabv3.cpp \
-    src/algorithms/segmentation/tflite_segmentation_widget.cpp \
-    src/algorithms/hand_detection/advanced_hand_detector.cpp \
-    src/algorithms/hand_detection/mediapipe_like_hand_tracker.cpp \
-    src/algorithms/person_detection/simplepersondetector.cpp \
-    src/algorithms/person_detection/personsegmentation.cpp \
-    src/algorithms/person_detection/segmentation_manager.cpp
+    src/algorithms/hand_detection/hand_detector.cpp
 
 HEADERS += \
     include/core/brbooth.h \
@@ -61,13 +55,7 @@ HEADERS += \
     include/ui/final.h \
     include/ui/iconhover.h \
     include/ui/ui_manager.h \
-    include/algorithms/tflite_deeplabv3.h \
-    include/algorithms/tflite_segmentation_widget.h \
-    include/algorithms/advanced_hand_detector.h \
-    include/algorithms/mediapipe_like_hand_tracker.h \
-    include/algorithms/simplepersondetector.h \
-    include/algorithms/personsegmentation.h \
-    include/algorithms/segmentation_manager.h
+    include/algorithms/hand_detection/hand_detector.h
 
 FORMS += \
     ui/background.ui \
@@ -129,8 +117,6 @@ LIBS += -L$$OPENCV_INSTALL_DIR/x64/vc17/lib \
 # INCLUDEPATH += $$TENSORFLOW_DIR/tensorflow/lite/string_util
 # INCLUDEPATH += $$TENSORFLOW_DIR/tensorflow/lite/error_reporter
 
-# Define TFLite availability (using OpenCV fallback)
-DEFINES += TFLITE_AVAILABLE
-DEFINES += TFLITE_DEEPLABV3_ENABLED
+# Define debug flags
 DEFINES += DEBUG_THROTTLE
 

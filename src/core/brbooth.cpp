@@ -12,6 +12,10 @@
 #include <opencv2/opencv.hpp> // Using CV_VERSION for debug
 #include <QMessageBox>
 #include <QTimer>
+#include <QStyle>
+#include <QCoreApplication>
+#include <QDir>
+#include <QFile>
 #include "core/videotemplate.h"
 #include <opencv2/opencv.hpp> // Keep if CV_VERSION is directly used or other OpenCV types/functions are used
 
@@ -52,16 +56,100 @@ BRBooth::BRBooth(QWidget *parent)
         gifLabel->setMouseTracking(false); // Not needed for the GIF label itself
         gifLabel->lower(); // Put it behind the button's text
 
-        // Load and play the GIF from resources (assuming :/gif/test.gif is in your Qt resource file)
-        QMovie* gifMovie = new QMovie(":/gif/gif templates/dynamicbg3.gif", QByteArray(), gifLabel);
-        if (!gifMovie->isValid()) {
-            qWarning() << "Failed to load GIF: :/gif/test.gif" << gifMovie->lastErrorString();
-            delete gifMovie; // Clean up if GIF is invalid
-            gifMovie = nullptr;
+        // Load and play the GIF from file system
+        QString gifPath = "gif templates/dynamicbg3.gif";
+        
+        // Debug: Print current working directory and check if file exists
+        qDebug() << "Current working directory:" << QDir::currentPath();
+        qDebug() << "Application directory:" << QCoreApplication::applicationDirPath();
+        qDebug() << "Looking for GIF at:" << QDir::currentPath() + "/" + gifPath;
+        qDebug() << "File exists:" << QFile::exists(gifPath);
+        
+        // Check if we're in a build directory (debug/release) and try to find project root
+        QString currentDir = QDir::currentPath();
+        QString appDir = QCoreApplication::applicationDirPath();
+        qDebug() << "Current dir contains 'debug' or 'release':" << (currentDir.contains("debug") || currentDir.contains("release"));
+        qDebug() << "App dir contains 'debug' or 'release':" << (appDir.contains("debug") || appDir.contains("release"));
+        
+        // Try alternative paths if the direct path doesn't work
+        QStringList possiblePaths;
+        possiblePaths << gifPath
+                      << QDir::currentPath() + "/" + gifPath
+                      << QCoreApplication::applicationDirPath() + "/" + gifPath
+                      << QCoreApplication::applicationDirPath() + "/../" + gifPath
+                      << QCoreApplication::applicationDirPath() + "/../../" + gifPath
+                      << "../" + gifPath
+                      << "../../" + gifPath
+                      << "../../../" + gifPath;
+        
+        // Add the known working path as a fallback
+        QString knownPath = "C:/Users/dorot/Documents/qt-brbooth/gif templates/dynamicbg3.gif";
+        possiblePaths << knownPath;
+        qDebug() << "Added known working path:" << knownPath;
+        
+        // Try to find project root by looking for qt-brbooth.pro file
+        QString projectRoot;
+        QStringList searchDirs;
+        searchDirs << QDir::currentPath()
+                   << QCoreApplication::applicationDirPath()
+                   << QCoreApplication::applicationDirPath() + "/.."
+                   << QCoreApplication::applicationDirPath() + "/../.."
+                   << "../"
+                   << "../../"
+                   << "../../../";
+        
+        for (const QString& searchDir : searchDirs) {
+            if (QFile::exists(searchDir + "/qt-brbooth.pro")) {
+                projectRoot = searchDir;
+                qDebug() << "Found project root at:" << projectRoot;
+                break;
+            }
+        }
+        
+        if (!projectRoot.isEmpty()) {
+            possiblePaths.prepend(projectRoot + "/" + gifPath);
+            qDebug() << "Added project root path:" << projectRoot + "/" + gifPath;
+        }
+        
+        // Debug: Print all paths we're going to try
+        qDebug() << "All paths to try for GIF:";
+        for (int i = 0; i < possiblePaths.size(); ++i) {
+            qDebug() << "  " << i << ":" << possiblePaths[i] << "(exists:" << QFile::exists(possiblePaths[i]) << ")";
+        }
+        
+        QString validPath;
+        for (const QString& path : possiblePaths) {
+            if (QFile::exists(path)) {
+                validPath = path;
+                qDebug() << "Found GIF at:" << validPath;
+                break;
+            }
+        }
+        
+        if (validPath.isEmpty()) {
+            qWarning() << "GIF file not found in any of the expected locations:";
+            for (const QString& path : possiblePaths) {
+                qWarning() << "  -" << path;
+            }
+            // Create a placeholder colored label instead
+            gifLabel->setStyleSheet("background-color: #FF6B6B; border-radius: 8px;");
+            gifLabel->setText("GIF\nMissing");
+            gifLabel->setAlignment(Qt::AlignCenter);
         } else {
-            gifLabel->setMovie(gifMovie);
-            gifMovie->start();
-            qDebug() << "GIF loaded and started for dynamicButton.";
+            QMovie* gifMovie = new QMovie(validPath, QByteArray(), gifLabel);
+            if (!gifMovie->isValid()) {
+                qWarning() << "Failed to load GIF:" << validPath << gifMovie->lastErrorString();
+                delete gifMovie; // Clean up if GIF is invalid
+                gifMovie = nullptr;
+                // Create a placeholder
+                gifLabel->setStyleSheet("background-color: #FFB74D; border-radius: 8px;");
+                gifLabel->setText("GIF\nError");
+                gifLabel->setAlignment(Qt::AlignCenter);
+            } else {
+                gifLabel->setMovie(gifMovie);
+                // Don't start immediately - will be started when landing page is shown
+                qDebug() << "GIF loaded for dynamicButton from:" << validPath << "(not started yet)";
+            }
         }
 
         // Ensure the button itself can receive hover events
@@ -98,13 +186,15 @@ BRBooth::BRBooth(QWidget *parent)
     connect(this, &BRBooth::startCameraWorker, cameraWorker, &Camera::startCamera);
     connect(this, &BRBooth::stopCameraWorker, cameraWorker, &Camera::stopCamera);
 
-    connect(cameraThread, &QThread::started, this, [this]() {
-        cameraWorker->setDesiredCameraProperties(1280, 720, 60.0);
-        emit startCameraWorker();
-    });
-
+    // Set camera properties but don't start immediately
+    cameraWorker->setDesiredCameraProperties(1280, 720, 60.0);
+    
+    // Start the camera thread but don't start camera capture yet
     cameraThread->start();
-    qDebug() << "BRBooth: Camera thread started.";
+    qDebug() << "BRBooth: Camera thread started (camera not yet active).";
+    
+    // Ensure camera is stopped initially
+    emit stopCameraWorker();
     // =============================================================================
 
     // Get pointers to UI-defined pages (added in Qt Designer's stacked widget)
@@ -132,6 +222,15 @@ BRBooth::BRBooth(QWidget *parent)
 
     // Set initial page
     showLandingPage();
+    
+    // Initialize landing page GIF management
+    m_landingPageGifMovie = nullptr;
+    
+    // Start the landing page GIF since we're on the landing page initially
+    startLandingPageGif();
+    
+    // Install event filter to handle window focus changes
+    installEventFilter(this);
 
     // Connect signals for page navigation and actions
     connect(foregroundPage, &Foreground::backtoLandingPage, this, &BRBooth::showLandingPage);
@@ -193,14 +292,43 @@ BRBooth::BRBooth(QWidget *parent)
     // Resets pages when they are loaded (useful for clearing selections etc.)
     connect(ui->stackedWidget, &QStackedWidget::currentChanged, this, [this](int index) {
         qDebug() << "DEBUG: Stacked widget current index changed to:" << index;
+        
+        // Start camera for background, dynamic, and capture pages (so no "loading camera" delay)
+        if (index == backgroundPageIndex || index == dynamicPageIndex || index == capturePageIndex) {
+            QString pageName = "";
+            if (index == backgroundPageIndex) pageName = "Background";
+            else if (index == dynamicPageIndex) pageName = "Dynamic";
+            else if (index == capturePageIndex) pageName = "Capture";
+            
+            qDebug() << "📹 Starting camera for" << pageName << "page (index:" << index << ")...";
+            emit startCameraWorker();
+        } else {
+            // Stop camera when leaving to other pages
+            qDebug() << "📹 Stopping camera (leaving to page index:" << index << ")...";
+            emit stopCameraWorker();
+        }
+        
+        // Manage GIFs based on page changes
+        if (index == landingPageIndex) {
+            startLandingPageGif();
+        } else {
+            stopLandingPageGif();
+        }
+        
+        if (index == dynamicPageIndex) {
+            dynamicPage->resetPage(); // Dynamic page reset will also hide overlay and restart GIFs
+        } else if (dynamicPage) {
+            dynamicPage->stopAllGifs(); // Stop GIFs when leaving dynamic page
+        }
+        
         if (index == foregroundPageIndex) {
             foregroundPage->resetPage();
         }
         if (index == backgroundPageIndex) {
             backgroundPage->resetPage();
         }
-        if (index == dynamicPageIndex) {
-            dynamicPage->resetPage(); // Dynamic page reset will also hide overlay and restart GIFs
+        if (index == capturePageIndex) {
+            capturePage->enableHandDetectionForCapture(); // Enable hand detection for capture page
         }
     });
 }
@@ -242,6 +370,88 @@ void BRBooth::showLandingPage()
     ui->stackedWidget->setCurrentIndex(landingPageIndex);
 }
 
+void BRBooth::startLandingPageGif()
+{
+    QPushButton* dynamicButton = ui->landingpage->findChild<QPushButton*>("dynamicButton");
+    if (dynamicButton) {
+        QLabel* gifLabel = dynamicButton->findChild<QLabel*>();
+        if (gifLabel) {
+            // Check if there's already a movie set on the label
+            QMovie* existingMovie = gifLabel->movie();
+            if (existingMovie && existingMovie->isValid()) {
+                // Use the existing movie
+                m_landingPageGifMovie = existingMovie;
+                if (m_landingPageGifMovie->state() != QMovie::Running) {
+                    m_landingPageGifMovie->start();
+                    qDebug() << "Landing page GIF started (existing movie)";
+                }
+            } else if (!m_landingPageGifMovie) {
+                // Create new movie if none exists
+                // Find the GIF file
+                QString gifPath = "gif templates/dynamicbg3.gif";
+                QStringList possiblePaths;
+                possiblePaths << gifPath
+                              << QDir::currentPath() + "/" + gifPath
+                              << QCoreApplication::applicationDirPath() + "/" + gifPath
+                              << QCoreApplication::applicationDirPath() + "/../" + gifPath
+                              << QCoreApplication::applicationDirPath() + "/../../" + gifPath
+                              << "../" + gifPath
+                              << "../../" + gifPath
+                              << "../../../" + gifPath
+                              << "C:/Users/dorot/Documents/qt-brbooth/gif templates/dynamicbg3.gif";
+                
+                QString validPath;
+                for (const QString& path : possiblePaths) {
+                    if (QFile::exists(path)) {
+                        validPath = path;
+                        break;
+                    }
+                }
+                
+                if (!validPath.isEmpty()) {
+                    m_landingPageGifMovie = new QMovie(validPath, QByteArray(), gifLabel);
+                    if (m_landingPageGifMovie->isValid()) {
+                        gifLabel->setMovie(m_landingPageGifMovie);
+                        m_landingPageGifMovie->start();
+                        qDebug() << "Landing page GIF started from:" << validPath;
+                    } else {
+                        delete m_landingPageGifMovie;
+                        m_landingPageGifMovie = nullptr;
+                    }
+                }
+            }
+        }
+    }
+}
+
+void BRBooth::stopLandingPageGif()
+{
+    if (m_landingPageGifMovie) {
+        m_landingPageGifMovie->stop();
+        delete m_landingPageGifMovie;
+        m_landingPageGifMovie = nullptr;
+        qDebug() << "Landing page GIF stopped";
+    }
+}
+
+bool BRBooth::eventFilter(QObject *obj, QEvent *event)
+{
+    if (obj == this) {
+        if (event->type() == QEvent::WindowActivate) {
+            qDebug() << "Window activated - resuming normal operation";
+            // Resume camera if it was paused
+            if (cameraWorker && !cameraWorker->isCameraOpen()) {
+                emit startCameraWorker();
+            }
+        } else if (event->type() == QEvent::WindowDeactivate) {
+            qDebug() << "Window deactivated - pausing camera to prevent crashes";
+            // Pause camera to prevent crashes on alt-tab
+            emit stopCameraWorker();
+        }
+    }
+    return QMainWindow::eventFilter(obj, event);
+}
+
 void BRBooth::showForegroundPage()
 {
     ui->stackedWidget->setCurrentIndex(foregroundPageIndex);
@@ -264,6 +474,8 @@ void BRBooth::showCapturePage()
     lastVisitedPageIndex = ui->stackedWidget->currentIndex();
     qDebug() << "DEBUG: showCapturePage() called. Setting index to:" << capturePageIndex
              << ". SAVED lastVisitedPageIndex (page we just came from):" << lastVisitedPageIndex;
+    
+    // Camera is now started by page change handler for all relevant pages
     
     // Pass the current foreground template to the final interface
     if (foregroundPage && finalOutputPage) {

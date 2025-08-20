@@ -74,18 +74,9 @@ Dynamic::Dynamic(QWidget* parent)
 #else
     qDebug() << "OpenCV Version: Not defined or available at compile time.";
 #endif
+    // Debug: Current working directory and application directory
     qDebug() << "APP PATH: Current applicationDirPath:" << QCoreApplication::applicationDirPath();
     qDebug() << "APP PATH: Current currentPath:" << QDir::currentPath();
-
-    QDir gifDir(":/gif");
-    if (gifDir.exists()) {
-        qDebug() << "QRC CHECK: Directory ':/gif' exists in resources. Listing contents:";
-        for (const QString& entry : gifDir.entryList(QDir::Files | QDir::NoDotAndDotDot)) {
-            qDebug() << "  - " << entry << " (QFile::exists: " << QFile::exists(":/gif/" + entry) << ")";
-        }
-    } else {
-        qWarning() << "QRC CHECK: Directory ':/gif' does NOT exist in resources (prefix not registered or wrong).";
-    }
 
     qDebug() << "Supported Image Formats by QImageReader:";
     for (const QByteArray& format : QImageReader::supportedImageFormats()) {
@@ -168,21 +159,21 @@ void Dynamic::setupVideoPlayers()
 {
     qDebug() << "Dynamic::setupVideoPlayers - Started.";
 
-    // Define video paths for actual playback
+    // Define video paths for actual playback (these will be resolved to full paths when needed)
     QStringList actualVideoPaths;
-    actualVideoPaths << "qrc:/videos/videos/video1.mp4"
-                     << "qrc:/videos/videos/video2.mp4"
-                     << "qrc:/videos/videos/video3.mp4"
-                     << "qrc:/videos/videos/video4.mp4"
-                     << "qrc:/videos/videos/video5.mp4";
+    actualVideoPaths << "videos/video1.mp4"
+                     << "videos/video2.mp4"
+                     << "videos/video3.mp4"
+                     << "videos/video4.mp4"
+                     << "videos/video5.mp4";
 
     // Define GIF paths for thumbnails
     QStringList gifPaths;
-    gifPaths << ":/gif/gif templates/dynamicbg1.gif"
-             << ":/gif/gif templates/dynamicbg2.gif"
-             << ":/gif/gif templates/dynamicbg3.gif"
-             << ":/gif/gif templates/dynamicbg4.gif"
-             << ":/gif/gif templates/dynamicbg5.gif";
+    gifPaths << "gif templates/dynamicbg1.gif"
+             << "gif templates/dynamicbg2.gif"
+             << "gif templates/dynamicbg3.gif"
+             << "gif templates/dynamicbg4.gif"
+             << "gif templates/dynamicbg5.gif";
 
     // List of QPushButton pointers from the UI
     QList<QPushButton*> buttons;
@@ -229,27 +220,95 @@ void Dynamic::setupVideoPlayers()
         qDebug() << "Dynamic::setupVideoPlayers - Button" << button->objectName() << "size:" << button->size();
         qDebug() << "Dynamic::setupVideoPlayers - gifLabel geometry (initial):" << gifLabel->geometry();
 
-        // Create and set QMovie for the GIF
-        QMovie* gifMovie = new QMovie(gifPaths.at(i), QByteArray(), gifLabel);
-        gifLabel->setMovie(gifMovie);
-
-        // Debug GIF loading status
-        qDebug() << "Dynamic::setupVideoPlayers - Loading GIF:" << gifPaths.at(i);
-        qDebug() << "Dynamic::setupVideoPlayers - QMovie isValid:" << gifMovie->isValid();
-        qDebug() << "Dynamic::setupVideoPlayers - QMovie frameCount:" << gifMovie->frameCount();
-        qDebug() << "Dynamic::setupVideoPlayers - QMovie lastErrorString:" << gifMovie->lastErrorString();
-
-        if (gifMovie->isValid()) {
-            gifMovie->start(); // Start the looping GIF animation
-            gifLabel->show();
-            gifLabel->raise();
-            qDebug() << "Dynamic::setupVideoPlayers - Successfully loaded and started GIF for" << button->objectName();
-        } else {
-            qWarning() << "ERROR: QMovie could not load GIF for" << button->objectName() << ":" << gifMovie->lastErrorString();
-            gifLabel->setText("GIF Error"); // Display an error message if GIF fails to load
+        // Try to find the GIF file in various possible locations
+        QString originalGifPath = gifPaths.at(i);
+        QStringList possiblePaths;
+        possiblePaths << originalGifPath
+                      << QDir::currentPath() + "/" + originalGifPath
+                      << QCoreApplication::applicationDirPath() + "/" + originalGifPath
+                      << QCoreApplication::applicationDirPath() + "/../" + originalGifPath
+                      << QCoreApplication::applicationDirPath() + "/../../" + originalGifPath
+                      << "../" + originalGifPath
+                      << "../../" + originalGifPath
+                      << "../../../" + originalGifPath;
+        
+        // Add the known working path as a fallback
+        QString knownPath = QString("C:/Users/dorot/Documents/qt-brbooth/gif templates/dynamicbg%1.gif").arg(i + 1);
+        possiblePaths << knownPath;
+        qDebug() << "Dynamic::setupVideoPlayers - Added known working path:" << knownPath;
+        
+        // Try to find project root by looking for qt-brbooth.pro file
+        QString projectRoot;
+        QStringList searchDirs;
+        searchDirs << QDir::currentPath()
+                   << QCoreApplication::applicationDirPath()
+                   << QCoreApplication::applicationDirPath() + "/.."
+                   << QCoreApplication::applicationDirPath() + "/../.."
+                   << "../"
+                   << "../../"
+                   << "../../../";
+        
+        for (const QString& searchDir : searchDirs) {
+            if (QFile::exists(searchDir + "/qt-brbooth.pro")) {
+                projectRoot = searchDir;
+                qDebug() << "Dynamic::setupVideoPlayers - Found project root at:" << projectRoot;
+                break;
+            }
+        }
+        
+        if (!projectRoot.isEmpty()) {
+            possiblePaths.prepend(projectRoot + "/" + originalGifPath);
+            qDebug() << "Dynamic::setupVideoPlayers - Added project root path:" << projectRoot + "/" + originalGifPath;
+        }
+        
+        // Debug: Print all paths we're going to try
+        qDebug() << "Dynamic::setupVideoPlayers - All paths to try for GIF" << (i + 1) << ":";
+        for (int j = 0; j < possiblePaths.size(); ++j) {
+            qDebug() << "  " << j << ":" << possiblePaths[j] << "(exists:" << QFile::exists(possiblePaths[j]) << ")";
+        }
+        
+        QString validGifPath;
+        for (const QString& path : possiblePaths) {
+            if (QFile::exists(path)) {
+                validGifPath = path;
+                qDebug() << "Dynamic::setupVideoPlayers - Found GIF at:" << validGifPath;
+                break;
+            }
+        }
+        
+        if (validGifPath.isEmpty()) {
+            qWarning() << "Dynamic::setupVideoPlayers - GIF file not found for" << button->objectName() << "in any location:";
+            for (const QString& path : possiblePaths) {
+                qWarning() << "  -" << path;
+            }
+            // Create a placeholder with button number
+            gifLabel->setText(QString("GIF %1\nMissing").arg(i + 1));
             gifLabel->setAlignment(Qt::AlignCenter);
-            gifLabel->setStyleSheet("color: red; background-color: lightgray; border: 1px solid red;");
+            gifLabel->setStyleSheet("color: white; background-color: #FF6B6B; border-radius: 8px; font-weight: bold;");
             gifLabel->show();
+        } else {
+            // Create and set QMovie for the GIF
+            QMovie* gifMovie = new QMovie(validGifPath, QByteArray(), gifLabel);
+            gifLabel->setMovie(gifMovie);
+
+            // Debug GIF loading status
+            qDebug() << "Dynamic::setupVideoPlayers - Loading GIF:" << validGifPath;
+            qDebug() << "Dynamic::setupVideoPlayers - QMovie isValid:" << gifMovie->isValid();
+            qDebug() << "Dynamic::setupVideoPlayers - QMovie frameCount:" << gifMovie->frameCount();
+            qDebug() << "Dynamic::setupVideoPlayers - QMovie lastErrorString:" << gifMovie->lastErrorString();
+
+            if (gifMovie->isValid()) {
+                gifMovie->start(); // Start the looping GIF animation
+                gifLabel->show();
+                gifLabel->raise();
+                qDebug() << "Dynamic::setupVideoPlayers - Successfully loaded and started GIF for" << button->objectName();
+            } else {
+                qWarning() << "ERROR: QMovie could not load GIF for" << button->objectName() << ":" << gifMovie->lastErrorString();
+                gifLabel->setText(QString("GIF %1\nError").arg(i + 1)); // Display an error message if GIF fails to load
+                gifLabel->setAlignment(Qt::AlignCenter);
+                gifLabel->setStyleSheet("color: white; background-color: #FFB74D; border-radius: 8px; font-weight: bold;");
+                gifLabel->show();
+            }
         }
     }
     qDebug() << "Dynamic::setupVideoPlayers - Finished.";
@@ -551,4 +610,27 @@ void Dynamic::hideOverlayVideo()
         qDebug() << "Dynamic::hideOverlayVideo - Back button enabled.";
     }
     qDebug() << "Dynamic::hideOverlayVideo - Finished.";
+}
+
+void Dynamic::stopAllGifs()
+{
+    qDebug() << "Dynamic::stopAllGifs - Stopping all GIF movies.";
+    
+    QList<QPushButton*> buttons;
+    buttons << ui->videoButton1 << ui->videoButton2 << ui->videoButton3 << ui->videoButton4 << ui->videoButton5;
+    
+    for (QPushButton* button : buttons) {
+        if (button) {
+            QLabel* gifLabel = button->findChild<QLabel*>();
+            if (gifLabel) {
+                QMovie* movie = gifLabel->movie();
+                if (movie && movie->state() == QMovie::Running) {
+                    movie->stop();
+                    qDebug() << "Dynamic::stopAllGifs - Stopped GIF movie for:" << button->objectName();
+                }
+            }
+        }
+    }
+    
+    qDebug() << "Dynamic::stopAllGifs - All GIFs stopped.";
 }

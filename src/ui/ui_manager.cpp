@@ -10,7 +10,7 @@ UiManager::UiManager(QObject *parent)
     , detectionLabel(nullptr)
     , debugLabel(nullptr)
     , boundingBoxCheckBox(nullptr)
-    , segmentationCheckBox(nullptr)
+
     , debugUpdateTimer(nullptr)
     , stackedLayout(nullptr)
 {
@@ -72,14 +72,13 @@ void UiManager::setupButtons(QPushButton *backButton, QPushButton *captureButton
 }
 
 void UiManager::updateDebugDisplay(int fps, bool personDetected, int detectionCount, double avgConfidence,
-                                   bool showBoundingBoxes, bool showSegmentation, bool isProcessingFrame)
+                                   bool showBoundingBoxes, bool isProcessingFrame)
 {
     Q_UNUSED(fps);
     Q_UNUSED(personDetected);
     Q_UNUSED(detectionCount);
     Q_UNUSED(avgConfidence);
     Q_UNUSED(showBoundingBoxes);
-    Q_UNUSED(showSegmentation);
     Q_UNUSED(isProcessingFrame);
 }
 
@@ -89,11 +88,7 @@ void UiManager::showBoundingBoxNotification(QWidget *parent, bool show)
     Q_UNUSED(show);
 }
 
-void UiManager::showSegmentationNotification(QWidget *parent, bool show)
-{
-    Q_UNUSED(parent);
-    Q_UNUSED(show);
-}
+
 
 void UiManager::repositionDebugPanel(QWidget *parent, QWidget *debugPanel)
 {
@@ -106,10 +101,7 @@ void UiManager::onBoundingBoxCheckBoxToggled(bool checked)
     emit boundingBoxToggled(checked);
 }
 
-void UiManager::onSegmentationCheckBoxToggled(bool checked)
-{
-    emit segmentationToggled(checked);
-}
+
 
 void UiManager::updateDebugInfo()
 {
@@ -136,10 +128,7 @@ void UiManager::createDebugCheckboxes()
         boundingBoxCheckBox = new QCheckBox(debugWidget);
         connect(boundingBoxCheckBox, &QCheckBox::toggled, this, &UiManager::onBoundingBoxCheckBoxToggled);
     }
-    if (!segmentationCheckBox) {
-        segmentationCheckBox = new QCheckBox(debugWidget);
-        connect(segmentationCheckBox, &QCheckBox::toggled, this, &UiManager::onSegmentationCheckBoxToggled);
-    }
+
 }
 
 

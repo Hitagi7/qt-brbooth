@@ -1,6 +1,6 @@
 # Qt BRBooth - Interactive Photo Booth Application
 
-A modern, full-screen photo booth application built with Qt and OpenCV, featuring real-time image processing, hand detection, and person segmentation capabilities.
+A modern, full-screen photo booth application built with Qt and OpenCV, featuring real-time image processing and hand detection capabilities.
 
 ## Overview
 
@@ -16,7 +16,6 @@ Qt BRBooth is an interactive photo booth application that provides a complete us
 - **Image/Video Recording**: Capture photos or record videos with customizable templates
 
 ### Advanced Image Processing
-- **Person Segmentation**: Real-time person segmentation using TensorFlow Lite (OpenCV fallback)
 - **Hand Detection**: Advanced hand tracking and detection capabilities
 - **Background Replacement**: Dynamic background replacement and blending
 - **Template System**: Customizable foreground, background, and video templates
@@ -44,16 +43,9 @@ qt-brbooth/
 │   │   ├── final.cpp             # Final output page
 │   │   └── iconhover.cpp         # Icon hover effects
 │   └── algorithms/                # Computer vision algorithms
-│       ├── segmentation/          # Person segmentation
-│       │   ├── tflite_deeplabv3.cpp
-│       │   └── tflite_segmentation_widget.cpp
-│       ├── hand_detection/        # Hand detection and tracking
-│       │   ├── advanced_hand_detector.cpp
-│       │   └── mediapipe_like_hand_tracker.cpp
-│       └── person_detection/      # Person detection
-│           ├── simplepersondetector.cpp
-│           ├── personsegmentation.cpp
-│           └── segmentation_manager.cpp
+│       └── hand_detection/        # Hand detection and tracking
+│           ├── advanced_hand_detector.cpp
+│           └── mediapipe_like_hand_tracker.cpp
 ├── include/                       # Header files
 │   ├── core/                      # Core headers
 │   │   ├── brbooth.h
@@ -69,13 +61,8 @@ qt-brbooth/
 │   │   ├── iconhover.h
 │   │   └── ui_manager.h
 │   └── algorithms/                # Algorithm headers
-│       ├── tflite_deeplabv3.h
-│       ├── tflite_segmentation_widget.h
 │       ├── advanced_hand_detector.h
-│       ├── mediapipe_like_hand_tracker.h
-│       ├── simplepersondetector.h
-│       ├── personsegmentation.h
-│       └── segmentation_manager.h
+│       └── mediapipe_like_hand_tracker.h
 ├── ui/                            # Qt Designer UI files
 │   ├── background.ui
 │   ├── brbooth.ui
@@ -105,7 +92,7 @@ qt-brbooth/
 - **C++17**: Modern C++ features
 
 ### Optional Dependencies
-- **TensorFlow Lite**: For advanced person segmentation (currently using OpenCV fallback)
+
 - **OpenMP**: Multi-threading optimizations
 
 ## Building the Project
@@ -143,11 +130,10 @@ LIBS += -L$$OPENCV_INSTALL_DIR/x64/vc17/lib
 ### Controls
 - **Navigation**: Use on-screen buttons to navigate between pages
 - **Camera Controls**: Start/stop camera, capture images, record videos
-- **Processing Options**: Toggle segmentation, hand detection, adjust confidence thresholds
+- **Processing Options**: Toggle hand detection, adjust confidence thresholds
 - **Template Selection**: Browse and select from available templates
 
 ### Processing Features
-- **Person Segmentation**: Real-time background removal using TensorFlow Lite
 - **Hand Detection**: Track and detect hand gestures and positions
 - **Performance Modes**: Adjust processing quality vs. speed
 - **Confidence Thresholds**: Fine-tune detection sensitivity
@@ -184,7 +170,6 @@ LIBS += -L$$OPENCV_INSTALL_DIR/x64/vc17/lib
 ### Key Classes
 - `BRBooth`: Main application window and navigation
 - `Capture`: Camera handling and image processing
-- `TFLiteDeepLabv3`: Person segmentation implementation
 - `AdvancedHandDetector`: Hand detection and tracking
 - `Camera`: Camera device management
 

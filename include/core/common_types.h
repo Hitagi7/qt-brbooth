@@ -23,13 +23,6 @@ struct BoundingBox {
     int height() const { return y2 - y1; }
 };
 
-struct OptimizedDetection {
-    cv::Rect boundingBox;
-    cv::Mat mask;           // Direct segmentation mask from model
-    double confidence;
-    QString className;
-    
-    OptimizedDetection() : confidence(0.0), className("person") {}
-};
+
 
 #endif // COMMON_TYPES_H

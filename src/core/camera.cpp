@@ -119,19 +119,17 @@ void Camera::startCamera()
         qWarning() << "Camera: Failed to read first frame immediately.";
     }
 
-    // 🔁 Start timer for continuous frame grabbing
-    int timerInterval = 0;
-    if (actual_fps > 0) {
+    // 🔁 Start timer for continuous frame grabbing (optimized for 30 FPS minimum)
+    int timerInterval = 33; // 33ms = ~30 FPS (1000ms / 30fps = 33.33ms)
+    if (actual_fps > 0 && actual_fps < 30) {
         timerInterval = qMax(1, static_cast<int>(1000.0 / actual_fps));
-    } else {
-        timerInterval = 33;
-        qWarning() << "Camera: WARNING: Actual FPS is 0, defaulting timer interval to 33ms.";
     }
 
     cameraReadTimer->start(timerInterval);
     emit cameraOpened(true, actual_width, actual_height, actual_fps);
-    qDebug() << "Camera: Camera started successfully in worker thread. Timer interval:"
+    qDebug() << "📹 Camera: Camera started successfully in worker thread. Timer interval:"
              << timerInterval << "ms";
+    qDebug() << "📹 Camera: Ready for capture!";
 }
 
 void Camera::stopCamera()
@@ -152,7 +150,13 @@ void Camera::processFrame()
     loopTimer.start();
 
     cv::Mat frame;
-    if (!cap.isOpened() || !cap.read(frame) || frame.empty()) {
+    if (!cap.isOpened()) {
+        qWarning() << "Camera: Camera not opened, skipping frame.";
+        loopTimer.restart();
+        return;
+    }
+    
+    if (!cap.read(frame) || frame.empty()) {
         qWarning() << "Camera: Failed to read frame from camera or frame is empty.";
         loopTimer.restart();
         return;
@@ -166,18 +170,25 @@ void Camera::processFrame()
         return;
     }
 
-    emit frameReady(image.copy());
+    // Add error handling for frame emission
+    try {
+        emit frameReady(image);
+    } catch (const std::exception& e) {
+        qWarning() << "Camera: Exception during frame emission:" << e.what();
+        loopTimer.restart();
+        return;
+    }
 
     qint64 currentLoopTime = loopTimer.elapsed();
     totalTime += currentLoopTime;
     frameCount++;
 
-    if (frameCount % 60 == 0) {
+    if (frameCount % 240 == 0) { // Further reduced frequency for performance
         double avgLoopTime = (double) totalTime / frameCount;
         double measuredFPS = 1000.0 / ((double) frameTimer.elapsed() / frameCount);
         qDebug() << "----------------- Worker Thread Stats ------------------";
-        qDebug() << "Camera: Avg loop time (last 60 frames):" << avgLoopTime << "ms";
-        qDebug() << "Camera: Current FPS (measured over 60 frames):" << measuredFPS << "FPS";
+        qDebug() << "Camera: Avg loop time (last 240 frames):" << avgLoopTime << "ms";
+        qDebug() << "Camera: Current FPS (measured over 240 frames):" << measuredFPS << "FPS";
         qDebug() << "Camera: Frame processing efficiency:"
                  << (avgLoopTime < (1000.0 / cap.get(cv::CAP_PROP_FPS)) ? "GOOD"
                                                                         : "NEEDS OPTIMIZATION");

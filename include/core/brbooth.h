@@ -4,6 +4,7 @@
 #include <QMainWindow>
 #include <QStackedWidget> // Make sure this is included for QStackedWidget
 #include <QThread> // For camera threading
+#include <QMovie> // For GIF management
 
 
 // Forward declarations to avoid circular includes and speed up compilation
@@ -28,6 +29,7 @@ public:
 
 protected:
     void resizeEvent(QResizeEvent *event) override;
+    bool eventFilter(QObject *obj, QEvent *event) override;
 
 private slots:
     // Slots for page transitions
@@ -37,6 +39,10 @@ private slots:
     void showBackgroundPage();
     void showCapturePage();
     void showFinalOutputPage();
+    
+    // GIF management
+    void startLandingPageGif();
+    void stopLandingPageGif();
 
     // Slots for button clicks on the landing page
     void on_staticButton_clicked();
@@ -71,5 +77,8 @@ private:
 
     // To keep track of the page visited before going to Capture or Final, for "back" navigation
     int lastVisitedPageIndex;
+    
+    // GIF management
+    QMovie* m_landingPageGifMovie;
 };
 #endif // BRBOOTH_H
