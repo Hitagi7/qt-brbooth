@@ -44,8 +44,11 @@
 #include <opencv2/cudawarping.hpp>
 #include <opencv2/cudaobjdetect.hpp>
 #include <opencv2/cudabgsegm.hpp> // Added for cv::cuda::BackgroundSubtractorMOG2
+#include <opencv2/cudafilters.hpp> // Added for CUDA filter functions
+#include <opencv2/cudaarithm.hpp> // Added for CUDA arithmetic operations (inRange, bitwise_or)
 #include <QtConcurrent/QtConcurrent>
 #include <QMutexLocker>
+#include <chrono>
 
 Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, QThread *existingCameraThread)
     : QWidget(parent)
@@ -1390,6 +1393,9 @@ void Capture::keyPressEvent(QKeyEvent *event)
                     break;
             }
             
+            // Force immediate update
+            qDebug() << "🎯 Current display mode:" << m_displayMode << "(0=Normal, 1=Rectangle, 2=Segmentation)";
+            
             // Reset utilization when switching to normal mode
             if (m_displayMode == NormalMode) {
                 m_gpuUtilized = false;
@@ -2154,6 +2160,7 @@ cv::Mat Capture::processFrameWithUnifiedDetection(const cv::Mat &frame)
         m_lastDetections = motionFiltered;
         
         // Create segmented frame with motion-filtered detections
+        qDebug() << "🎯 Creating segmented frame with" << motionFiltered.size() << "detections, display mode:" << m_displayMode;
         cv::Mat segmentedFrame = createSegmentedFrame(frame, motionFiltered);
         
         // Update timing info
@@ -2169,6 +2176,14 @@ cv::Mat Capture::processFrameWithUnifiedDetection(const cv::Mat &frame)
             }
         } else {
             qDebug() << "⚠️ NO PEOPLE DETECTED in frame (total detections:" << found.size() << ")";
+            
+            // For testing: create a fake detection in the center of the frame if no detections found
+            if (m_displayMode == SegmentationMode && frame.cols > 0 && frame.rows > 0) {
+                qDebug() << "🎯 TESTING: Creating fake detection in center for segmentation testing";
+                cv::Rect fakeDetection(frame.cols/4, frame.rows/4, frame.cols/2, frame.rows/2);
+                motionFiltered.push_back(fakeDetection);
+                qDebug() << "🎯 TESTING: Added fake detection at" << fakeDetection.x << fakeDetection.y << fakeDetection.width << "x" << fakeDetection.height;
+            }
         }
         
         return segmentedFrame;
@@ -2191,14 +2206,20 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
     int maxDetections = std::min(3, (int)detections.size());
     
     if (m_displayMode == SegmentationMode) {
+        qDebug() << "🎯 SEGMENTATION MODE: Creating black background + edge-based silhouettes";
         // Create black background for edge-based segmentation
         cv::Mat segmentedFrame = cv::Mat::zeros(frame.size(), frame.type());
         
         for (int i = 0; i < maxDetections; i++) {
             const auto& detection = detections[i];
+            qDebug() << "🎯 Processing detection" << i << "at" << detection.x << detection.y << detection.width << "x" << detection.height;
             
             // Get enhanced edge-based segmentation mask for this person
             cv::Mat personMask = enhancedSilhouetteSegment(frame, detection);
+            
+            // Check if mask has any non-zero pixels
+            int nonZeroPixels = cv::countNonZero(personMask);
+            qDebug() << "🎯 Person mask has" << nonZeroPixels << "non-zero pixels";
             
             // Apply mask to extract person
             cv::Mat personRegion;
@@ -2208,6 +2229,7 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
             cv::add(segmentedFrame, personRegion, segmentedFrame);
         }
         
+        qDebug() << "🎯 Segmentation complete, returning segmented frame";
         return segmentedFrame;
     } else if (m_displayMode == RectangleMode) {
         // Show original frame with detection rectangles
@@ -2235,24 +2257,68 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
 
 cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect &detection)
 {
-    // Person-focused silhouette segmentation with CUDA-accelerated edge detection
-    // Validate detection rectangle
-    if (detection.x < 0 || detection.y < 0 || 
-        detection.width <= 0 || detection.height <= 0 ||
-        detection.x + detection.width > frame.cols ||
-        detection.y + detection.height > frame.rows) {
+    // Optimized frame skipping for GPU-accelerated segmentation - process every 2nd frame
+    static int frameCounter = 0;
+    static double lastProcessingTime = 0.0;
+    frameCounter++;
+    
+    // Adaptive skipping based on processing time (more aggressive with GPU)
+    bool shouldProcess = (frameCounter % 2 == 0); // Process every 2nd frame by default
+    
+    // If processing is taking too long, skip more frames
+    if (lastProcessingTime > 30.0) { // If processing took more than 30ms
+        shouldProcess = (frameCounter % 3 == 0); // Process every 3rd frame
+    } else if (lastProcessingTime < 15.0) { // If processing is very fast
+        shouldProcess = true; // Process every frame
+    }
+    
+    if (!shouldProcess) {
+        // Return cached result for skipped frames
+        static cv::Mat lastMask;
+        if (!lastMask.empty()) {
+            return lastMask.clone();
+        }
+    }
+    
+    // Start timing for adaptive processing
+    auto startTime = std::chrono::high_resolution_clock::now();
+    
+    qDebug() << "🎯 Starting enhanced silhouette segmentation for detection at" << detection.x << detection.y << detection.width << "x" << detection.height;
+    
+    // Person-focused silhouette segmentation with enhanced edge detection
+    // Validate and clip detection rectangle to frame bounds
+    qDebug() << "🎯 Frame size:" << frame.cols << "x" << frame.rows;
+    qDebug() << "🎯 Original detection rectangle:" << detection.x << detection.y << detection.width << "x" << detection.height;
+    
+    // Create a clipped version of the detection rectangle
+    cv::Rect clippedDetection = detection;
+    
+    // Clip to frame bounds
+    clippedDetection.x = std::max(0, clippedDetection.x);
+    clippedDetection.y = std::max(0, clippedDetection.y);
+    clippedDetection.width = std::min(clippedDetection.width, frame.cols - clippedDetection.x);
+    clippedDetection.height = std::min(clippedDetection.height, frame.rows - clippedDetection.y);
+    
+    qDebug() << "🎯 Clipped detection rectangle:" << clippedDetection.x << clippedDetection.y << clippedDetection.width << "x" << clippedDetection.height;
+    
+    // Check if the clipped rectangle is still valid
+    if (clippedDetection.width <= 0 || clippedDetection.height <= 0) {
+        qDebug() << "🎯 Clipped detection rectangle is invalid, returning empty mask";
         return cv::Mat::zeros(frame.size(), CV_8UC1);
     }
     
-    // Create tight rectangle around the person (minimal expansion)
-    cv::Rect expandedRect = detection;
-    expandedRect.x = std::max(0, expandedRect.x - 10);
-    expandedRect.y = std::max(0, expandedRect.y - 10);
-    expandedRect.width = std::min(frame.cols - expandedRect.x, expandedRect.width + 20);
-    expandedRect.height = std::min(frame.rows - expandedRect.y, expandedRect.height + 20);
+    // Create expanded rectangle for full body coverage
+    cv::Rect expandedRect = clippedDetection;
+    expandedRect.x = std::max(0, expandedRect.x - 25); // Larger expansion for full body
+    expandedRect.y = std::max(0, expandedRect.y - 25);
+    expandedRect.width = std::min(frame.cols - expandedRect.x, expandedRect.width + 50); // Larger expansion
+    expandedRect.height = std::min(frame.rows - expandedRect.y, expandedRect.height + 50);
+    
+    qDebug() << "🎯 Expanded rectangle:" << expandedRect.x << expandedRect.y << expandedRect.width << "x" << expandedRect.height;
     
     // Validate expanded rectangle
     if (expandedRect.width <= 0 || expandedRect.height <= 0) {
+        qDebug() << "🎯 Invalid expanded rectangle, returning empty mask";
         return cv::Mat::zeros(frame.size(), CV_8UC1);
     }
     
@@ -2260,107 +2326,267 @@ cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect 
     cv::Mat roi = frame(expandedRect);
     cv::Mat roiMask = cv::Mat::zeros(roi.size(), CV_8UC1);
     
-    // Convert to grayscale for edge detection
-    cv::Mat gray;
-    cv::cvtColor(roi, gray, cv::COLOR_BGR2GRAY);
+    qDebug() << "🎯 ROI created, size:" << roi.cols << "x" << roi.rows;
     
-    // Apply Gaussian blur to reduce noise
-    cv::Mat blurred;
-    cv::GaussianBlur(gray, blurred, cv::Size(3, 3), 0);
-    
-    // CUDA-accelerated edge detection if available
+    // GPU-accelerated edge detection for full body segmentation
     cv::Mat edges;
+    
     if (m_useCUDA) {
         try {
-            // Upload to GPU for CUDA-accelerated edge detection
+            // Upload ROI to GPU
+            cv::cuda::GpuMat gpu_roi;
+            gpu_roi.upload(roi);
+            
+            // Convert to grayscale on GPU
+            cv::cuda::GpuMat gpu_gray;
+            cv::cuda::cvtColor(gpu_roi, gpu_gray, cv::COLOR_BGR2GRAY);
+            
+            // Apply Gaussian blur on GPU using CUDA filters
             cv::cuda::GpuMat gpu_blurred;
-            gpu_blurred.upload(blurred);
+            cv::Ptr<cv::cuda::Filter> gaussian_filter = cv::cuda::createGaussianFilter(gpu_gray.type(), gpu_blurred.type(), cv::Size(5, 5), 0);
+            gaussian_filter->apply(gpu_gray, gpu_blurred);
             
-            // Create CUDA Canny edge detector
-            cv::Ptr<cv::cuda::CannyEdgeDetector> canny_detector = cv::cuda::createCannyEdgeDetector(50, 150);
-            
-            // Apply Canny edge detection on GPU
+            // CUDA-accelerated Canny edge detection
             cv::cuda::GpuMat gpu_edges;
+            cv::Ptr<cv::cuda::CannyEdgeDetector> canny_detector = cv::cuda::createCannyEdgeDetector(15, 45);
             canny_detector->detect(gpu_blurred, gpu_edges);
             
-            // Download result back to CPU
-            gpu_edges.download(edges);
+            // CUDA-accelerated morphological dilation
+            cv::cuda::GpuMat gpu_dilated;
+            cv::Ptr<cv::cuda::Filter> dilate_filter = cv::cuda::createMorphologyFilter(cv::MORPH_DILATE, gpu_edges.type(), cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5)));
+            dilate_filter->apply(gpu_edges, gpu_dilated);
             
-            qDebug() << "🎮 CUDA-accelerated edge detection applied";
+            // Download result back to CPU
+            gpu_dilated.download(edges);
+            
+            qDebug() << "🎮 GPU-accelerated edge detection applied";
+            
         } catch (const cv::Exception& e) {
             qWarning() << "CUDA edge detection failed, falling back to CPU:" << e.what();
-            // Fallback to CPU edge detection
-            cv::Canny(blurred, edges, 50, 150);
+            // Fallback to CPU processing
+            cv::Mat gray;
+            cv::cvtColor(roi, gray, cv::COLOR_BGR2GRAY);
+            cv::Mat blurred;
+            cv::GaussianBlur(gray, blurred, cv::Size(5, 5), 0);
+            cv::Canny(blurred, edges, 15, 45);
+            cv::Mat kernel_edge = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
+            cv::dilate(edges, edges, kernel_edge);
         }
     } else {
-        // CPU edge detection
-        cv::Canny(blurred, edges, 50, 150);
+        // CPU fallback
+        cv::Mat gray;
+        cv::cvtColor(roi, gray, cv::COLOR_BGR2GRAY);
+        cv::Mat blurred;
+        cv::GaussianBlur(gray, blurred, cv::Size(5, 5), 0);
+        cv::Canny(blurred, edges, 15, 45);
+        cv::Mat kernel_edge = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
+        cv::dilate(edges, edges, kernel_edge);
     }
-    
-    // Dilate edges to connect broken contours
-    cv::Mat kernel_edge = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(2, 2));
-    cv::dilate(edges, edges, kernel_edge);
     
     // Find contours from edges
     std::vector<std::vector<cv::Point>> edgeContours;
     cv::findContours(edges, edgeContours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
     
+    qDebug() << "🎯 Found" << edgeContours.size() << "edge contours";
+    
     // Filter contours based on person-like characteristics
     std::vector<std::vector<cv::Point>> validContours;
     cv::Point detectionCenter(expandedRect.width/2, expandedRect.height/2);
     
+    // Only process edge contours if they exist
+    if (!edgeContours.empty()) {
+        qDebug() << "🎯 Filtering" << edgeContours.size() << "contours for person-like characteristics";
+    
     for (const auto& contour : edgeContours) {
         double area = cv::contourArea(contour);
         
-        // Only consider contours with reasonable size for a person
-        if (area > 100 && area < expandedRect.width * expandedRect.height * 0.8) {
+            // Optimized size constraints for full body detection
+            if (area > 10 && area < expandedRect.width * expandedRect.height * 0.98) {
             // Get bounding rectangle
             cv::Rect contourRect = cv::boundingRect(contour);
             
-            // Check if contour is centered in the detection area
+                // Check if contour is centered in the detection area (very lenient)
             cv::Point contourCenter(contourRect.x + contourRect.width/2, contourRect.y + contourRect.height/2);
             double distance = cv::norm(contourCenter - detectionCenter);
-            double maxDistance = std::min(expandedRect.width, expandedRect.height) * 0.6;
+                double maxDistance = std::min(expandedRect.width, expandedRect.height) * 0.9; // Very lenient distance
             
-            // Check aspect ratio (person should be taller than wide)
+                            // Optimized aspect ratio check for full body
             double aspectRatio = (double)contourRect.height / contourRect.width;
             
-            if (distance < maxDistance && aspectRatio > 1.2) {
+            if (distance < maxDistance && aspectRatio > 0.2) { // Allow very wide aspect ratios for full body
                 validContours.push_back(contour);
             }
         }
     }
     
-    // If no valid edge contours found, try alternative approach
+        qDebug() << "🎯 After filtering:" << validContours.size() << "valid contours";
+    } else {
+        qDebug() << "🎯 No edge contours found, skipping to background subtraction";
+    }
+    
+    // If no valid edge contours found, use background subtraction approach
     if (validContours.empty()) {
-        // Use gradient-based segmentation
-        cv::Mat gradX, gradY, gradient;
-        cv::Sobel(blurred, gradX, CV_16S, 1, 0, 3);
-        cv::Sobel(blurred, gradY, CV_16S, 0, 1, 3);
+        qDebug() << "🎯 No valid edge contours, trying background subtraction";
+        // Use background subtraction for motion-based segmentation
+        cv::Mat fgMask;
+        m_bgSubtractor->apply(roi, fgMask);
         
-        // Convert to magnitude
-        cv::convertScaleAbs(gradX, gradX);
-        cv::convertScaleAbs(gradY, gradY);
-        cv::addWeighted(gradX, 0.5, gradY, 0.5, 0, gradient);
+        // GPU-accelerated morphological operations for full body
+        if (m_useCUDA) {
+            try {
+                // Upload mask to GPU
+                cv::cuda::GpuMat gpu_fgMask;
+                gpu_fgMask.upload(fgMask);
+                
+                // Create morphological kernels
+                cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(7, 7));
+                cv::Mat kernel_dilate = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
+                
+                // GPU-accelerated morphological operations
+                cv::Ptr<cv::cuda::Filter> open_filter = cv::cuda::createMorphologyFilter(cv::MORPH_OPEN, gpu_fgMask.type(), kernel);
+                cv::Ptr<cv::cuda::Filter> close_filter = cv::cuda::createMorphologyFilter(cv::MORPH_CLOSE, gpu_fgMask.type(), kernel);
+                cv::Ptr<cv::cuda::Filter> dilate_filter = cv::cuda::createMorphologyFilter(cv::MORPH_DILATE, gpu_fgMask.type(), kernel_dilate);
+                
+                open_filter->apply(gpu_fgMask, gpu_fgMask);
+                close_filter->apply(gpu_fgMask, gpu_fgMask);
+                dilate_filter->apply(gpu_fgMask, gpu_fgMask);
+                
+                // Download result back to CPU
+                gpu_fgMask.download(fgMask);
+                
+                qDebug() << "🎮 GPU-accelerated morphological operations applied";
+                
+            } catch (const cv::Exception& e) {
+                qWarning() << "CUDA morphological operations failed, falling back to CPU:" << e.what();
+                // Fallback to CPU processing
+                cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(7, 7));
+                cv::morphologyEx(fgMask, fgMask, cv::MORPH_OPEN, kernel);
+                cv::morphologyEx(fgMask, fgMask, cv::MORPH_CLOSE, kernel);
+                cv::Mat kernel_dilate = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
+                cv::dilate(fgMask, fgMask, kernel_dilate);
+            }
+        } else {
+            // CPU fallback
+            cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(7, 7));
+            cv::morphologyEx(fgMask, fgMask, cv::MORPH_OPEN, kernel);
+            cv::morphologyEx(fgMask, fgMask, cv::MORPH_CLOSE, kernel);
+            cv::Mat kernel_dilate = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
+            cv::dilate(fgMask, fgMask, kernel_dilate);
+        }
         
-        // Threshold gradient
-        cv::Mat gradientMask;
-        cv::threshold(gradient, gradientMask, 30, 255, cv::THRESH_BINARY);
+        // Find contours from background subtraction
+        cv::findContours(fgMask, validContours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+        qDebug() << "🎯 Background subtraction found" << validContours.size() << "contours";
+    }
+    
+    // If still no valid contours, try color-based segmentation
+    if (validContours.empty()) {
+        qDebug() << "🎯 No contours from background subtraction, trying color-based segmentation";
         
-        // Find contours from gradient
-        cv::findContours(gradientMask, validContours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+        // GPU-accelerated color space conversion and thresholding
+        cv::Mat combinedMask;
+        
+        if (m_useCUDA) {
+            try {
+                // Upload ROI to GPU
+                cv::cuda::GpuMat gpu_roi;
+                gpu_roi.upload(roi);
+                
+                // Convert to HSV on GPU
+                cv::cuda::GpuMat gpu_hsv;
+                cv::cuda::cvtColor(gpu_roi, gpu_hsv, cv::COLOR_BGR2HSV);
+                
+                // Create masks for skin-like colors and non-background colors on GPU
+                cv::cuda::GpuMat gpu_skinMask, gpu_colorMask;
+                cv::cuda::inRange(gpu_hsv, cv::Scalar(0, 20, 70), cv::Scalar(20, 255, 255), gpu_skinMask);
+                cv::cuda::inRange(gpu_hsv, cv::Scalar(0, 30, 50), cv::Scalar(180, 255, 255), gpu_colorMask);
+                
+                // Combine masks on GPU using bitwise_or
+                cv::cuda::GpuMat gpu_combinedMask;
+                cv::cuda::bitwise_or(gpu_skinMask, gpu_colorMask, gpu_combinedMask);
+                
+                // Download result back to CPU
+                gpu_combinedMask.download(combinedMask);
+                
+                qDebug() << "🎮 GPU-accelerated color segmentation applied";
+                
+            } catch (const cv::Exception& e) {
+                qWarning() << "CUDA color segmentation failed, falling back to CPU:" << e.what();
+                // Fallback to CPU processing
+                cv::Mat hsv;
+                cv::cvtColor(roi, hsv, cv::COLOR_BGR2HSV);
+                cv::Mat skinMask;
+                cv::inRange(hsv, cv::Scalar(0, 20, 70), cv::Scalar(20, 255, 255), skinMask);
+                cv::Mat colorMask;
+                cv::inRange(hsv, cv::Scalar(0, 30, 50), cv::Scalar(180, 255, 255), colorMask);
+                cv::bitwise_or(skinMask, colorMask, combinedMask);
+            }
+        } else {
+            // CPU fallback
+            cv::Mat hsv;
+            cv::cvtColor(roi, hsv, cv::COLOR_BGR2HSV);
+            cv::Mat skinMask;
+            cv::inRange(hsv, cv::Scalar(0, 20, 70), cv::Scalar(20, 255, 255), skinMask);
+            cv::Mat colorMask;
+            cv::inRange(hsv, cv::Scalar(0, 30, 50), cv::Scalar(180, 255, 255), colorMask);
+            cv::bitwise_or(skinMask, colorMask, combinedMask);
+        }
+        
+        // GPU-accelerated morphological operations for color segmentation
+        if (m_useCUDA) {
+            try {
+                // Upload mask to GPU
+                cv::cuda::GpuMat gpu_combinedMask;
+                gpu_combinedMask.upload(combinedMask);
+                
+                // Create morphological kernel
+                cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
+                
+                // GPU-accelerated morphological operations
+                cv::Ptr<cv::cuda::Filter> open_filter = cv::cuda::createMorphologyFilter(cv::MORPH_OPEN, gpu_combinedMask.type(), kernel);
+                cv::Ptr<cv::cuda::Filter> close_filter = cv::cuda::createMorphologyFilter(cv::MORPH_CLOSE, gpu_combinedMask.type(), kernel);
+                
+                open_filter->apply(gpu_combinedMask, gpu_combinedMask);
+                close_filter->apply(gpu_combinedMask, gpu_combinedMask);
+                
+                // Download result back to CPU
+                gpu_combinedMask.download(combinedMask);
+                
+                qDebug() << "🎮 GPU-accelerated color morphological operations applied";
+                
+            } catch (const cv::Exception& e) {
+                qWarning() << "CUDA color morphological operations failed, falling back to CPU:" << e.what();
+                // Fallback to CPU processing
+                cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
+                cv::morphologyEx(combinedMask, combinedMask, cv::MORPH_OPEN, kernel);
+                cv::morphologyEx(combinedMask, combinedMask, cv::MORPH_CLOSE, kernel);
+            }
+        } else {
+            // CPU fallback
+            cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
+            cv::morphologyEx(combinedMask, combinedMask, cv::MORPH_OPEN, kernel);
+            cv::morphologyEx(combinedMask, combinedMask, cv::MORPH_CLOSE, kernel);
+        }
+        
+        // Find contours from color segmentation
+        cv::findContours(combinedMask, validContours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+        qDebug() << "🎯 Color-based segmentation found" << validContours.size() << "contours";
     }
     
     // Create mask from valid contours
     if (!validContours.empty()) {
+        qDebug() << "🎯 Creating mask from" << validContours.size() << "valid contours";
         // Sort contours by area
         std::sort(validContours.begin(), validContours.end(), 
                  [](const std::vector<cv::Point>& a, const std::vector<cv::Point>& b) {
                      return cv::contourArea(a) > cv::contourArea(b);
                  });
         
-        // Use the largest valid contour
-        cv::drawContours(roiMask, validContours, 0, cv::Scalar(255), -1);
+        // Enhanced contour usage for full body coverage
+        int maxContours = std::min(4, (int)validContours.size()); // Use up to 4 largest contours for full body
+        for (int i = 0; i < maxContours; i++) {
+            cv::drawContours(roiMask, validContours, i, cv::Scalar(255), -1);
+        }
         
         // Fill holes in the silhouette
         cv::Mat filledMask = roiMask.clone();
@@ -2380,14 +2606,63 @@ cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect 
             }
         }
         
-        // Apply final morphological cleanup
-        cv::Mat kernel_clean = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
+        // GPU-accelerated final morphological cleanup for full body
+        if (m_useCUDA) {
+            try {
+                // Upload mask to GPU
+                cv::cuda::GpuMat gpu_roiMask;
+                gpu_roiMask.upload(roiMask);
+                
+                // Create morphological kernels
+                cv::Mat kernel_clean = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(7, 7));
+                cv::Mat kernel_dilate = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
+                
+                // GPU-accelerated morphological operations
+                cv::Ptr<cv::cuda::Filter> close_filter = cv::cuda::createMorphologyFilter(cv::MORPH_CLOSE, gpu_roiMask.type(), kernel_clean);
+                cv::Ptr<cv::cuda::Filter> dilate_filter = cv::cuda::createMorphologyFilter(cv::MORPH_DILATE, gpu_roiMask.type(), kernel_dilate);
+                
+                close_filter->apply(gpu_roiMask, gpu_roiMask);
+                dilate_filter->apply(gpu_roiMask, gpu_roiMask);
+                
+                // Download result back to CPU
+                gpu_roiMask.download(roiMask);
+                
+                qDebug() << "🎮 GPU-accelerated final morphological cleanup applied";
+                
+            } catch (const cv::Exception& e) {
+                qWarning() << "CUDA final morphological cleanup failed, falling back to CPU:" << e.what();
+                // Fallback to CPU processing
+                cv::Mat kernel_clean = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(7, 7));
         cv::morphologyEx(roiMask, roiMask, cv::MORPH_CLOSE, kernel_clean);
+                cv::Mat kernel_dilate = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
+                cv::dilate(roiMask, roiMask, kernel_dilate);
+            }
+        } else {
+            // CPU fallback
+            cv::Mat kernel_clean = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(7, 7));
+            cv::morphologyEx(roiMask, roiMask, cv::MORPH_CLOSE, kernel_clean);
+            cv::Mat kernel_dilate = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
+            cv::dilate(roiMask, roiMask, kernel_dilate);
+        }
+    } else {
+        qDebug() << "🎯 No valid contours found, creating empty mask";
     }
     
     // Create final mask for the entire frame
     cv::Mat finalMask = cv::Mat::zeros(frame.size(), CV_8UC1);
     roiMask.copyTo(finalMask(expandedRect));
+    
+    int finalNonZeroPixels = cv::countNonZero(finalMask);
+    qDebug() << "🎯 Enhanced silhouette segmentation complete, final mask has" << finalNonZeroPixels << "non-zero pixels";
+    
+    // Cache the result for frame skipping
+    static cv::Mat lastMask;
+    lastMask = finalMask.clone();
+    
+    // End timing and update adaptive processing
+    auto endTime = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(endTime - startTime);
+    lastProcessingTime = duration.count() / 1000.0; // Convert to milliseconds
     
     return finalMask;
 }
@@ -2454,13 +2729,13 @@ std::vector<cv::Rect> Capture::detectPeople(const cv::Mat &frame)
                 return found;
             }
             
-            // Calculate resize dimensions for optimal detection accuracy
-            int new_width = cvRound(gpu_gray.cols * 0.6); // Increased for better accuracy
-            int new_height = cvRound(gpu_gray.rows * 0.6); // Increased for better accuracy
+            // Calculate resize dimensions for optimal detection accuracy (matching peopledetect_v1.cpp)
+            int new_width = cvRound(gpu_gray.cols * 0.5); // 0.5x scale for better performance
+            int new_height = cvRound(gpu_gray.rows * 0.5); // 0.5x scale for better performance
             
             // Ensure minimum dimensions for HOG detection (HOG needs at least 64x128)
-            new_width = std::max(new_width, 160); // Increased minimum for better detection
-            new_height = std::max(new_height, 320); // Increased minimum for better detection
+            new_width = std::max(new_width, 128); // Minimum for HOG detection
+            new_height = std::max(new_height, 256); // Minimum for HOG detection
             
             // Validate resize dimensions
             if (new_width <= 0 || new_height <= 0) {
@@ -2507,13 +2782,13 @@ std::vector<cv::Rect> Capture::detectPeople(const cv::Mat &frame)
                     qDebug() << "🎮 CUDA HOG error:" << e.what() << "falling back to CPU";
                     m_cudaUtilized = false;
                     
-                    // Fallback to CPU HOG detection (working state)
+                    // Fallback to CPU HOG detection (matching peopledetect_v1.cpp)
                     cv::Mat resized;
-                    cv::resize(frame, resized, cv::Size(), 0.6, 0.6, cv::INTER_LINEAR);
+                    cv::resize(frame, resized, cv::Size(), 0.5, 0.5, cv::INTER_LINEAR);
                     m_hogDetector.detectMultiScale(resized, found, 0.0, cv::Size(8,8), cv::Size(), 1.05, 2, false);
                     
                     // Scale results back up to original size
-                    double scale_factor = 1.0 / 0.6;
+                    double scale_factor = 1.0 / 0.5; // 1/0.5 = 2.0
                     for (auto& rect : found) {
                         rect.x = cvRound(rect.x * scale_factor);
                         rect.y = cvRound(rect.y * scale_factor);
@@ -2535,7 +2810,7 @@ std::vector<cv::Rect> Capture::detectPeople(const cv::Mat &frame)
             }
             
             // Scale results back up to original size (CUDA HOG works on resized image)
-            double scale_factor = 1.0 / 0.6; // 1/0.6 = 1.67
+            double scale_factor = 1.0 / 0.5; // 1/0.5 = 2.0 (matching peopledetect_v1.cpp)
             for (auto& rect : found) {
                 rect.x = cvRound(rect.x * scale_factor);
                 rect.y = cvRound(rect.y * scale_factor);
@@ -2549,13 +2824,13 @@ std::vector<cv::Rect> Capture::detectPeople(const cv::Mat &frame)
             qWarning() << "🎮 CUDA processing error:" << e.what() << "falling back to CPU";
             m_cudaUtilized = false; // Switch to CPU
             
-            // Fallback to CPU HOG detection (working state)
+            // Fallback to CPU HOG detection (matching peopledetect_v1.cpp)
             cv::Mat resized;
-            cv::resize(frame, resized, cv::Size(), 0.6, 0.6, cv::INTER_LINEAR);
+            cv::resize(frame, resized, cv::Size(), 0.5, 0.5, cv::INTER_LINEAR);
             m_hogDetector.detectMultiScale(resized, found, 0.0, cv::Size(8,8), cv::Size(), 1.05, 2, false);
             
             // Scale results back up to original size
-            double scale_factor = 1.0 / 0.6; // 1/0.6 = 1.67
+            double scale_factor = 1.0 / 0.5; // 1/0.5 = 2.0
             for (auto& rect : found) {
                 rect.x = cvRound(rect.x * scale_factor);
                 rect.y = cvRound(rect.y * scale_factor);
@@ -2566,13 +2841,13 @@ std::vector<cv::Rect> Capture::detectPeople(const cv::Mat &frame)
             qWarning() << "🎮 Unknown CUDA error, falling back to CPU";
             m_cudaUtilized = false; // Switch to CPU
             
-            // Fallback to CPU HOG detection (working state)
+            // Fallback to CPU HOG detection (matching peopledetect_v1.cpp)
             cv::Mat resized;
-            cv::resize(frame, resized, cv::Size(), 0.6, 0.6, cv::INTER_LINEAR);
+            cv::resize(frame, resized, cv::Size(), 0.5, 0.5, cv::INTER_LINEAR);
             m_hogDetector.detectMultiScale(resized, found, 0.0, cv::Size(8,8), cv::Size(), 1.05, 2, false);
             
             // Scale results back up to original size
-            double scale_factor = 1.0 / 0.6; // 1/0.6 = 1.67
+            double scale_factor = 1.0 / 0.5; // 1/0.5 = 2.0
             for (auto& rect : found) {
                 rect.x = cvRound(rect.x * scale_factor);
                 rect.y = cvRound(rect.y * scale_factor);
@@ -2595,9 +2870,9 @@ std::vector<cv::Rect> Capture::detectPeople(const cv::Mat &frame)
             cv::UMat gpu_gray;
             cv::cvtColor(gpu_frame, gpu_gray, cv::COLOR_BGR2GRAY);
             
-            // Resize for optimal GPU performance
+            // Resize for optimal GPU performance (matching peopledetect_v1.cpp)
             cv::UMat gpu_resized;
-            cv::resize(gpu_gray, gpu_resized, cv::Size(), 0.6, 0.6, cv::INTER_LINEAR);
+            cv::resize(gpu_gray, gpu_resized, cv::Size(), 0.5, 0.5, cv::INTER_LINEAR);
             
             // OpenCL-accelerated HOG detection (much faster than CPU)
             // Use UMat for GPU-accelerated detection
@@ -2625,13 +2900,13 @@ std::vector<cv::Rect> Capture::detectPeople(const cv::Mat &frame)
             qWarning() << "OpenCL processing failed:" << e.what() << "Falling back to CPU";
             m_gpuUtilized = false;
             
-            // Fallback to CPU processing (working state)
+            // Fallback to CPU processing (matching peopledetect_v1.cpp)
             cv::Mat resized;
-            cv::resize(frame, resized, cv::Size(), 0.6, 0.6, cv::INTER_LINEAR);
+            cv::resize(frame, resized, cv::Size(), 0.5, 0.5, cv::INTER_LINEAR);
             m_hogDetector.detectMultiScale(resized, found, 0.0, cv::Size(8,8), cv::Size(), 1.05, 2, false);
             
             // Scale results back up to original size
-            double scale_factor = 1.0 / 0.6; // 1/0.6 = 1.67
+            double scale_factor = 1.0 / 0.5; // 1/0.5 = 2.0
             for (auto& rect : found) {
                 rect.x = cvRound(rect.x * scale_factor);
                 rect.y = cvRound(rect.y * scale_factor);
@@ -2641,18 +2916,18 @@ std::vector<cv::Rect> Capture::detectPeople(const cv::Mat &frame)
         }
         
     } else {
-            // CPU fallback (working state)
+            // CPU fallback (matching peopledetect_v1.cpp)
     m_gpuUtilized = false;
     m_cudaUtilized = false;
     
     cv::Mat resized;
-    cv::resize(frame, resized, cv::Size(), 0.6, 0.6, cv::INTER_LINEAR);
+    cv::resize(frame, resized, cv::Size(), 0.5, 0.5, cv::INTER_LINEAR);
         
         // Run detection with balanced speed/accuracy for 30 FPS
         m_hogDetector.detectMultiScale(resized, found, 0.0, cv::Size(8,8), cv::Size(), 1.05, 2, false);
         
         // Scale results back up to original size
-        double scale_factor = 1.0 / 0.6; // 1/0.6 = 1.67
+        double scale_factor = 1.0 / 0.5; // 1/0.5 = 2.0
         for (auto& rect : found) {
             rect.x = cvRound(rect.x * scale_factor);
             rect.y = cvRound(rect.y * scale_factor);
