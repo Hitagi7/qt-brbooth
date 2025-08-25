@@ -68,6 +68,13 @@ public:
     double getHandDetectionProcessingTime() const;
     void enableHandDetectionForCapture(); // Enable hand detection when capture page is shown
     void setHandDetectionEnabled(bool enabled);
+    
+    // Capture Mode Control
+    void setCaptureReady(bool ready);
+    bool isCaptureReady() const;
+    
+    // Page Reset
+    void resetCapturePage();
 
 protected:
     void resizeEvent(QResizeEvent *event) override;
@@ -148,12 +155,35 @@ private:
     qint64 totalTime;
     int frameCount;
     QElapsedTimer frameTimer;
+    int fpsFrameCount;
 
     // pass foreground
     QLabel* overlayImageLabel = nullptr;
     
     // Current frame storage
     cv::Mat m_currentFrame;
+    
+    // Segmentation members (placeholder for future implementation)
+    void* m_tfliteSegmentation;
+    void* m_segmentationWidget;
+    QThread* m_segmentationThread;
+    bool m_showSegmentation;
+    double m_segmentationConfidenceThreshold;
+    cv::Mat m_lastSegmentedFrame;
+    QMutex m_segmentationMutex;
+    QElapsedTimer m_segmentationTimer;
+    double m_lastSegmentationTime;
+    double m_segmentationFPS;
+    bool m_tfliteModelLoaded;
+    QFutureWatcher<cv::Mat>* m_segmentationWatcher;
+    bool m_processingAsync;
+    QMutex m_asyncMutex;
+    cv::Mat m_lastProcessedFrame;
+    bool m_segmentationCompleted;
+    
+    // UI elements for segmentation
+    QLabel* segmentationLabel;
+    QPushButton* segmentationButton;
     
 
 
@@ -163,6 +193,33 @@ private:
     void drawHandBoundingBoxes(cv::Mat &frame, const QList<HandDetection> &detections);
     void initializeHandDetection();
     void enableHandDetection(bool enable);
+    
+    // Segmentation Methods (placeholder implementations)
+    void setShowSegmentation(bool show);
+    bool getShowSegmentation() const;
+    void setSegmentationConfidenceThreshold(double threshold);
+    double getSegmentationConfidenceThreshold() const;
+    cv::Mat getLastSegmentedFrame() const;
+    void saveSegmentedFrame(const QString& filename);
+    double getSegmentationProcessingTime() const;
+    void setSegmentationPerformanceMode(int mode);
+    void toggleSegmentation();
+    void updateSegmentationButton();
+    bool isTFLiteModelLoaded() const;
+    void initializeTFLiteSegmentation();
+    
+    // Segmentation callback methods
+    void onSegmentationResultReady(const cv::Mat& segmentedFrame);
+    void onSegmentationError(const QString& error);
+    void onTFLiteModelLoaded(bool success);
+    void onSegmentationFinished();
+    void updateSegmentationDisplay();
+    void showSegmentationNotification(QWidget* parent, bool show);
+    
+    // Async processing
+    static cv::Mat processFrameAsync(const cv::Mat &frame, void *segmentation);
+    
+
     
     // Hand detection initialization
     
@@ -200,6 +257,9 @@ private:
     double m_handDetectionFPS;
     // HandTrackerMP removed - now using consolidated HandDetector
     QList<HandDetection> m_lastHandDetections;
+    
+    // Capture Mode State
+    bool m_captureReady;  // Only allow hand detection to trigger capture when true
 
     // Performance optimization
     QPixmap m_cachedPixmap;

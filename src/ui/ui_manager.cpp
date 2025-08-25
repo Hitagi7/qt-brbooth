@@ -98,7 +98,12 @@ void UiManager::repositionDebugPanel(QWidget *parent, QWidget *debugPanel)
 
 void UiManager::onBoundingBoxCheckBoxToggled(bool checked)
 {
-    emit boundingBoxToggled(checked);
+    Q_UNUSED(checked);
+}
+
+void UiManager::onSegmentationCheckBoxToggled(bool checked)
+{
+    Q_UNUSED(checked);
 }
 
 

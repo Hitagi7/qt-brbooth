@@ -293,18 +293,13 @@ BRBooth::BRBooth(QWidget *parent)
     connect(ui->stackedWidget, &QStackedWidget::currentChanged, this, [this](int index) {
         qDebug() << "DEBUG: Stacked widget current index changed to:" << index;
         
-        // Start camera for background, dynamic, and capture pages (so no "loading camera" delay)
-        if (index == backgroundPageIndex || index == dynamicPageIndex || index == capturePageIndex) {
-            QString pageName = "";
-            if (index == backgroundPageIndex) pageName = "Background";
-            else if (index == dynamicPageIndex) pageName = "Dynamic";
-            else if (index == capturePageIndex) pageName = "Capture";
-            
-            qDebug() << "📹 Starting camera for" << pageName << "page (index:" << index << ")...";
+        // Start camera ONLY for capture page (as requested by user)
+        if (index == capturePageIndex) {
+            qDebug() << "📹 Starting camera for Capture page (index:" << index << ")...";
             emit startCameraWorker();
         } else {
-            // Stop camera when leaving to other pages
-            qDebug() << "📹 Stopping camera (leaving to page index:" << index << ")...";
+            // Stop camera when leaving capture page
+            qDebug() << "📹 Stopping camera (leaving capture page, going to index:" << index << ")...";
             emit stopCameraWorker();
         }
         
@@ -439,10 +434,7 @@ bool BRBooth::eventFilter(QObject *obj, QEvent *event)
     if (obj == this) {
         if (event->type() == QEvent::WindowActivate) {
             qDebug() << "Window activated - resuming normal operation";
-            // Resume camera if it was paused
-            if (cameraWorker && !cameraWorker->isCameraOpen()) {
-                emit startCameraWorker();
-            }
+            // Don't auto-start camera on window activation - only start on capture page
         } else if (event->type() == QEvent::WindowDeactivate) {
             qDebug() << "Window deactivated - pausing camera to prevent crashes";
             // Pause camera to prevent crashes on alt-tab
