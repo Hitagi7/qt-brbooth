@@ -6,7 +6,9 @@
 *.moc
 moc_*.cpp
 qrc_*.cpp
+# Only ignore Qt auto-generated UI files, not custom ui_*.h files
 ui_*.h
+!include/ui/ui_*.h
 Makefile*
 *build-*
 *.qm
