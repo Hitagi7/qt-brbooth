@@ -159,13 +159,26 @@ void Dynamic::setupVideoPlayers()
 {
     qDebug() << "Dynamic::setupVideoPlayers - Started.";
 
-    // Define video paths for actual playback (these will be resolved to full paths when needed)
+    // Get the application directory and navigate to build directory
+    QString appDir = QCoreApplication::applicationDirPath();
+    // Go up one level from debug/ to the build directory
+    QString buildDir = QDir(appDir).absoluteFilePath("..");
+    
+    // Videos for template selection page (UI preview)
     QStringList actualVideoPaths;
     actualVideoPaths << "videos/video1.mp4"
                      << "videos/video2.mp4"
                      << "videos/video3.mp4"
                      << "videos/video4.mp4"
                      << "videos/video5.mp4";
+
+    // Template videos for capture interface (actual processing)
+    QStringList templateVideoPaths;
+    templateVideoPaths << buildDir + "/templates/dynamic/vidtemplate1.mp4"
+                       << buildDir + "/templates/dynamic/vidtemplate2.mp4"
+                       << buildDir + "/templates/dynamic/vidtemplate3.mp4"
+                       << buildDir + "/templates/dynamic/vidtemplate4.mp4"
+                       << buildDir + "/templates/dynamic/vidtemplate5.mp4";
 
     // Define GIF paths for thumbnails
     QStringList gifPaths;

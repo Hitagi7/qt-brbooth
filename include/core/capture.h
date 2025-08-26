@@ -23,6 +23,12 @@
 #include <QShowEvent>
 #include <QHideEvent>
 #include <opencv2/opencv.hpp>
+#include <opencv2/objdetect.hpp>
+#include <opencv2/video.hpp>
+#include <opencv2/cudaobjdetect.hpp>
+#include <opencv2/core/ocl.hpp>
+#include <opencv2/cudaimgproc.hpp>
+#include <opencv2/cudawarping.hpp>
 #include "core/videotemplate.h"   // Your custom VideoTemplate class
 #include "core/camera.h"          // Your custom Camera class
 #include "ui/foreground.h"        // Foreground class
@@ -75,6 +81,16 @@ public:
     
     // Page Reset
     void resetCapturePage();
+    // Unified Person Detection and Segmentation Control Methods
+    void setShowPersonDetection(bool show);
+    bool getShowPersonDetection() const;
+    void setPersonDetectionConfidenceThreshold(double threshold);
+    double getPersonDetectionConfidenceThreshold() const;
+    void togglePersonDetection();
+    void updatePersonDetectionButton();
+    double getPersonDetectionProcessingTime() const;
+    bool isGPUAvailable() const;
+    bool isCUDAAvailable() const;
 
 protected:
     void resizeEvent(QResizeEvent *event) override;
@@ -89,6 +105,7 @@ signals:
     void showFinalOutputPage();
     void personDetectedInFrame();
     void foregroundPathChanged(const QString &foregroundPath);
+    void handTriggeredCapture(); // Signal for hand detection to trigger capture
 
 private slots:
     void updateCameraFeed(const QImage &frame);
@@ -111,10 +128,12 @@ private slots:
     void setupStackedLayoutHybrid();
     void updateOverlayStyles();
 
-
+    // Unified Person Detection and Segmentation Slots
+    void onPersonDetectionFinished();
 
     // Hand Detection Slots
-    void onHandDetectionFinished();
+    void startHandTriggeredCountdown();
+    void onHandTriggeredCapture();
 
 private:
     // Declare these private functions here (already correct)
@@ -147,7 +166,6 @@ private:
 
     // Hybrid stacked layout components
     QStackedLayout *stackedLayout;
-    QLabel *loadingCameraLabel;
 
     // Performance tracking members
     QLabel *videoLabelFPS;
@@ -160,71 +178,20 @@ private:
     // pass foreground
     QLabel* overlayImageLabel = nullptr;
     
-    // Current frame storage
-    cv::Mat m_currentFrame;
-    
-    // Segmentation members (placeholder for future implementation)
-    void* m_tfliteSegmentation;
-    void* m_segmentationWidget;
-    QThread* m_segmentationThread;
-    bool m_showSegmentation;
-    double m_segmentationConfidenceThreshold;
-    cv::Mat m_lastSegmentedFrame;
-    QMutex m_segmentationMutex;
-    QElapsedTimer m_segmentationTimer;
-    double m_lastSegmentationTime;
-    double m_segmentationFPS;
-    bool m_tfliteModelLoaded;
-    QFutureWatcher<cv::Mat>* m_segmentationWatcher;
-    bool m_processingAsync;
-    QMutex m_asyncMutex;
-    cv::Mat m_lastProcessedFrame;
-    bool m_segmentationCompleted;
-    
-    // UI elements for segmentation
-    QLabel* segmentationLabel;
-    QPushButton* segmentationButton;
-    
 
 
-    // Hand Detection Methods
+    // Hand Detection Methods (using hand_detector.h/.cpp)
     void processFrameWithHandDetection(const cv::Mat &frame);
     void applyHandDetectionToFrame(cv::Mat &frame);
     void drawHandBoundingBoxes(cv::Mat &frame, const QList<HandDetection> &detections);
     void initializeHandDetection();
     void enableHandDetection(bool enable);
     
-    // Segmentation Methods (placeholder implementations)
-    void setShowSegmentation(bool show);
-    bool getShowSegmentation() const;
-    void setSegmentationConfidenceThreshold(double threshold);
-    double getSegmentationConfidenceThreshold() const;
-    cv::Mat getLastSegmentedFrame() const;
-    void saveSegmentedFrame(const QString& filename);
-    double getSegmentationProcessingTime() const;
-    void setSegmentationPerformanceMode(int mode);
-    void toggleSegmentation();
-    void updateSegmentationButton();
-    bool isTFLiteModelLoaded() const;
-    void initializeTFLiteSegmentation();
+    // Status overlay for key presses
+    QLabel* statusOverlay = nullptr;
     
-    // Segmentation callback methods
-    void onSegmentationResultReady(const cv::Mat& segmentedFrame);
-    void onSegmentationError(const QString& error);
-    void onTFLiteModelLoaded(bool success);
-    void onSegmentationFinished();
-    void updateSegmentationDisplay();
-    void showSegmentationNotification(QWidget* parent, bool show);
-    
-    // Async processing
-    static cv::Mat processFrameAsync(const cv::Mat &frame, void *segmentation);
-    
-
-    
-    // Hand detection initialization
-    
-    // Hand detection state
-    bool m_handDetectionEnabled;
+    // Temporarily disabled Hand detection state
+    // bool m_handDetectionEnabled;
 
     // Debug Display Members
     
@@ -241,6 +208,12 @@ private:
     QWidget *debugWidget;
     QLabel *debugLabel;
     QLabel *fpsLabel;
+    QLabel *gpuStatusLabel;
+    QLabel *cudaStatusLabel;
+    QLabel *personDetectionLabel;
+    QPushButton *personDetectionButton;
+    QLabel *personSegmentationLabel;
+    QPushButton *personSegmentationButton;
     QLabel *handDetectionLabel;
     QPushButton *handDetectionButton;
     QTimer *debugUpdateTimer;
@@ -248,24 +221,53 @@ private:
 
 
 
-    // Hand Detection Members
+    // Hand Detection Members (using hand_detector.h/.cpp)
     HandDetector *m_handDetector;
     bool m_showHandDetection;
+    bool m_handDetectionEnabled;  // Add missing member
     mutable QMutex m_handDetectionMutex;
     QElapsedTimer m_handDetectionTimer;
     double m_lastHandDetectionTime;
     double m_handDetectionFPS;
-    // HandTrackerMP removed - now using consolidated HandDetector
     QList<HandDetection> m_lastHandDetections;
+    QFuture<QList<HandDetection>> m_handDetectionFuture;
     
     // Capture Mode State
     bool m_captureReady;  // Only allow hand detection to trigger capture when true
+    
+    // Unified Person Detection and Segmentation Members
+    enum DisplayMode { NormalMode, RectangleMode, SegmentationMode };
+    DisplayMode m_displayMode;  // Three-way toggle: Normal -> Rectangles -> Segmentation -> Normal
+    double m_personDetectionFPS;
+    double m_lastPersonDetectionTime;
+    cv::Mat m_currentFrame;
+    cv::Mat m_lastSegmentedFrame;
+    mutable QMutex m_personDetectionMutex;
+    QElapsedTimer m_personDetectionTimer;
+    cv::HOGDescriptor m_hogDetector;  // CPU fallback
+    cv::HOGDescriptor m_hogDetectorDaimler;  // CPU fallback
+    cv::Ptr<cv::cuda::HOG> m_cudaHogDetector;  // CUDA-accelerated HOG detection
+    cv::Ptr<cv::BackgroundSubtractorMOG2> m_bgSubtractor;
+    bool m_useGPU;
+    bool m_useCUDA;
+    bool m_gpuUtilized;
+    bool m_cudaUtilized;
+    QFutureWatcher<cv::Mat> *m_personDetectionWatcher;
+    std::vector<cv::Rect> m_lastDetections;
 
     // Performance optimization
     QPixmap m_cachedPixmap;
 
-
-
+    // Unified Person Detection and Segmentation methods
+    void initializePersonDetection();
+    cv::Mat processFrameWithUnifiedDetection(const cv::Mat &frame);
+    cv::Mat createSegmentedFrame(const cv::Mat &frame, const std::vector<cv::Rect> &detections);
+    cv::Mat enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect &detection);
+    std::vector<cv::Rect> detectPeople(const cv::Mat &frame);
+    std::vector<cv::Rect> filterByMotion(const std::vector<cv::Rect> &detections, const cv::Mat &motionMask);
+    cv::Mat getMotionMask(const cv::Mat &frame);
+    void adjustRect(cv::Rect &r) const;
+    
     // Helper methods (implemented in .cpp)
     void updateDebugDisplay();
     void setupDebugDisplay();

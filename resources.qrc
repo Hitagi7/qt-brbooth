@@ -27,6 +27,16 @@
         <file>Icons/save.svg</file>
     </qresource>
 
+    <!-- Commented out video resources to prevent memory issues during compilation -->
+    <!--
+    <qresource prefix="/videos">
+        <file>videos/video1.mp4</file>
+        <file>videos/video2.mp4</file>
+        <file>videos/video3.mp4</file>
+        <file>videos/video4.mp4</file>
+        <file>videos/video5.mp4</file>
+    </qresource>
+    -->
     <qresource prefix="/foreground">
         <file>templates/foreground/1.png</file>
         <file>templates/foreground/2.png</file>
@@ -43,4 +53,21 @@
     </qresource>
 
 
+    <qresource prefix="/gif">
+        <file>gif templates/dynamicbg1.gif</file>
+        <file>gif templates/dynamicbg2.gif</file>
+        <file>gif templates/dynamicbg3.gif</file>
+        <file>gif templates/dynamicbg4.gif</file>
+        <file>gif templates/dynamicbg5.gif</file>
+    </qresource>
+    <!-- Commented out dynamic video resources to prevent memory issues during compilation -->
+    <!--
+    <qresource prefix="/dynamic">
+        <file>templates/dynamic/vidtemplate1.mp4</file>
+        <file>templates/dynamic/vidtemplate2.mp4</file>
+        <file>templates/dynamic/vidtemplate3.mp4</file>
+        <file>templates/dynamic/vidtemplate4.mp4</file>
+        <file>templates/dynamic/vidtemplate5.mp4</file>
+    </qresource>
+    -->
 </RCC>
