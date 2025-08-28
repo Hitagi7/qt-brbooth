@@ -10,9 +10,10 @@
 HandDetector::HandDetector(QObject *parent)
     : QObject(parent)
     , m_initialized(false)
-    , m_cudaAvailable(false)
+    ,     m_cudaAvailable(false)
     , m_cudaDeviceId(0)
     , m_detectorType("CPU")
+    , m_processingMode(ProcessingMode::CUDA_MODE)
     , m_confidenceThreshold(0.5)
     , m_showBoundingBox(true)
     , m_performanceMode(1)
@@ -151,8 +152,26 @@ QList<HandDetection> HandDetector::detect(const cv::Mat& image)
     QList<HandDetection> detections;
     
     try {
-        // Always use the new strict hand detection method
-        detections = detectHandGestures(image);
+        // Use the current processing mode
+        switch (m_processingMode) {
+            case ProcessingMode::CUDA_MODE:
+                if (m_cudaAvailable) {
+                    detections = detectCudaHandGestures(image);
+                } else {
+                    detections = detectHandGestures(image); // Fallback to CPU
+                }
+                break;
+            case ProcessingMode::OPENGL_MODE:
+                // For now, use CPU as OpenGL implementation would need additional work
+                detections = detectHandGestures(image);
+                break;
+            case ProcessingMode::CPU_MODE:
+                detections = detectHandGestures(image);
+                break;
+            default:
+                detections = detectHandGestures(image);
+                break;
+        }
         
         // Cache detections for frame skipping
         m_lastDetections = detections;
@@ -871,6 +890,44 @@ double HandDetector::getCurrentFPS() const
 int HandDetector::getTotalFramesProcessed() const
 {
     return m_totalFramesProcessed;
+}
+
+void HandDetector::switchProcessingMode()
+{
+    // Cycle through modes: CUDA -> OpenGL -> CPU -> CUDA
+    switch (m_processingMode) {
+        case ProcessingMode::CUDA_MODE:
+            m_processingMode = ProcessingMode::OPENGL_MODE;
+            m_detectorType = "OpenGL";
+            qDebug() << "🖐️ Hand detection switched to: OpenGL";
+            break;
+        case ProcessingMode::OPENGL_MODE:
+            m_processingMode = ProcessingMode::CPU_MODE;
+            m_detectorType = "CPU";
+            qDebug() << "🖐️ Hand detection switched to: CPU";
+            break;
+        case ProcessingMode::CPU_MODE:
+            m_processingMode = ProcessingMode::CUDA_MODE;
+            m_detectorType = "CUDA";
+            qDebug() << "🖐️ Hand detection switched to: CUDA";
+            break;
+    }
+    
+    emit detectorTypeChanged(m_detectorType);
+}
+
+QString HandDetector::getCurrentProcessingModeString() const
+{
+    switch (m_processingMode) {
+        case ProcessingMode::CUDA_MODE:
+            return "CUDA";
+        case ProcessingMode::OPENGL_MODE:
+            return "OpenGL";
+        case ProcessingMode::CPU_MODE:
+            return "CPU";
+        default:
+            return "Unknown";
+    }
 }
 
 // CUDA detection methods

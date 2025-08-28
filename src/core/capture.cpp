@@ -64,26 +64,9 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     , overlayImageLabel(nullptr)
     , m_personScaleFactor(1.0) // Initialize to 1.0 (normal size) - matches slider at 0
     // Unified Person Detection and Segmentation
-    , m_displayMode(NormalMode)  // Start with normal mode to prevent freezing
-    , m_personDetectionFPS(0)
-    , m_lastPersonDetectionTime(0.0)
-    , m_currentFrame()
-    , m_lastSegmentedFrame()
-    , m_personDetectionMutex()
-    , m_personDetectionTimer()
-    , m_hogDetector()
-    , m_hogDetectorDaimler(cv::Size(48, 96), cv::Size(16, 16), cv::Size(8, 8), cv::Size(8, 8), 9)
-    , m_bgSubtractor()
-    , m_useGPU(false)
-    , m_useCUDA(false)
-    , m_gpuUtilized(false)
-    , m_cudaUtilized(false)
-    , m_personDetectionWatcher(nullptr)
-    , m_lastDetections()
-    // , m_tfliteModelLoaded(false)
-    , debugWidget(nullptr)
-    , debugLabel(nullptr)
-    , fpsLabel(nullptr)
+    , debugWidget(nullptr)  // Start with normal mode to prevent freezing
+    , debugLabel(nullptr)  // Start with CUDA mode
+    , fpsLabel(nullptr)  // Start with CUDA mode
     , gpuStatusLabel(nullptr)
     , cudaStatusLabel(nullptr)
     , personDetectionLabel(nullptr)
@@ -101,9 +84,31 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     , m_handDetectionTimer()
     , m_lastHandDetectionTime(0.0)
     , m_handDetectionFPS(0)
-    , m_cachedPixmap(640, 480)
-    , m_segmentationEnabledInCapture(false)
+    , m_lastHandDetections()
+    , m_handDetectionFuture()
+    , m_captureReady(false)
+    , m_displayMode(NormalMode)
     , m_lastSegmentationMode(NormalMode)
+    , m_segmentationProcessingMode(SegmentationProcessingMode::CUDA_MODE)
+    , m_handDetectionProcessingMode(HandDetectionProcessingMode::HAND_CUDA_MODE)
+    , m_segmentationEnabledInCapture(false)
+    , m_personDetectionFPS(0)
+    , m_lastPersonDetectionTime(0.0)
+    , m_currentFrame()
+    , m_lastSegmentedFrame()
+    , m_personDetectionMutex()
+    , m_personDetectionTimer()
+    , m_hogDetector()
+    , m_hogDetectorDaimler(cv::Size(48, 96), cv::Size(16, 16), cv::Size(8, 8), cv::Size(8, 8), 9)
+    , m_cudaHogDetector()
+    , m_bgSubtractor()
+    , m_useGPU(false)
+    , m_useCUDA(false)
+    , m_gpuUtilized(false)
+    , m_cudaUtilized(false)
+    , m_personDetectionWatcher(nullptr)
+    , m_lastDetections()
+    , m_cachedPixmap(640, 480)
 {
     ui->setupUi(this);
 
@@ -1244,6 +1249,12 @@ void Capture::keyPressEvent(QKeyEvent *event)
                             status = "BLACK BG + EDGE SILHOUETTES: ENABLED";
                             break;
                     }
+                    
+                    // Add processing modes to status
+                    QString segMode = getCurrentSegmentationModeString();
+                    QString handMode = getCurrentHandDetectionModeString();
+                    status += QString(" | Seg: %1 | Hand: %2").arg(segMode).arg(handMode);
+                    
                     debugLabel->setText(status);
                     debugLabel->setStyleSheet("QLabel { color: #00ff00; font-size: 16px; font-weight: bold; }");
                 }
@@ -1316,6 +1327,32 @@ void Capture::keyPressEvent(QKeyEvent *event)
                 statusOverlay->raise();
                 
                 // Auto-hide after 2 seconds
+                QTimer::singleShot(2000, [this]() {
+                    if (statusOverlay) {
+                        statusOverlay->hide();
+                    }
+                });
+            }
+            break;
+        case Qt::Key_M:
+            // Switch processing modes for both segmentation and hand detection
+            // Cycles through: CUDA -> OpenGL -> CPU -> CUDA for both systems
+            qDebug() << "🔄 Switching processing modes for segmentation and hand detection...";
+            switchSegmentationProcessingMode();
+            switchHandDetectionProcessingMode();
+            
+            // Show combined status overlay
+            if (statusOverlay) {
+                QString segMode = getCurrentSegmentationModeString();
+                QString handMode = getCurrentHandDetectionModeString();
+                QString statusText = QString("Hand Detection and Segmentation: %1").arg(segMode);
+                statusOverlay->setText(statusText);
+                statusOverlay->resize(statusOverlay->sizeHint());
+                int x = (width() - statusOverlay->width()) / 2;
+                int y = (height() - statusOverlay->height()) / 2;
+                statusOverlay->move(x, y);
+                statusOverlay->show();
+                statusOverlay->raise();
                 QTimer::singleShot(2000, [this]() {
                     if (statusOverlay) {
                         statusOverlay->hide();
@@ -1419,6 +1456,8 @@ void Capture::updateDebugDisplay()
         QString peopleDetected = QString::number(m_lastDetections.size());
         QString modeText;
         QString segmentationStatus = m_segmentationEnabledInCapture ? "ENABLED" : "DISABLED";
+        QString segMode = getCurrentSegmentationModeString();
+        QString handMode = getCurrentHandDetectionModeString();
         
         switch (m_displayMode) {
             case NormalMode:
@@ -1431,11 +1470,13 @@ void Capture::updateDebugDisplay()
                 modeText = "BLACK BG + EDGE SILHOUETTES";
                 break;
         }
-        QString debugInfo = QString("FPS: %1 | %2 | People: %3 | Segmentation: %4")
+        QString debugInfo = QString("FPS: %1 | %2 | People: %3 | Seg: %4 [%5] | Hand: [%6]")
                            .arg(m_currentFPS)
                            .arg(modeText)
                            .arg(peopleDetected)
-                           .arg(segmentationStatus);
+                           .arg(segmentationStatus)
+                           .arg(segMode)
+                           .arg(handMode);
         debugLabel->setText(debugInfo);
     }
     
@@ -1467,9 +1508,9 @@ void Capture::updateDebugDisplay()
     if (handDetectionLabel) {
         QString handStatus = m_showHandDetection ? "ON (Tracking)" : "OFF";
         QString handTime = QString::number(m_lastHandDetectionTime * 1000, 'f', 1);
-        QString detectorType = m_handDetector ? m_handDetector->getDetectorType() : "Unknown";
+        QString handMode = getCurrentHandDetectionModeString();
         QString avgTime = m_handDetector ? QString::number(m_handDetector->getAverageProcessingTime(), 'f', 1) : "0.0";
-        handDetectionLabel->setText(QString("Hand Detection: %1 (%2ms) [%3] Avg: %4ms").arg(handStatus).arg(handTime).arg(detectorType).arg(avgTime));
+        handDetectionLabel->setText(QString("Hand Detection: %1 [%2] (%3ms) Avg: %4ms").arg(handStatus).arg(handMode).arg(handTime).arg(avgTime));
     }
     
     if (cudaStatusLabel) {
@@ -1491,6 +1532,12 @@ void Capture::updateDebugDisplay()
         } else {
             cudaStatusLabel->setStyleSheet("QLabel { color: #ff6666; font-size: 12px; }");
         }
+    }
+    
+    if (personSegmentationLabel) {
+        QString segMode = getCurrentSegmentationModeString();
+        QString segStatus = (m_displayMode == RectangleMode || m_displayMode == SegmentationMode) ? "ON" : "OFF";
+        personSegmentationLabel->setText(QString("Segmentation: %1 [%2] (%3ms)").arg(segStatus).arg(segMode).arg(m_lastPersonDetectionTime * 1000, 0, 'f', 1));
     }
     
     if (personDetectionLabel) {
@@ -2436,105 +2483,96 @@ std::vector<cv::Rect> Capture::detectPeople(const cv::Mat &frame)
 {
     std::vector<cv::Rect> found;
     
-
-    
-    if (m_useCUDA) {
-        // CUDA GPU-accelerated processing for NVIDIA GPU (PRIORITY)
-        m_gpuUtilized = false;
-        m_cudaUtilized = true;
-        
-        try {
-            // Validate frame before CUDA operations
-            if (frame.empty() || frame.cols <= 0 || frame.rows <= 0) {
-                throw cv::Exception(0, "Invalid frame for CUDA processing", "", "", 0);
-            }
-            
-            // Validate input frame dimensions before GPU operations
-            if (frame.rows <= 0 || frame.cols <= 0) {
-                qWarning() << "🎮 Invalid frame dimensions for CUDA processing:" << frame.rows << "x" << frame.cols;
-                found.clear();
-                m_cudaUtilized = false;
-                return found;
-            }
-            
-            // Upload to CUDA GPU
-            cv::cuda::GpuMat gpu_frame;
-            gpu_frame.upload(frame);
-            
-            // Validate uploaded GPU frame
-            if (gpu_frame.empty() || gpu_frame.rows <= 0 || gpu_frame.cols <= 0) {
-                qWarning() << "🎮 Invalid GPU frame dimensions after upload:" << gpu_frame.rows << "x" << gpu_frame.cols;
-                found.clear();
-                m_cudaUtilized = false;
-                return found;
-            }
-            
-            // Convert to grayscale on GPU
-            cv::cuda::GpuMat gpu_gray;
-            cv::cuda::cvtColor(gpu_frame, gpu_gray, cv::COLOR_BGR2GRAY);
-            
-            // Validate grayscale GPU frame
-            if (gpu_gray.empty() || gpu_gray.rows <= 0 || gpu_gray.cols <= 0) {
-                qWarning() << "🎮 Invalid grayscale GPU frame dimensions:" << gpu_gray.rows << "x" << gpu_gray.cols;
-                found.clear();
-                m_cudaUtilized = false;
-                return found;
-            }
-            
-            // Calculate resize dimensions for optimal detection accuracy (matching peopledetect_v1.cpp)
-            int new_width = cvRound(gpu_gray.cols * 0.5); // 0.5x scale for better performance
-            int new_height = cvRound(gpu_gray.rows * 0.5); // 0.5x scale for better performance
-            
-            // Ensure minimum dimensions for HOG detection (HOG needs at least 64x128)
-            new_width = std::max(new_width, 128); // Minimum for HOG detection
-            new_height = std::max(new_height, 256); // Minimum for HOG detection
-            
-            // Validate resize dimensions
-            if (new_width <= 0 || new_height <= 0) {
-                qWarning() << "🎮 Invalid resize dimensions:" << new_width << "x" << new_height;
-                found.clear();
-                m_cudaUtilized = false;
-                return found;
-            }
-            
-            qDebug() << "🎮 Resizing GPU matrix to:" << new_width << "x" << new_height;
-            
-            // Resize for optimal GPU performance (ensure minimum size for HOG)
-            cv::cuda::GpuMat gpu_resized;
-            cv::cuda::resize(gpu_gray, gpu_resized, cv::Size(new_width, new_height), 0, 0, cv::INTER_LINEAR);
-            
-            // Validate resized GPU matrix
-            if (gpu_resized.empty() || gpu_resized.rows <= 0 || gpu_resized.cols <= 0) {
-                qWarning() << "🎮 Invalid resized GPU matrix dimensions:" << gpu_resized.rows << "x" << gpu_resized.cols;
-                found.clear();
-                m_cudaUtilized = false;
-                return found;
-            }
-            
-            qDebug() << "🎮 Resized GPU matrix validated - size:" << gpu_resized.rows << "x" << gpu_resized.cols;
-            
-            // CUDA HOG detection
-            if (m_cudaHogDetector && !m_cudaHogDetector.empty() && m_useCUDA) {
+    // Use the current segmentation processing mode
+    switch (m_segmentationProcessingMode) {
+        case SegmentationProcessingMode::CUDA_MODE:
+            if (m_useCUDA) {
+                // CUDA GPU-accelerated processing for NVIDIA GPU (PRIORITY)
+                m_gpuUtilized = false;
+                m_cudaUtilized = true;
+                
                 try {
-                    std::vector<cv::Rect> found_cuda;
+                    // Validate frame before CUDA operations
+                    if (frame.empty() || frame.cols <= 0 || frame.rows <= 0) {
+                        throw cv::Exception(0, "Invalid frame for CUDA processing", "", "", 0);
+                    }
                     
-                    // Simple CUDA HOG detection (working state)
-                    m_cudaHogDetector->detectMultiScale(gpu_resized, found_cuda);
+                    // Upload to CUDA GPU
+                    cv::cuda::GpuMat gpu_frame;
+                    gpu_frame.upload(frame);
                     
-                    if (!found_cuda.empty()) {
+                    // Convert to grayscale on GPU
+                    cv::cuda::GpuMat gpu_gray;
+                    cv::cuda::cvtColor(gpu_frame, gpu_gray, cv::COLOR_BGR2GRAY);
+                    
+                    // Resize on GPU for optimal performance
+                    cv::cuda::GpuMat gpu_resized;
+                    cv::cuda::resize(gpu_gray, gpu_resized, cv::Size(), 0.5, 0.5, cv::INTER_LINEAR);
+                    
+                    // Download resized frame for CUDA HOG detection
+                    cv::Mat resized;
+                    gpu_resized.download(resized);
+                    
+                    // Run CUDA-accelerated HOG detection with proper GPU memory handling
+                    if (m_cudaHogDetector) {
+                        try {
+                            std::vector<cv::Rect> found_cuda;
+                            std::vector<double> weights;
+                            
+                            // Convert CPU Mat to GPU Mat for CUDA processing
+                            cv::cuda::GpuMat gpu_resized;
+                            gpu_resized.upload(resized);
+                            
+                                                    // Run CUDA HOG detection on GPU with more lenient parameters
+                        m_cudaHogDetector->detectMultiScale(gpu_resized, found_cuda, weights);
                         found = found_cuda;
                         m_cudaUtilized = true;
-                        qDebug() << "🎮 CUDA HOG detection SUCCESS - detected" << found_cuda.size() << "people";
+                        qDebug() << "🎮 CUDA HOG: Found" << found.size() << "people using CUDA-accelerated detection";
+                        
+                        // If no detections, try with CPU as backup
+                        if (found.empty()) {
+                            qDebug() << "🎮 CUDA HOG found no people, trying CPU backup...";
+                            m_hogDetector.detectMultiScale(resized, found, 0.0, cv::Size(8,8), cv::Size(), 1.05, 2, false);
+                            qDebug() << "🎮 CPU backup found" << found.size() << "people";
+                        }
+                        } catch (const cv::Exception& e) {
+                            qWarning() << "🎮 CUDA HOG detection failed:" << e.what() << "falling back to CPU";
+                            m_cudaUtilized = false;
+                            // Fallback to CPU HOG
+                            m_hogDetector.detectMultiScale(resized, found, 0.0, cv::Size(8,8), cv::Size(), 1.05, 2, false);
+                        }
                     } else {
-                        qDebug() << "🎮 CUDA HOG completed but no people detected";
-                        found.clear();
+                        // CUDA HOG detector not available, use CPU
+                        m_cudaUtilized = false;
+                        m_hogDetector.detectMultiScale(resized, found, 0.0, cv::Size(8,8), cv::Size(), 1.05, 2, false);
+                        qDebug() << "🎮 CUDA HOG: Found" << found.size() << "people using CPU HOG (CUDA detector not available)";
+                    }
+                    
+                    // Scale results back up to original size
+                    double scale_factor = 1.0 / 0.5; // 1/0.5 = 2.0
+                    for (auto& rect : found) {
+                        rect.x = cvRound(rect.x * scale_factor);
+                        rect.y = cvRound(rect.y * scale_factor);
+                        rect.width = cvRound(rect.width * scale_factor);
+                        rect.height = cvRound(rect.height * scale_factor);
                     }
                     
                 } catch (const cv::Exception& e) {
-                    qDebug() << "🎮 CUDA HOG error:" << e.what() << "falling back to CPU";
+                    qWarning() << "🎮 CUDA HOG detection failed, falling back to CPU:" << e.what();
+                    found.clear();
                     m_cudaUtilized = false;
-                    
-                    // Fallback to CPU HOG detection (matching peopledetect_v1.cpp)
+                } catch (...) {
+                    qWarning() << "🎮 Unknown CUDA HOG detection error, falling back to CPU";
+                    found.clear();
+                    m_cudaUtilized = false;
+                }
+            } else {
+                // CUDA not available, fallback to CPU
+                qDebug() << "🎯 CUDA mode requested but not available, using CPU fallback";
+                m_gpuUtilized = false;
+                m_cudaUtilized = false;
+                
+                try {
                     cv::Mat resized;
                     cv::resize(frame, resized, cv::Size(), 0.5, 0.5, cv::INTER_LINEAR);
                     m_hogDetector.detectMultiScale(resized, found, 0.0, cv::Size(8,8), cv::Size(), 1.05, 2, false);
@@ -2547,147 +2585,100 @@ std::vector<cv::Rect> Capture::detectPeople(const cv::Mat &frame)
                         rect.width = cvRound(rect.width * scale_factor);
                         rect.height = cvRound(rect.height * scale_factor);
                     }
+                    qDebug() << "🎯 CUDA fallback: Found" << found.size() << "people using CPU HOG";
+                } catch (const cv::Exception& e) {
+                    qWarning() << "🎯 CUDA fallback HOG detection failed:" << e.what();
+                    found.clear();
                 }
-            } else {
-                // CUDA HOG not available - check why
-                if (!m_useCUDA) {
-                    qDebug() << "🎮 CUDA not enabled, skipping CUDA HOG";
-                } else if (!m_cudaHogDetector) {
-                    qDebug() << "🎮 CUDA HOG detector not initialized";
-                } else if (m_cudaHogDetector.empty()) {
-                    qDebug() << "🎮 CUDA HOG detector is empty";
+            }
+            break;
+        case SegmentationProcessingMode::OPENGL_MODE:
+            // OpenGL processing (for now, use CPU as fallback)
+            qDebug() << "🎯 Using OpenGL mode for segmentation (fallback to CPU)";
+            m_gpuUtilized = true;
+            m_cudaUtilized = false;
+            
+            // Use CPU HOG detection for now (optimized for performance)
+            try {
+                cv::Mat resized;
+                cv::resize(frame, resized, cv::Size(), 0.5, 0.5, cv::INTER_LINEAR);
+                m_hogDetector.detectMultiScale(resized, found, 0.0, cv::Size(8,8), cv::Size(), 1.05, 2, false);
+                
+                // Scale results back up to original size
+                double scale_factor = 1.0 / 0.5; // 1/0.5 = 2.0
+                for (auto& rect : found) {
+                    rect.x = cvRound(rect.x * scale_factor);
+                    rect.y = cvRound(rect.y * scale_factor);
+                    rect.width = cvRound(rect.width * scale_factor);
+                    rect.height = cvRound(rect.height * scale_factor);
                 }
+                qDebug() << "🎯 OpenGL mode: Found" << found.size() << "people using CPU HOG";
+            } catch (const cv::Exception& e) {
+                qWarning() << "🎯 OpenGL mode HOG detection failed:" << e.what();
                 found.clear();
-                m_cudaUtilized = false;
             }
-            
-            // Scale results back up to original size (CUDA HOG works on resized image)
-            double scale_factor = 1.0 / 0.5; // 1/0.5 = 2.0 (matching peopledetect_v1.cpp)
-            for (auto& rect : found) {
-                rect.x = cvRound(rect.x * scale_factor);
-                rect.y = cvRound(rect.y * scale_factor);
-                rect.width = cvRound(rect.width * scale_factor);
-                rect.height = cvRound(rect.height * scale_factor);
-            }
-            
-            qDebug() << "🎮 CUDA GPU: Color conversion + resize + HOG detection (GPU acceleration with CPU coordination)";
-            
-        } catch (const cv::Exception& e) {
-            qWarning() << "🎮 CUDA processing error:" << e.what() << "falling back to CPU";
-            m_cudaUtilized = false; // Switch to CPU
-            
-            // Fallback to CPU HOG detection (matching peopledetect_v1.cpp)
-            cv::Mat resized;
-            cv::resize(frame, resized, cv::Size(), 0.5, 0.5, cv::INTER_LINEAR);
-            m_hogDetector.detectMultiScale(resized, found, 0.0, cv::Size(8,8), cv::Size(), 1.05, 2, false);
-            
-            // Scale results back up to original size
-            double scale_factor = 1.0 / 0.5; // 1/0.5 = 2.0
-            for (auto& rect : found) {
-                rect.x = cvRound(rect.x * scale_factor);
-                rect.y = cvRound(rect.y * scale_factor);
-                rect.width = cvRound(rect.width * scale_factor);
-                rect.height = cvRound(rect.height * scale_factor);
-            }
-        } catch (...) {
-            qWarning() << "🎮 Unknown CUDA error, falling back to CPU";
-            m_cudaUtilized = false; // Switch to CPU
-            
-            // Fallback to CPU HOG detection (matching peopledetect_v1.cpp)
-            cv::Mat resized;
-            cv::resize(frame, resized, cv::Size(), 0.5, 0.5, cv::INTER_LINEAR);
-            m_hogDetector.detectMultiScale(resized, found, 0.0, cv::Size(8,8), cv::Size(), 1.05, 2, false);
-            
-            // Scale results back up to original size
-            double scale_factor = 1.0 / 0.5; // 1/0.5 = 2.0
-            for (auto& rect : found) {
-                rect.x = cvRound(rect.x * scale_factor);
-                rect.y = cvRound(rect.y * scale_factor);
-                rect.width = cvRound(rect.width * scale_factor);
-                rect.height = cvRound(rect.height * scale_factor);
-            }
-        }
-        
-    } else if (m_useGPU) {
-        // OpenCL GPU-accelerated processing for AMD GPU (FALLBACK)
-        m_gpuUtilized = true;
-        m_cudaUtilized = false;
-        
-        try {
-            // Upload to GPU using UMat
-            cv::UMat gpu_frame;
-            frame.copyTo(gpu_frame);
-            
-            // Convert to grayscale on GPU
-            cv::UMat gpu_gray;
-            cv::cvtColor(gpu_frame, gpu_gray, cv::COLOR_BGR2GRAY);
-            
-            // Resize for optimal GPU performance (matching peopledetect_v1.cpp)
-            cv::UMat gpu_resized;
-            cv::resize(gpu_gray, gpu_resized, cv::Size(), 0.5, 0.5, cv::INTER_LINEAR);
-            
-            // OpenCL-accelerated HOG detection (much faster than CPU)
-            // Use UMat for GPU-accelerated detection
-            std::vector<cv::Rect> found_umat;
-            std::vector<double> weights;
-            
-            // Run HOG detection on GPU using UMat
-            // Optimized parameters for better performance and accuracy
-            m_hogDetector.detectMultiScale(gpu_resized, found_umat, weights, 0.0, cv::Size(8,8), cv::Size(), 1.05, 2, false);
-            
-            // Copy results back to CPU
-            found = found_umat;
-            
-            // Scale results back up to original size
-            for (auto& rect : found) {
-                rect.x *= 2; // 1/0.5 = 2
-                rect.y *= 2;
-                rect.width *= 2;
-                rect.height *= 2;
-            }
-            
-            qDebug() << "🎮 OpenCL GPU: Color conversion + resize + HOG detection (FULL GPU ACCELERATION)";
-            
-        } catch (const cv::Exception& e) {
-            qWarning() << "OpenCL processing failed:" << e.what() << "Falling back to CPU";
+            break;
+        case SegmentationProcessingMode::CPU_MODE:
+            // CPU processing
+            qDebug() << "🎯 Using CPU mode for segmentation";
             m_gpuUtilized = false;
+            m_cudaUtilized = false;
             
-            // Fallback to CPU processing (matching peopledetect_v1.cpp)
-            cv::Mat resized;
-            cv::resize(frame, resized, cv::Size(), 0.5, 0.5, cv::INTER_LINEAR);
-            m_hogDetector.detectMultiScale(resized, found, 0.0, cv::Size(8,8), cv::Size(), 1.05, 2, false);
-            
-            // Scale results back up to original size
-            double scale_factor = 1.0 / 0.5; // 1/0.5 = 2.0
-            for (auto& rect : found) {
-                rect.x = cvRound(rect.x * scale_factor);
-                rect.y = cvRound(rect.y * scale_factor);
-                rect.width = cvRound(rect.width * scale_factor);
-                rect.height = cvRound(rect.height * scale_factor);
+            try {
+                cv::Mat resized;
+                cv::resize(frame, resized, cv::Size(), 0.5, 0.5, cv::INTER_LINEAR);
+                // Optimized CPU HOG detection with better performance parameters
+                m_hogDetector.detectMultiScale(resized, found, 0.0, cv::Size(8,8), cv::Size(), 1.05, 2, false);
+                
+                // Scale results back up to original size
+                double scale_factor = 1.0 / 0.5; // 1/0.5 = 2.0
+                for (auto& rect : found) {
+                    rect.x = cvRound(rect.x * scale_factor);
+                    rect.y = cvRound(rect.y * scale_factor);
+                    rect.width = cvRound(rect.width * scale_factor);
+                    rect.height = cvRound(rect.height * scale_factor);
+                }
+                qDebug() << "🎯 CPU mode: Found" << found.size() << "people using CPU HOG";
+            } catch (const cv::Exception& e) {
+                qWarning() << "🎯 CPU mode HOG detection failed:" << e.what();
+                found.clear();
             }
-        }
-        
-    } else {
-            // CPU fallback (matching peopledetect_v1.cpp)
-    m_gpuUtilized = false;
-    m_cudaUtilized = false;
+            break;
+        default:
+            // Fallback to CPU
+            qDebug() << "🎯 Using default CPU mode for segmentation";
+            m_gpuUtilized = false;
+            m_cudaUtilized = false;
+            
+            try {
+                cv::Mat resized;
+                cv::resize(frame, resized, cv::Size(), 0.5, 0.5, cv::INTER_LINEAR);
+                m_hogDetector.detectMultiScale(resized, found, 0.0, cv::Size(8,8), cv::Size(), 1.05, 2, false);
+                
+                // Scale results back up to original size
+                double scale_factor = 1.0 / 0.5; // 1/0.5 = 2.0
+                for (auto& rect : found) {
+                    rect.x = cvRound(rect.x * scale_factor);
+                    rect.y = cvRound(rect.y * scale_factor);
+                    rect.width = cvRound(rect.width * scale_factor);
+                    rect.height = cvRound(rect.height * scale_factor);
+                }
+                qDebug() << "🎯 Default mode: Found" << found.size() << "people using CPU HOG";
+            } catch (const cv::Exception& e) {
+                qWarning() << "🎯 Default mode HOG detection failed:" << e.what();
+                found.clear();
+            }
+            break;
+    }
     
-    cv::Mat resized;
-    cv::resize(frame, resized, cv::Size(), 0.5, 0.5, cv::INTER_LINEAR);
-        
-        // Run detection with balanced speed/accuracy for 30 FPS
-        m_hogDetector.detectMultiScale(resized, found, 0.0, cv::Size(8,8), cv::Size(), 1.05, 2, false);
-        
-        // Scale results back up to original size
-        double scale_factor = 1.0 / 0.5; // 1/0.5 = 2.0
-        for (auto& rect : found) {
-            rect.x = cvRound(rect.x * scale_factor);
-            rect.y = cvRound(rect.y * scale_factor);
-            rect.width = cvRound(rect.width * scale_factor);
-            rect.height = cvRound(rect.height * scale_factor);
+    // Debug: Log detection results
+    if (found.empty()) {
+        qDebug() << "🎯 No people detected in frame (size:" << frame.cols << "x" << frame.rows << ")";
+    } else {
+        qDebug() << "🎯 Detected" << found.size() << "people in frame";
+        for (size_t i = 0; i < found.size(); ++i) {
+            qDebug() << "  Person" << i << ":" << found[i].x << found[i].y << found[i].width << "x" << found[i].height;
         }
-        
-        qDebug() << "💻 CPU processing utilized (last resort)";
     }
     
     return found;
@@ -3228,6 +3219,87 @@ void Capture::setSegmentationMode(int mode)
         qDebug() << "🎯 Segmentation mode set to:" << displayMode;
     } else {
         qDebug() << "🎯 Cannot set segmentation mode - segmentation not enabled in capture interface";
+    }
+}
+
+void Capture::switchSegmentationProcessingMode()
+{
+    // Cycle through modes: CUDA -> OpenGL -> CPU -> CUDA
+    switch (m_segmentationProcessingMode) {
+        case SegmentationProcessingMode::CUDA_MODE:
+            m_segmentationProcessingMode = SegmentationProcessingMode::OPENGL_MODE;
+            qDebug() << "🎯 Segmentation processing switched to: OpenGL";
+            break;
+        case SegmentationProcessingMode::OPENGL_MODE:
+            m_segmentationProcessingMode = SegmentationProcessingMode::CPU_MODE;
+            qDebug() << "🎯 Segmentation processing switched to: CPU";
+            break;
+        case SegmentationProcessingMode::CPU_MODE:
+            m_segmentationProcessingMode = SegmentationProcessingMode::CUDA_MODE;
+            qDebug() << "🎯 Segmentation processing switched to: CUDA";
+            break;
+    }
+    
+    // Update UI to reflect the change
+    updateDebugDisplay();
+    
+    // Status overlay is now handled in keyPressEvent for combined display
+}
+
+void Capture::switchHandDetectionProcessingMode()
+{
+    // Cycle through modes: CUDA -> OpenGL -> CPU -> CUDA
+    switch (m_handDetectionProcessingMode) {
+        case HandDetectionProcessingMode::HAND_CUDA_MODE:
+            m_handDetectionProcessingMode = HandDetectionProcessingMode::HAND_OPENGL_MODE;
+            qDebug() << "🖐️ Hand detection processing switched to: OpenGL";
+            break;
+        case HandDetectionProcessingMode::HAND_OPENGL_MODE:
+            m_handDetectionProcessingMode = HandDetectionProcessingMode::HAND_CPU_MODE;
+            qDebug() << "🖐️ Hand detection processing switched to: CPU";
+            break;
+        case HandDetectionProcessingMode::HAND_CPU_MODE:
+            m_handDetectionProcessingMode = HandDetectionProcessingMode::HAND_CUDA_MODE;
+            qDebug() << "🖐️ Hand detection processing switched to: CUDA";
+            break;
+    }
+    
+    // Update hand detector mode if it exists
+    if (m_handDetector) {
+        m_handDetector->switchProcessingMode();
+    }
+    
+    // Update UI to reflect the change
+    updateDebugDisplay();
+    
+    // Status overlay is now handled in keyPressEvent for combined display
+}
+
+QString Capture::getCurrentSegmentationModeString() const
+{
+    switch (m_segmentationProcessingMode) {
+        case SegmentationProcessingMode::CUDA_MODE:
+            return "CUDA";
+        case SegmentationProcessingMode::OPENGL_MODE:
+            return "OpenGL";
+        case SegmentationProcessingMode::CPU_MODE:
+            return "CPU";
+        default:
+            return "Unknown";
+    }
+}
+
+QString Capture::getCurrentHandDetectionModeString() const
+{
+    switch (m_handDetectionProcessingMode) {
+        case HandDetectionProcessingMode::HAND_CUDA_MODE:
+            return "CUDA";
+        case HandDetectionProcessingMode::HAND_OPENGL_MODE:
+            return "OpenGL";
+        case HandDetectionProcessingMode::HAND_CPU_MODE:
+            return "CPU";
+        default:
+            return "Unknown";
     }
 }
 

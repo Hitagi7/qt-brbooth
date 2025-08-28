@@ -75,6 +75,10 @@ public:
     double getAverageProcessingTime() const;
     double getCurrentFPS() const;
     int getTotalFramesProcessed() const;
+    
+    // Mode switching
+    void switchProcessingMode();
+    QString getCurrentProcessingModeString() const;
 
 signals:
     void detectionCompleted(const QList<HandDetection>& detections);
@@ -246,6 +250,10 @@ private:
     cv::cuda::GpuMat m_gpuSkinMask;
     cv::cuda::GpuMat m_gpuTemp1;
     cv::cuda::GpuMat m_gpuTemp2;
+    
+    // Processing mode
+    enum ProcessingMode { CUDA_MODE, OPENGL_MODE, CPU_MODE };
+    ProcessingMode m_processingMode;
     
     // CUDA filters and processors
     cv::Ptr<cv::cuda::Filter> m_gaussianFilter;

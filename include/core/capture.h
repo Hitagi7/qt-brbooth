@@ -106,6 +106,12 @@ public:
     double getPersonDetectionProcessingTime() const;
     bool isGPUAvailable() const;
     bool isCUDAAvailable() const;
+    
+    // Mode switching methods
+    void switchSegmentationProcessingMode();
+    void switchHandDetectionProcessingMode();
+    QString getCurrentSegmentationModeString() const;
+    QString getCurrentHandDetectionModeString() const;
 
 protected:
     void resizeEvent(QResizeEvent *event) override;
@@ -261,8 +267,13 @@ private:
     
     // Unified Person Detection and Segmentation Members
     enum DisplayMode { NormalMode, RectangleMode, SegmentationMode };
+    enum SegmentationProcessingMode { CUDA_MODE, OPENGL_MODE, CPU_MODE };
+    enum HandDetectionProcessingMode { HAND_CUDA_MODE, HAND_OPENGL_MODE, HAND_CPU_MODE };
+    
     DisplayMode m_displayMode;  // Three-way toggle: Normal -> Rectangles -> Segmentation -> Normal
     DisplayMode m_lastSegmentationMode;  // Store the last segmentation mode when leaving capture page
+    SegmentationProcessingMode m_segmentationProcessingMode;  // CUDA/OpenGL/CPU mode for segmentation
+    HandDetectionProcessingMode m_handDetectionProcessingMode;  // CUDA/OpenGL/CPU mode for hand detection
     bool m_segmentationEnabledInCapture;  // Track if segmentation should be enabled in capture interface
     double m_personDetectionFPS;
     double m_lastPersonDetectionTime;
