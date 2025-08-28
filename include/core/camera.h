@@ -26,7 +26,7 @@ signals:
     void frameReady(const QImage &frame);
     void cameraOpened(bool success, double actual_width, double actual_height, double actual_fps);
     void error(const QString &msg);
-    // REMOVED: void firstFrameAvailable(); // No longer needed for immediate display
+    void firstFrameEmitted(); // Signal emitted when first frame is ready
 
 public slots:
     void startCamera();
@@ -47,7 +47,7 @@ private:
     int m_desiredHeight;
     double m_desiredFps;
 
-    // REMOVED: bool m_firstFrameReadySent; // No longer needed for immediate display
+    bool m_firstFrameEmitted; // Track if first frame has been emitted
 };
 
 #endif // CAMERA_H

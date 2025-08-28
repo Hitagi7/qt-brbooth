@@ -36,6 +36,7 @@ Camera::Camera(QObject *parent)
     , m_desiredWidth(1280)
     , m_desiredHeight(720)
     , m_desiredFps(60.0)
+    , m_firstFrameEmitted(false)
 {
     cameraReadTimer->setTimerType(Qt::PreciseTimer);
     connect(cameraReadTimer, &QTimer::timeout, this, &Camera::processFrame);
@@ -67,68 +68,64 @@ void Camera::startCamera()
 {
     qDebug() << "Camera: Attempting to open camera and set properties...";
 
+    // Reset first frame flag
+    m_firstFrameEmitted = false;
+
     if (cap.isOpened()) {
         cap.release();
         qDebug() << "Camera: Releasing previous camera instance.";
     }
 
-    if (!cap.open(0, cv::CAP_ANY)) {
-        qWarning() << "Camera: Error: Could not open camera with index 0.";
-        emit error("Camera not available. Check connection and drivers.");
-        emit cameraOpened(false, 0, 0, 0);
-        return;
-    }
-
-    cap.set(cv::CAP_PROP_FRAME_WIDTH, m_desiredWidth);
-    cap.set(cv::CAP_PROP_FRAME_HEIGHT, m_desiredHeight);
-    cap.set(cv::CAP_PROP_FPS, m_desiredFps);
-
-    double actual_width = cap.get(cv::CAP_PROP_FRAME_WIDTH);
-    double actual_height = cap.get(cv::CAP_PROP_FRAME_HEIGHT);
-    double actual_fps = cap.get(cv::CAP_PROP_FPS);
-
-    qDebug() << "========================================";
-    qDebug() << "Camera: Camera settings REQUESTED:" << m_desiredWidth << "x" << m_desiredHeight
-             << "@" << m_desiredFps << "FPS";
-    qDebug() << "Camera: Camera settings ACTUAL: " << actual_width << "x" << actual_height << "@"
-             << actual_fps << "FPS";
-    qDebug() << "========================================";
-
-    if (qAbs(actual_fps - m_desiredFps) > 1.0) {
-        qWarning() << "Camera: WARNING: Camera did not accept desired FPS request. Actual FPS is"
-                   << actual_fps;
-    }
-
-    if (qAbs(actual_width - m_desiredWidth) > 1.0 || qAbs(actual_height - m_desiredHeight) > 1.0) {
-        qWarning()
-            << "Camera: WARNING: Camera did not accept desired resolution. Actual resolution is"
-            << actual_width << "x" << actual_height;
-    }
-
-    // ✅ Emit first frame immediately for faster feedback
-    cv::Mat firstFrame;
-    if (cap.read(firstFrame) && !firstFrame.empty()) {
-        cv::flip(firstFrame, firstFrame, 1);
-        QImage firstImage = cvMatToQImage(firstFrame);
-        if (!firstImage.isNull()) {
-            emit frameReady(firstImage.copy());
-            qDebug() << "Camera: First frame emitted immediately.";
+    // Start camera opening process asynchronously
+    QTimer::singleShot(0, [this]() {
+        if (!cap.open(0, cv::CAP_ANY)) {
+            qWarning() << "Camera: Error: Could not open camera with index 0.";
+            emit error("Camera not available. Check connection and drivers.");
+            emit cameraOpened(false, 0, 0, 0);
+            return;
         }
-    } else {
-        qWarning() << "Camera: Failed to read first frame immediately.";
-    }
 
-    // 🔁 Start timer for continuous frame grabbing (optimized for 30 FPS minimum)
-    int timerInterval = 33; // 33ms = ~30 FPS (1000ms / 30fps = 33.33ms)
-    if (actual_fps > 0 && actual_fps < 30) {
-        timerInterval = qMax(1, static_cast<int>(1000.0 / actual_fps));
-    }
+        // Set camera properties
+        cap.set(cv::CAP_PROP_FRAME_WIDTH, m_desiredWidth);
+        cap.set(cv::CAP_PROP_FRAME_HEIGHT, m_desiredHeight);
+        cap.set(cv::CAP_PROP_FPS, m_desiredFps);
 
-    cameraReadTimer->start(timerInterval);
-    emit cameraOpened(true, actual_width, actual_height, actual_fps);
-    qDebug() << "📹 Camera: Camera started successfully in worker thread. Timer interval:"
-             << timerInterval << "ms";
-    qDebug() << "📹 Camera: Ready for capture!";
+        // Get actual camera properties
+        double actual_width = cap.get(cv::CAP_PROP_FRAME_WIDTH);
+        double actual_height = cap.get(cv::CAP_PROP_FRAME_HEIGHT);
+        double actual_fps = cap.get(cv::CAP_PROP_FPS);
+
+        qDebug() << "========================================";
+        qDebug() << "Camera: Camera settings REQUESTED:" << m_desiredWidth << "x" << m_desiredHeight
+                 << "@" << m_desiredFps << "FPS";
+        qDebug() << "Camera: Camera settings ACTUAL: " << actual_width << "x" << actual_height << "@"
+                 << actual_fps << "FPS";
+        qDebug() << "========================================";
+
+        if (qAbs(actual_fps - m_desiredFps) > 1.0) {
+            qWarning() << "Camera: WARNING: Camera did not accept desired FPS request. Actual FPS is"
+                       << actual_fps;
+        }
+
+        if (qAbs(actual_width - m_desiredWidth) > 1.0 || qAbs(actual_height - m_desiredHeight) > 1.0) {
+            qWarning()
+                << "Camera: WARNING: Camera did not accept desired resolution. Actual resolution is"
+                << actual_width << "x" << actual_height;
+        }
+
+        // Start timer for continuous frame grabbing (optimized for 30 FPS minimum)
+        int timerInterval = 33; // 33ms = ~30 FPS (1000ms / 30fps = 33.33ms)
+        if (actual_fps > 0 && actual_fps < 30) {
+            timerInterval = qMax(1, static_cast<int>(1000.0 / actual_fps));
+        }
+
+        // Ensure timer is started in the correct thread context
+        QMetaObject::invokeMethod(cameraReadTimer, "start", Qt::QueuedConnection, Q_ARG(int, timerInterval));
+        emit cameraOpened(true, actual_width, actual_height, actual_fps);
+        qDebug() << "📹 Camera: Camera started successfully in worker thread. Timer interval:"
+                 << timerInterval << "ms";
+        qDebug() << "📹 Camera: Ready for capture!";
+    });
 }
 
 void Camera::stopCamera()
@@ -167,6 +164,13 @@ void Camera::processFrame()
         qWarning() << "Camera: Failed to convert cv::Mat to QImage.";
         loopTimer.restart();
         return;
+    }
+
+    // Emit first frame signal if this is the first frame
+    if (!m_firstFrameEmitted) {
+        m_firstFrameEmitted = true;
+        emit firstFrameEmitted();
+        qDebug() << "Camera: First frame emitted immediately.";
     }
 
     // Add error handling for frame emission

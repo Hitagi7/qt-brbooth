@@ -74,6 +74,21 @@ public:
     double getHandDetectionProcessingTime() const;
     void enableHandDetectionForCapture(); // Enable hand detection when capture page is shown
     void setHandDetectionEnabled(bool enabled);
+    void enableProcessingModes(); // Safely enable processing modes after camera is stable
+    void disableProcessingModes(); // Disable heavy processing modes for non-capture pages
+    
+    // Segmentation Control Methods for Capture Interface
+    void enableSegmentationInCapture(); // Enable segmentation when capture page is active
+    void disableSegmentationOutsideCapture(); // Disable segmentation when leaving capture page
+    void restoreSegmentationState(); // Restore last segmentation state when returning to capture
+    bool isSegmentationEnabledInCapture() const; // Check if segmentation is enabled for capture
+    void setSegmentationMode(int mode); // Set specific segmentation mode (0=Normal, 1=Rectangle, 2=Segmentation)
+    
+    // Loading camera label management
+    void showLoadingCameraLabel();
+    void hideLoadingCameraLabel();
+    
+    void handleFirstFrame();
     
     // Capture Mode Control
     void setCaptureReady(bool ready);
@@ -190,6 +205,15 @@ private:
     // Status overlay for key presses
     QLabel* statusOverlay = nullptr;
     
+    // Loading camera label
+    QLabel* loadingCameraLabel = nullptr;
+    
+    // Camera initialization tracking
+    bool m_cameraFirstInitialized = false;
+    
+
+
+    
     // Temporarily disabled Hand detection state
     // bool m_handDetectionEnabled;
 
@@ -238,6 +262,8 @@ private:
     // Unified Person Detection and Segmentation Members
     enum DisplayMode { NormalMode, RectangleMode, SegmentationMode };
     DisplayMode m_displayMode;  // Three-way toggle: Normal -> Rectangles -> Segmentation -> Normal
+    DisplayMode m_lastSegmentationMode;  // Store the last segmentation mode when leaving capture page
+    bool m_segmentationEnabledInCapture;  // Track if segmentation should be enabled in capture interface
     double m_personDetectionFPS;
     double m_lastPersonDetectionTime;
     cv::Mat m_currentFrame;

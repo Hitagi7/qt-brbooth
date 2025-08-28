@@ -513,27 +513,29 @@ void Dynamic::processVideoClick(QObject *buttonObj)
     qDebug() << "Dynamic::processVideoClick - Actual video path:" << actualVideoPath;
 
     if (!actualVideoPath.isEmpty()) {
-        // Stop and hide all GIFs before showing the fullscreen video
-        QList<QPushButton*> buttons;
-        buttons << ui->videoButton1 << ui->videoButton2 << ui->videoButton3 << ui->videoButton4 << ui->videoButton5;
-        for (QPushButton* button : buttons) {
-            if (button) {
-                QLabel* gifLabel = button->findChild<QLabel*>();
-                if (gifLabel) {
-                    QMovie* movie = gifLabel->movie();
-                    if (movie && movie->state() == QMovie::Running) {
-                        movie->stop();
-                        qDebug() << "Dynamic::processVideoClick - Stopped GIF movie for:" << button->objectName();
+        // Stop and hide all GIFs before showing the fullscreen video (asynchronously)
+        QTimer::singleShot(0, [this, actualVideoPath]() {
+            QList<QPushButton*> buttons;
+            buttons << ui->videoButton1 << ui->videoButton2 << ui->videoButton3 << ui->videoButton4 << ui->videoButton5;
+            for (QPushButton* button : buttons) {
+                if (button) {
+                    QLabel* gifLabel = button->findChild<QLabel*>();
+                    if (gifLabel) {
+                        QMovie* movie = gifLabel->movie();
+                        if (movie && movie->state() == QMovie::Running) {
+                            movie->stop();
+                            qDebug() << "Dynamic::processVideoClick - Stopped GIF movie for:" << button->objectName();
+                        }
+                        gifLabel->hide(); // Hide the GIF label
+                        qDebug() << "Dynamic::processVideoClick - Hidden GIF label " << gifLabel->objectName() << " isVisible:" << gifLabel->isVisible();
                     }
-                    gifLabel->hide(); // Hide the GIF label
-                    qDebug() << "Dynamic::processVideoClick - Hidden GIF label " << gifLabel->objectName() << " isVisible:" << gifLabel->isVisible();
                 }
             }
-        }
 
-        showOverlayVideo(actualVideoPath); // Display the fullscreen video
-        fullscreenPlayer->play();
-        qDebug() << "Playing actual video:" << actualVideoPath << " as an overlay.";
+            showOverlayVideo(actualVideoPath); // Display the fullscreen video
+            fullscreenPlayer->play();
+            qDebug() << "Playing actual video:" << actualVideoPath << " as an overlay.";
+        });
     } else {
         qWarning() << "Actual video path not found for clicked button:" << clickedButton->objectName();
     }
@@ -575,75 +577,82 @@ void Dynamic::showOverlayVideo(const QString& videoPath)
 
 void Dynamic::hideOverlayVideo()
 {
-    qDebug() << "Dynamic::hideOverlayVideo - Hiding overlay video.";
+    qDebug() << "Dynamic::hideOverlayVideo - Hiding overlay video asynchronously.";
     if (!fullscreenPlayer || !fullscreenVideoWidget) {
         qWarning() << "hideOverlayVideo: Essential components are null (player or widget).";
         return;
     }
 
+    // Stop player and hide widget immediately (non-blocking)
     fullscreenPlayer->stop();
     fullscreenPlayer->setSource(QUrl()); // Clear current media source
     fullscreenVideoWidget->hide();
     qDebug() << "Dynamic::hideOverlayVideo - Fullscreen video widget hidden.";
     qDebug() << "Dynamic::hideOverlayVideo - fullscreenVideoWidget isVisible:" << fullscreenVideoWidget->isVisible();
 
-    // Reset selection highlight on all buttons
-    if (ui->videoButton1) applyHighlightStyle(ui->videoButton1, false);
-    if (ui->videoButton2) applyHighlightStyle(ui->videoButton2, false);
-    if (ui->videoButton3) applyHighlightStyle(ui->videoButton3, false);
-    if (ui->videoButton4) applyHighlightStyle(ui->videoButton4, false);
-    if (ui->videoButton5) applyHighlightStyle(ui->videoButton5, false);
+    // Use QTimer::singleShot to make the rest of the operations non-blocking
+    QTimer::singleShot(0, [this]() {
+        // Reset selection highlight on all buttons
+        if (ui->videoButton1) applyHighlightStyle(ui->videoButton1, false);
+        if (ui->videoButton2) applyHighlightStyle(ui->videoButton2, false);
+        if (ui->videoButton3) applyHighlightStyle(ui->videoButton3, false);
+        if (ui->videoButton4) applyHighlightStyle(ui->videoButton4, false);
+        if (ui->videoButton5) applyHighlightStyle(ui->videoButton5, false);
 
-    currentSelectedVideoWidget = nullptr; // Clear selection
-    qDebug() << "Dynamic::hideOverlayVideo - Selection highlight reset.";
+        currentSelectedVideoWidget = nullptr; // Clear selection
+        qDebug() << "Dynamic::hideOverlayVideo - Selection highlight reset.";
 
-    // Restart and show all GIF thumbnails
-    QList<QPushButton*> buttons;
-    buttons << ui->videoButton1 << ui->videoButton2 << ui->videoButton3 << ui->videoButton4 << ui->videoButton5;
-    for (QPushButton* button : buttons) {
-        if (button) {
-            QLabel* gifLabel = button->findChild<QLabel*>();
-            if (gifLabel) {
-                QMovie* movie = gifLabel->movie();
-                if (movie && movie->isValid() && movie->state() != QMovie::Running) {
-                    movie->start(); // Restart GIF
-                    qDebug() << "Dynamic::hideOverlayVideo - Restarted GIF movie for:" << button->objectName();
+        // Restart and show all GIF thumbnails
+        QList<QPushButton*> buttons;
+        buttons << ui->videoButton1 << ui->videoButton2 << ui->videoButton3 << ui->videoButton4 << ui->videoButton5;
+        for (QPushButton* button : buttons) {
+            if (button) {
+                QLabel* gifLabel = button->findChild<QLabel*>();
+                if (gifLabel) {
+                    QMovie* movie = gifLabel->movie();
+                    if (movie && movie->isValid() && movie->state() != QMovie::Running) {
+                        movie->start(); // Restart GIF
+                        qDebug() << "Dynamic::hideOverlayVideo - Restarted GIF movie for:" << button->objectName();
+                    }
+                    gifLabel->show(); // Ensure GIF label is visible
+                    gifLabel->raise(); // Ensure it's on top of button elements
+                    qDebug() << "Dynamic::hideOverlayVideo - gifLabel " << gifLabel->objectName() << " isVisible after show/raise:" << gifLabel->isVisible();
                 }
-                gifLabel->show(); // Ensure GIF label is visible
-                gifLabel->raise(); // Ensure it's on top of button elements
-                qDebug() << "Dynamic::hideOverlayVideo - gifLabel " << gifLabel->objectName() << " isVisible after show/raise:" << gifLabel->isVisible();
             }
         }
-    }
 
-    // Re-enable the back button if it was disabled
-    QPushButton* backButton = ui->back;
-    if (backButton) {
-        backButton->setEnabled(true);
-        qDebug() << "Dynamic::hideOverlayVideo - Back button enabled.";
-    }
-    qDebug() << "Dynamic::hideOverlayVideo - Finished.";
+        // Re-enable the back button if it was disabled
+        QPushButton* backButton = ui->back;
+        if (backButton) {
+            backButton->setEnabled(true);
+            qDebug() << "Dynamic::hideOverlayVideo - Back button enabled.";
+        }
+        qDebug() << "Dynamic::hideOverlayVideo - Finished asynchronously.";
+    });
 }
 
 void Dynamic::stopAllGifs()
 {
-    qDebug() << "Dynamic::stopAllGifs - Stopping all GIF movies.";
+    qDebug() << "Dynamic::stopAllGifs - Stopping all GIF movies asynchronously.";
     
-    QList<QPushButton*> buttons;
-    buttons << ui->videoButton1 << ui->videoButton2 << ui->videoButton3 << ui->videoButton4 << ui->videoButton5;
-    
-    for (QPushButton* button : buttons) {
-        if (button) {
-            QLabel* gifLabel = button->findChild<QLabel*>();
-            if (gifLabel) {
-                QMovie* movie = gifLabel->movie();
-                if (movie && movie->state() == QMovie::Running) {
-                    movie->stop();
-                    qDebug() << "Dynamic::stopAllGifs - Stopped GIF movie for:" << button->objectName();
+    // Use QTimer::singleShot to make GIF stopping non-blocking
+    QTimer::singleShot(0, [this]() {
+        QList<QPushButton*> buttons;
+        buttons << ui->videoButton1 << ui->videoButton2 << ui->videoButton3 << ui->videoButton4 << ui->videoButton5;
+        
+        for (QPushButton* button : buttons) {
+            if (button) {
+                QLabel* gifLabel = button->findChild<QLabel*>();
+                if (gifLabel) {
+                    QMovie* movie = gifLabel->movie();
+                    if (movie && movie->state() == QMovie::Running) {
+                        movie->stop();
+                        qDebug() << "Dynamic::stopAllGifs - Stopped GIF movie for:" << button->objectName();
+                    }
                 }
             }
         }
-    }
-    
-    qDebug() << "Dynamic::stopAllGifs - All GIFs stopped.";
+        
+        qDebug() << "Dynamic::stopAllGifs - All GIFs stopped asynchronously.";
+    });
 }

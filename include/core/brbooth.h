@@ -5,6 +5,7 @@
 #include <QStackedWidget> // Make sure this is included for QStackedWidget
 #include <QThread> // For camera threading
 #include <QMovie> // For GIF management
+#include <QLabel> // For global loading label
 
 
 // Forward declarations to avoid circular includes and speed up compilation
@@ -46,6 +47,8 @@ private slots:
     // GIF management
     void startLandingPageGif();
     void stopLandingPageGif();
+    
+
 
     // Slots for button clicks on the landing page
     void on_staticButton_clicked();
@@ -83,5 +86,8 @@ private:
     
     // GIF management
     QMovie* m_landingPageGifMovie;
+    
+    // Transition tracking
+    bool m_transitioningToCapture;
 };
 #endif // BRBOOTH_H
