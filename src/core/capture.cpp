@@ -2130,7 +2130,10 @@ cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect 
     // GPU-accelerated edge detection for full body segmentation
     cv::Mat edges;
     
-    if (m_useCUDA) {
+    // Use the current segmentation processing mode
+    switch (m_segmentationProcessingMode) {
+        case SegmentationProcessingMode::CUDA_MODE:
+            if (m_useCUDA) {
         try {
             // Upload ROI to GPU
             cv::cuda::GpuMat gpu_roi;
@@ -2158,7 +2161,7 @@ cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect 
             // Download result back to CPU
             gpu_dilated.download(edges);
             
-            qDebug() << "🎮 GPU-accelerated edge detection applied";
+            qDebug() << "🎮 CUDA-accelerated edge detection applied for segmentation";
             
         } catch (const cv::Exception& e) {
             qWarning() << "CUDA edge detection failed, falling back to CPU:" << e.what();
@@ -2172,7 +2175,8 @@ cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect 
             cv::dilate(edges, edges, kernel_edge);
         }
     } else {
-        // CPU fallback
+        qDebug() << "🎮 CUDA not available for segmentation, falling back to CPU";
+        // Fallback to CPU processing
         cv::Mat gray;
         cv::cvtColor(roi, gray, cv::COLOR_BGR2GRAY);
         cv::Mat blurred;
@@ -2180,6 +2184,47 @@ cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect 
         cv::Canny(blurred, edges, 15, 45);
         cv::Mat kernel_edge = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
         cv::dilate(edges, edges, kernel_edge);
+    }
+    break;
+    
+    case SegmentationProcessingMode::OPENGL_MODE: {
+        qDebug() << "🎮 Using OpenGL mode for segmentation (fallback to CPU)";
+        // OpenGL processing (for now, use CPU as fallback)
+        cv::Mat gray;
+        cv::cvtColor(roi, gray, cv::COLOR_BGR2GRAY);
+        cv::Mat blurred;
+        cv::GaussianBlur(gray, blurred, cv::Size(5, 5), 0);
+        cv::Canny(blurred, edges, 15, 45);
+        cv::Mat kernel_edge = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
+        cv::dilate(edges, edges, kernel_edge);
+        break;
+    }
+    
+    case SegmentationProcessingMode::CPU_MODE: {
+        qDebug() << "🎮 Using CPU mode for segmentation";
+        // CPU processing
+        cv::Mat gray;
+        cv::cvtColor(roi, gray, cv::COLOR_BGR2GRAY);
+        cv::Mat blurred;
+        cv::GaussianBlur(gray, blurred, cv::Size(5, 5), 0);
+        cv::Canny(blurred, edges, 15, 45);
+        cv::Mat kernel_edge = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
+        cv::dilate(edges, edges, kernel_edge);
+        break;
+    }
+    
+    default: {
+        qDebug() << "🎮 Using default CPU mode for segmentation";
+        // Default fallback to CPU
+        cv::Mat gray;
+        cv::cvtColor(roi, gray, cv::COLOR_BGR2GRAY);
+        cv::Mat blurred;
+        cv::GaussianBlur(gray, blurred, cv::Size(5, 5), 0);
+        cv::Canny(blurred, edges, 15, 45);
+        cv::Mat kernel_edge = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
+        cv::dilate(edges, edges, kernel_edge);
+        break;
+    }
     }
     
     // Find contours from edges
@@ -2231,7 +2276,9 @@ cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect 
         m_bgSubtractor->apply(roi, fgMask);
         
         // GPU-accelerated morphological operations for full body
-        if (m_useCUDA) {
+        switch (m_segmentationProcessingMode) {
+            case SegmentationProcessingMode::CUDA_MODE:
+                if (m_useCUDA) {
             try {
                 // Upload mask to GPU
                 cv::cuda::GpuMat gpu_fgMask;
@@ -2255,8 +2302,17 @@ cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect 
                 
                 qDebug() << "🎮 GPU-accelerated morphological operations applied";
                 
-            } catch (const cv::Exception& e) {
-                qWarning() << "CUDA morphological operations failed, falling back to CPU:" << e.what();
+                            } catch (const cv::Exception& e) {
+                    qWarning() << "CUDA morphological operations failed, falling back to CPU:" << e.what();
+                    // Fallback to CPU processing
+                    cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(7, 7));
+                    cv::morphologyEx(fgMask, fgMask, cv::MORPH_OPEN, kernel);
+                    cv::morphologyEx(fgMask, fgMask, cv::MORPH_CLOSE, kernel);
+                    cv::Mat kernel_dilate = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
+                    cv::dilate(fgMask, fgMask, kernel_dilate);
+                }
+            } else {
+                qDebug() << "🎮 CUDA not available for morphological operations, falling back to CPU";
                 // Fallback to CPU processing
                 cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(7, 7));
                 cv::morphologyEx(fgMask, fgMask, cv::MORPH_OPEN, kernel);
@@ -2264,13 +2320,40 @@ cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect 
                 cv::Mat kernel_dilate = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
                 cv::dilate(fgMask, fgMask, kernel_dilate);
             }
-        } else {
-            // CPU fallback
-            cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(7, 7));
-            cv::morphologyEx(fgMask, fgMask, cv::MORPH_OPEN, kernel);
-            cv::morphologyEx(fgMask, fgMask, cv::MORPH_CLOSE, kernel);
-            cv::Mat kernel_dilate = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
-            cv::dilate(fgMask, fgMask, kernel_dilate);
+            break;
+            
+            case SegmentationProcessingMode::OPENGL_MODE: {
+                qDebug() << "🎮 Using OpenGL mode for morphological operations (fallback to CPU)";
+                // OpenGL processing (for now, use CPU as fallback)
+                cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(7, 7));
+                cv::morphologyEx(fgMask, fgMask, cv::MORPH_OPEN, kernel);
+                cv::morphologyEx(fgMask, fgMask, cv::MORPH_CLOSE, kernel);
+                cv::Mat kernel_dilate = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
+                cv::dilate(fgMask, fgMask, kernel_dilate);
+                break;
+            }
+            
+            case SegmentationProcessingMode::CPU_MODE: {
+                qDebug() << "🎮 Using CPU mode for morphological operations";
+                // CPU processing
+                cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(7, 7));
+                cv::morphologyEx(fgMask, fgMask, cv::MORPH_OPEN, kernel);
+                cv::morphologyEx(fgMask, fgMask, cv::MORPH_CLOSE, kernel);
+                cv::Mat kernel_dilate = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
+                cv::dilate(fgMask, fgMask, kernel_dilate);
+                break;
+            }
+            
+            default: {
+                qDebug() << "🎮 Using default CPU mode for morphological operations";
+                // Default fallback to CPU
+                cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(7, 7));
+                cv::morphologyEx(fgMask, fgMask, cv::MORPH_OPEN, kernel);
+                cv::morphologyEx(fgMask, fgMask, cv::MORPH_CLOSE, kernel);
+                cv::Mat kernel_dilate = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
+                cv::dilate(fgMask, fgMask, kernel_dilate);
+                break;
+            }
         }
         
         // Find contours from background subtraction
@@ -2285,7 +2368,9 @@ cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect 
         // GPU-accelerated color space conversion and thresholding
         cv::Mat combinedMask;
         
-        if (m_useCUDA) {
+        switch (m_segmentationProcessingMode) {
+            case SegmentationProcessingMode::CUDA_MODE:
+                if (m_useCUDA) {
             try {
                 // Upload ROI to GPU
                 cv::cuda::GpuMat gpu_roi;
@@ -2307,21 +2392,35 @@ cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect 
                 // Download result back to CPU
                 gpu_combinedMask.download(combinedMask);
                 
-                qDebug() << "🎮 GPU-accelerated color segmentation applied";
+                qDebug() << "🎮 CUDA-accelerated color segmentation applied";
                 
-            } catch (const cv::Exception& e) {
-                qWarning() << "CUDA color segmentation failed, falling back to CPU:" << e.what();
+                            } catch (const cv::Exception& e) {
+                    qWarning() << "CUDA color segmentation failed, falling back to CPU:" << e.what();
+                    // Fallback to CPU processing
+                    cv::Mat hsv;
+                    cv::cvtColor(roi, hsv, cv::COLOR_BGR2HSV);
+                    cv::Mat skinMask;
+                    cv::inRange(hsv, cv::Scalar(0, 20, 70), cv::Scalar(20, 255, 255), skinMask);
+                    cv::Mat colorMask;
+                    cv::inRange(hsv, cv::Scalar(0, 30, 50), cv::Scalar(180, 255, 255), colorMask);
+                    cv::bitwise_or(skinMask, colorMask, combinedMask);
+                }
+            } else {
+                qDebug() << "🎮 CUDA not available for color segmentation, falling back to CPU";
                 // Fallback to CPU processing
                 cv::Mat hsv;
                 cv::cvtColor(roi, hsv, cv::COLOR_BGR2HSV);
                 cv::Mat skinMask;
-                cv::inRange(hsv, cv::Scalar(0, 20, 70), cv::Scalar(20, 255, 255), skinMask);
-                cv::Mat colorMask;
-                cv::inRange(hsv, cv::Scalar(0, 30, 50), cv::Scalar(180, 255, 255), colorMask);
-                cv::bitwise_or(skinMask, colorMask, combinedMask);
-            }
-        } else {
-            // CPU fallback
+            cv::inRange(hsv, cv::Scalar(0, 20, 70), cv::Scalar(20, 255, 255), skinMask);
+            cv::Mat colorMask;
+            cv::inRange(hsv, cv::Scalar(0, 30, 50), cv::Scalar(180, 255, 255), colorMask);
+            cv::bitwise_or(skinMask, colorMask, combinedMask);
+        }
+        break;
+        
+        case SegmentationProcessingMode::OPENGL_MODE: {
+            qDebug() << "🎮 Using OpenGL mode for color segmentation (fallback to CPU)";
+            // OpenGL processing (for now, use CPU as fallback)
             cv::Mat hsv;
             cv::cvtColor(roi, hsv, cv::COLOR_BGR2HSV);
             cv::Mat skinMask;
@@ -2329,10 +2428,40 @@ cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect 
             cv::Mat colorMask;
             cv::inRange(hsv, cv::Scalar(0, 30, 50), cv::Scalar(180, 255, 255), colorMask);
             cv::bitwise_or(skinMask, colorMask, combinedMask);
+            break;
         }
         
-        // GPU-accelerated morphological operations for color segmentation
-        if (m_useCUDA) {
+        case SegmentationProcessingMode::CPU_MODE: {
+            qDebug() << "🎮 Using CPU mode for color segmentation";
+            // CPU processing
+            cv::Mat hsv;
+            cv::cvtColor(roi, hsv, cv::COLOR_BGR2HSV);
+            cv::Mat skinMask;
+            cv::inRange(hsv, cv::Scalar(0, 20, 70), cv::Scalar(20, 255, 255), skinMask);
+            cv::Mat colorMask;
+            cv::inRange(hsv, cv::Scalar(0, 30, 50), cv::Scalar(180, 255, 255), colorMask);
+            cv::bitwise_or(skinMask, colorMask, combinedMask);
+            break;
+        }
+        
+        default: {
+            qDebug() << "🎮 Using default CPU mode for color segmentation";
+            // Default fallback to CPU
+            cv::Mat hsv;
+            cv::cvtColor(roi, hsv, cv::COLOR_BGR2HSV);
+            cv::Mat skinMask;
+            cv::inRange(hsv, cv::Scalar(0, 20, 70), cv::Scalar(20, 255, 255), skinMask);
+            cv::Mat colorMask;
+            cv::inRange(hsv, cv::Scalar(0, 30, 50), cv::Scalar(180, 255, 255), colorMask);
+            cv::bitwise_or(skinMask, colorMask, combinedMask);
+            break;
+        }
+    }
+    
+    // GPU-accelerated morphological operations for color segmentation
+    switch (m_segmentationProcessingMode) {
+        case SegmentationProcessingMode::CUDA_MODE:
+            if (m_useCUDA) {
             try {
                 // Upload mask to GPU
                 cv::cuda::GpuMat gpu_combinedMask;
@@ -2351,20 +2480,50 @@ cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect 
                 // Download result back to CPU
                 gpu_combinedMask.download(combinedMask);
                 
-                qDebug() << "🎮 GPU-accelerated color morphological operations applied";
+                qDebug() << "🎮 CUDA-accelerated color morphological operations applied";
                 
-            } catch (const cv::Exception& e) {
-                qWarning() << "CUDA color morphological operations failed, falling back to CPU:" << e.what();
+                            } catch (const cv::Exception& e) {
+                    qWarning() << "CUDA color morphological operations failed, falling back to CPU:" << e.what();
+                    // Fallback to CPU processing
+                    cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
+                    cv::morphologyEx(combinedMask, combinedMask, cv::MORPH_OPEN, kernel);
+                    cv::morphologyEx(combinedMask, combinedMask, cv::MORPH_CLOSE, kernel);
+                }
+            } else {
+                qDebug() << "🎮 CUDA not available for color morphological operations, falling back to CPU";
                 // Fallback to CPU processing
                 cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
                 cv::morphologyEx(combinedMask, combinedMask, cv::MORPH_OPEN, kernel);
                 cv::morphologyEx(combinedMask, combinedMask, cv::MORPH_CLOSE, kernel);
             }
-        } else {
-            // CPU fallback
-            cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
-            cv::morphologyEx(combinedMask, combinedMask, cv::MORPH_OPEN, kernel);
-            cv::morphologyEx(combinedMask, combinedMask, cv::MORPH_CLOSE, kernel);
+            break;
+            
+            case SegmentationProcessingMode::OPENGL_MODE: {
+                qDebug() << "🎮 Using OpenGL mode for color morphological operations (fallback to CPU)";
+                // OpenGL processing (for now, use CPU as fallback)
+                cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
+                cv::morphologyEx(combinedMask, combinedMask, cv::MORPH_OPEN, kernel);
+                cv::morphologyEx(combinedMask, combinedMask, cv::MORPH_CLOSE, kernel);
+                break;
+            }
+            
+            case SegmentationProcessingMode::CPU_MODE: {
+                qDebug() << "🎮 Using CPU mode for color morphological operations";
+                // CPU processing
+                cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
+                cv::morphologyEx(combinedMask, combinedMask, cv::MORPH_OPEN, kernel);
+                cv::morphologyEx(combinedMask, combinedMask, cv::MORPH_CLOSE, kernel);
+                break;
+            }
+            
+            default: {
+                qDebug() << "🎮 Using default CPU mode for color morphological operations";
+                // Default fallback to CPU
+                cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
+                cv::morphologyEx(combinedMask, combinedMask, cv::MORPH_OPEN, kernel);
+                cv::morphologyEx(combinedMask, combinedMask, cv::MORPH_CLOSE, kernel);
+                break;
+            }
         }
         
         // Find contours from color segmentation
