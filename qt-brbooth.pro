@@ -41,6 +41,7 @@ SOURCES += \
     src/core/brbooth.cpp \
     src/core/camera.cpp \
     src/core/capture.cpp \
+    src/core/amd_gpu_verifier.cpp \
     src/ui/background.cpp \
     src/ui/foreground.cpp \
     src/ui/dynamic.cpp \
@@ -57,6 +58,7 @@ HEADERS += \
     include/core/capture.h \
     include/core/videotemplate.h \
     include/core/common_types.h \
+    include/core/amd_gpu_verifier.h \
     include/ui/background.h \
     include/ui/foreground.h \
     include/ui/dynamic.h \
@@ -88,44 +90,36 @@ else: unix:!android: target.path = /opt/$${TARGET}/bin
 RESOURCES += \
     resources.qrc
 
-# OpenCV Configuration - Using CUDA-Enabled Build
-INCLUDEPATH += C:\opencv_cuda\opencv_cuda_build\install\include
-DEPENDPATH += C:\opencv_cuda\opencv_cuda_build\install\include
+# OpenCV Configuration - Using AMD-Enabled Build with OpenGL
+INCLUDEPATH += C:\opencv_amd\opencv_amd_build\install\include
+DEPENDPATH += C:\opencv_amd\opencv_amd_build\install\include
 
-OPENCV_INSTALL_DIR = C:/opencv_cuda/opencv_cuda_build/install
+OPENCV_INSTALL_DIR = C:/opencv_amd/opencv_amd_build/install
 
 # Add OpenCV include paths
 INCLUDEPATH += $$OPENCV_INSTALL_DIR/include \
                $$OPENCV_INSTALL_DIR/include/opencv2
 
-# Add CUDA include paths
-INCLUDEPATH += "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.0/include"
-
-# CUDA libraries are already linked through OpenCV's CUDA build
-# No need to explicitly link CUDA libraries as they're included in opencv_world4110d
+# Add OpenGL include paths
+INCLUDEPATH += "C:/Program Files (x86)/Windows Kits/10/Include/10.0.22621.0/um" \
+               "C:/Program Files (x86)/Windows Kits/10/Include/10.0.22621.0/ucrt"
 
 # Add OpenCV library path
 LIBS += -L$$OPENCV_INSTALL_DIR/x64/vc17/lib \
         -lopencv_world4110d
 
-# cuDNN Configuration
-CUDNN_INSTALL_DIR = "C:/Program Files/NVIDIA/CUDNN/v9.12"
+# Add OpenGL libraries
+LIBS += -lopengl32 -lglu32
 
-# Add cuDNN include paths
-INCLUDEPATH += "$$CUDNN_INSTALL_DIR/include/13.0"
-
-# Add cuDNN library paths
-LIBS += -L"$$CUDNN_INSTALL_DIR/lib/13.0/x64"
-
-# Add cuDNN libraries
-LIBS += -lcudnn \
-        -lcudnn_adv \
-        -lcudnn_cnn \
-        -lcudnn_graph \
-        -lcudnn_ops
+# Add AMD GPU libraries (if available) - Make OpenCL optional
+# LIBS += -lOpenCL  # Commented out to avoid linking errors
 
 # Add Windows system libraries
 LIBS += -lshell32 -lkernel32 -luser32 -lgdi32 -lwinspool -lcomdlg32 -ladvapi32 -lshell32 -lole32 -loleaut32 -luuid -lodbc32 -lodbccp32
+
+# Define AMD GPU support
+DEFINES += AMD_GPU_SUPPORT
+DEFINES += OPENGL_ACCELERATION
 
 
 DEFINES += DEBUG_THROTTLE

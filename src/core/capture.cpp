@@ -1,5 +1,6 @@
 #include "core/capture.h"
 #include "core/camera.h"
+#include "core/amd_gpu_verifier.h"
 #include "ui/foreground.h"
 #include "ui_capture.h"
 #include "algorithms/hand_detection/hand_detector.h"
@@ -26,12 +27,8 @@
 #include <opencv2/objdetect.hpp>
 #include <opencv2/video.hpp>
 #include <opencv2/core/ocl.hpp>
-#include <opencv2/cudaimgproc.hpp>
-#include <opencv2/cudawarping.hpp>
-#include <opencv2/cudaobjdetect.hpp>
-#include <opencv2/cudabgsegm.hpp> // Added for cv::cuda::BackgroundSubtractorMOG2
-#include <opencv2/cudafilters.hpp> // Added for CUDA filter functions
-#include <opencv2/cudaarithm.hpp> // Added for CUDA arithmetic operations (inRange, bitwise_or)
+#include <opencv2/imgproc.hpp>
+#include <opencv2/highgui.hpp>
 #include <QtConcurrent/QtConcurrent>
 #include <QMutexLocker>
 #include <chrono>
@@ -75,9 +72,11 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     , m_hogDetectorDaimler(cv::Size(48, 96), cv::Size(16, 16), cv::Size(8, 8), cv::Size(8, 8), 9)
     , m_bgSubtractor()
     , m_useGPU(false)
-    , m_useCUDA(false)
+    , m_useOpenCL(false)
+    , m_useOpenGL(false)
     , m_gpuUtilized(false)
-    , m_cudaUtilized(false)
+    , m_openclUtilized(false)
+    , m_openglUtilized(false)
     , m_personDetectionWatcher(nullptr)
     , m_lastDetections()
     // , m_tfliteModelLoaded(false)
@@ -85,7 +84,8 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     , debugLabel(nullptr)
     , fpsLabel(nullptr)
     , gpuStatusLabel(nullptr)
-    , cudaStatusLabel(nullptr)
+    , openclStatusLabel(nullptr)
+    , openglStatusLabel(nullptr)
     , personDetectionLabel(nullptr)
     , personDetectionButton(nullptr)
     , personSegmentationLabel(nullptr)
@@ -680,8 +680,8 @@ void Capture::printPerformanceStats() {
     qDebug() << "Unified Detection Enabled:" << ((m_displayMode == RectangleMode || m_displayMode == SegmentationMode) ? "YES (ENABLED)" : "NO (DISABLED)");
     qDebug() << "GPU Acceleration:" << (m_useGPU ? "YES (OpenCL)" : "NO (CPU)");
     qDebug() << "GPU Utilization:" << (m_gpuUtilized ? "ACTIVE" : "IDLE");
-    qDebug() << "CUDA Acceleration:" << (m_useCUDA ? "YES (CUDA)" : "NO (CPU)");
-    qDebug() << "CUDA Utilization:" << (m_cudaUtilized ? "ACTIVE" : "IDLE");
+    qDebug() << "OpenCL Acceleration:" << (m_useOpenCL ? "YES (OpenCL)" : "NO (CPU)");
+    qDebug() << "OpenCL Utilization:" << (m_openclUtilized ? "ACTIVE" : "IDLE");
     qDebug() << "Person Detection FPS:" << ((m_displayMode == RectangleMode || m_displayMode == SegmentationMode) ? QString::number(m_personDetectionFPS, 'f', 1) : "N/A (DISABLED)");
     qDebug() << "Unified Detection FPS:" << ((m_displayMode == RectangleMode || m_displayMode == SegmentationMode) ? QString::number(m_personDetectionFPS, 'f', 1) : "N/A (DISABLED)");
     qDebug() << "Hand Detection FPS: N/A (DISABLED)";
@@ -940,10 +940,15 @@ void Capture::setupDebugDisplay()
     gpuStatusLabel->setStyleSheet("QLabel { color: #00aaff; font-size: 12px; }");
     debugLayout->addWidget(gpuStatusLabel);
     
-    // CUDA Status label
-    cudaStatusLabel = new QLabel("CUDA: Checking...", debugWidget);
-    cudaStatusLabel->setStyleSheet("QLabel { color: #ff00ff; font-size: 12px; }");
-    debugLayout->addWidget(cudaStatusLabel);
+    // OpenCL Status label
+    openclStatusLabel = new QLabel("OpenCL: Checking...", debugWidget);
+    openclStatusLabel->setStyleSheet("QLabel { color: #ff00ff; font-size: 12px; }");
+    debugLayout->addWidget(openclStatusLabel);
+    
+    // OpenGL Status label
+    openglStatusLabel = new QLabel("OpenGL: Checking...", debugWidget);
+    openglStatusLabel->setStyleSheet("QLabel { color: #00ff00; font-size: 12px; }");
+    debugLayout->addWidget(openglStatusLabel);
     
     // Unified Detection label
     personDetectionLabel = new QLabel("Unified Detection: OFF", debugWidget);
@@ -990,7 +995,7 @@ void Capture::setupDebugDisplay()
     
     debugWidget->show(); // Show debug widget so user can enable segmentation and hand detection
     
-    qDebug() << "Debug display setup complete - FPS, GPU, and CUDA status should be visible";
+            qDebug() << "Debug display setup complete - FPS, GPU, and OpenGL status should be visible";
 }
 
 void Capture::enableHandDetectionForCapture()
@@ -1121,7 +1126,7 @@ void Capture::keyPressEvent(QKeyEvent *event)
                 if (!isVisible) {
                     debugWidget->raise();
                     debugWidget->setStyleSheet("QWidget { background-color: rgba(0, 0, 0, 0.9); color: white; border-radius: 8px; border: 2px solid #00ff00; }");
-                    qDebug() << "Debug display SHOWN - FPS, GPU, and CUDA status visible";
+                    qDebug() << "Debug display SHOWN - FPS, GPU, and OpenGL status visible";
                 } else {
                     debugWidget->setStyleSheet("QWidget { background-color: rgba(0, 0, 0, 0.8); color: white; border-radius: 5px; }");
                     qDebug() << "Debug display HIDDEN";
@@ -1171,7 +1176,7 @@ void Capture::keyPressEvent(QKeyEvent *event)
             // Reset utilization when switching to normal mode
             if (m_displayMode == NormalMode) {
                 m_gpuUtilized = false;
-                m_cudaUtilized = false;
+                m_openclUtilized = false;
             }
             
             // Show prominent status overlay
@@ -1258,9 +1263,9 @@ void Capture::keyPressEvent(QKeyEvent *event)
                     gpuStatusLabel->setStyleSheet("QLabel { color: #00aaff; font-size: 14px; font-weight: bold; }");
                 }
                 
-                // Make CUDA status more prominent
-                if (cudaStatusLabel) {
-                    cudaStatusLabel->setStyleSheet("QLabel { color: #ff00ff; font-size: 14px; font-weight: bold; }");
+                // Make OpenCL status more prominent
+                if (openclStatusLabel) {
+                    openclStatusLabel->setStyleSheet("QLabel { color: #ff00ff; font-size: 14px; font-weight: bold; }");
                 }
                 
                 // Make person detection label more prominent
@@ -1286,8 +1291,8 @@ void Capture::keyPressEvent(QKeyEvent *event)
                         if (gpuStatusLabel) {
                             gpuStatusLabel->setStyleSheet("QLabel { color: #00aaff; font-size: 12px; }");
                         }
-                        if (cudaStatusLabel) {
-                            cudaStatusLabel->setStyleSheet("QLabel { color: #ff00ff; font-size: 12px; }");
+                        if (openclStatusLabel) {
+                            openclStatusLabel->setStyleSheet("QLabel { color: #ff00ff; font-size: 12px; }");
                         }
                         if (personDetectionLabel) {
                             personDetectionLabel->setStyleSheet("QLabel { color: #ffaa00; font-size: 12px; }");
@@ -1412,7 +1417,7 @@ void Capture::updateDebugDisplay()
     static int updateCount = 0;
     updateCount++;
     if (updateCount % 10 == 0) { // Log every 5 seconds (10 updates * 500ms)
-        qDebug() << "Debug display update #" << updateCount << "FPS:" << m_currentFPS << "GPU:" << m_useGPU << "CUDA:" << m_useCUDA;
+        qDebug() << "Debug display update #" << updateCount << "FPS:" << m_currentFPS << "GPU:" << m_useGPU << "OpenCL:" << m_useOpenCL;
     }
     
     if (debugLabel) {
@@ -1472,24 +1477,45 @@ void Capture::updateDebugDisplay()
         handDetectionLabel->setText(QString("Hand Detection: %1 (%2ms) [%3] Avg: %4ms").arg(handStatus).arg(handTime).arg(detectorType).arg(avgTime));
     }
     
-    if (cudaStatusLabel) {
-        QString cudaStatus;
-        if (m_cudaUtilized) {
-            cudaStatus = "ACTIVE (CUDA GPU)";
-        } else if (m_useCUDA) {
-            cudaStatus = "AVAILABLE (CUDA)";
+    if (openclStatusLabel) {
+        QString openclStatus;
+        if (m_openclUtilized) {
+            openclStatus = "ACTIVE (OpenCL)";
+        } else if (m_useOpenCL) {
+            openclStatus = "AVAILABLE (OpenCL)";
         } else {
-            cudaStatus = "OFF (CPU)";
+            openclStatus = "OFF (CPU)";
         }
-        cudaStatusLabel->setText(QString("CUDA: %1").arg(cudaStatus));
+        openclStatusLabel->setText(QString("OpenCL: %1").arg(openclStatus));
         
         // Change color based on utilization
-        if (m_cudaUtilized) {
-            cudaStatusLabel->setStyleSheet("QLabel { color: #00ff00; font-size: 12px; font-weight: bold; }");
-        } else if (m_useCUDA) {
-            cudaStatusLabel->setStyleSheet("QLabel { color: #ff00ff; font-size: 12px; }");
+        if (m_openclUtilized) {
+            openclStatusLabel->setStyleSheet("QLabel { color: #00ff00; font-size: 12px; font-weight: bold; }");
+        } else if (m_useOpenCL) {
+            openclStatusLabel->setStyleSheet("QLabel { color: #ff00ff; font-size: 12px; }");
         } else {
-            cudaStatusLabel->setStyleSheet("QLabel { color: #ff6666; font-size: 12px; }");
+            openclStatusLabel->setStyleSheet("QLabel { color: #ff6666; font-size: 12px; }");
+        }
+    }
+    
+    if (openglStatusLabel) {
+        QString openglStatus;
+        if (m_openglUtilized) {
+            openglStatus = "ACTIVE (OpenGL)";
+        } else if (m_useOpenGL) {
+            openglStatus = "AVAILABLE (OpenGL)";
+        } else {
+            openglStatus = "OFF (CPU)";
+        }
+        openglStatusLabel->setText(QString("OpenGL: %1").arg(openglStatus));
+        
+        // Change color based on utilization
+        if (m_openglUtilized) {
+            openglStatusLabel->setStyleSheet("QLabel { color: #00ff00; font-size: 12px; font-weight: bold; }");
+        } else if (m_useOpenGL) {
+            openglStatusLabel->setStyleSheet("QLabel { color: #00ff00; font-size: 12px; }");
+        } else {
+            openglStatusLabel->setStyleSheet("QLabel { color: #ff6666; font-size: 12px; }");
         }
     }
     
@@ -1667,18 +1693,15 @@ void Capture::initializePersonDetection()
     m_hogDetector.setSVMDetector(cv::HOGDescriptor::getDefaultPeopleDetector());
     m_hogDetectorDaimler.setSVMDetector(cv::HOGDescriptor::getDaimlerPeopleDetector());
     
-    // Initialize CUDA HOG detector for GPU acceleration
-    qDebug() << "🎮 ===== STARTING CUDA HOG INITIALIZATION =====";
+    // Initialize OpenCL HOG detector for GPU acceleration
+    qDebug() << "🎮 ===== STARTING OpenCL HOG INITIALIZATION =====";
     
-    // Check if CUDA is available
-    int cudaDevices = cv::cuda::getCudaEnabledDeviceCount();
-    qDebug() << "🎮 CUDA devices found:" << cudaDevices;
-    
-    if (cudaDevices > 0) {
+    // Check if OpenCL is available
+    if (cv::ocl::useOpenCL()) {
         try {
-            qDebug() << "🎮 Creating CUDA HOG detector...";
-            // Create CUDA HOG with default people detector
-            m_cudaHogDetector = cv::cuda::HOG::create(
+            qDebug() << "🎮 Creating OpenCL HOG detector...";
+            // Create OpenCL HOG with default people detector
+            m_openclHogDetector = cv::makePtr<cv::HOGDescriptor>(
                 cv::Size(64, 128),  // win_size
                 cv::Size(16, 16),   // block_size
                 cv::Size(8, 8),     // block_stride
@@ -1686,82 +1709,124 @@ void Capture::initializePersonDetection()
                 9                   // nbins
             );
             
-            if (!m_cudaHogDetector.empty()) {
-                qDebug() << "🎮 CUDA HOG detector created successfully";
-                m_cudaHogDetector->setSVMDetector(m_cudaHogDetector->getDefaultPeopleDetector());
-                qDebug() << "✅ CUDA HOG detector ready for GPU acceleration";
+            if (m_openclHogDetector) {
+                qDebug() << "🎮 OpenCL HOG detector created successfully";
+                m_openclHogDetector->setSVMDetector(cv::HOGDescriptor::getDefaultPeopleDetector());
+                qDebug() << "✅ OpenCL HOG detector ready for GPU acceleration";
             } else {
-                qWarning() << "⚠️ CUDA HOG creation failed - detector is empty";
-                m_cudaHogDetector = nullptr;
+                qWarning() << "⚠️ OpenCL HOG creation failed - detector is empty";
+                m_openclHogDetector = nullptr;
             }
         } catch (const cv::Exception& e) {
-            qWarning() << "⚠️ CUDA HOG initialization failed:" << e.what();
-            m_cudaHogDetector = nullptr;
+            qWarning() << "⚠️ OpenCL HOG initialization failed:" << e.what();
+            m_openclHogDetector = nullptr;
         }
     } else {
-        qDebug() << "⚠️ CUDA not available for HOG initialization";
-        m_cudaHogDetector = nullptr;
+        qDebug() << "⚠️ OpenCL not available for HOG initialization";
+        m_openclHogDetector = nullptr;
     }
-    qDebug() << "🎮 ===== FINAL CUDA HOG INITIALIZATION CHECK =====";
-    qDebug() << "🎮 CUDA HOG detector pointer:" << m_cudaHogDetector.get();
-    qDebug() << "🎮 CUDA HOG detector empty:" << (m_cudaHogDetector && m_cudaHogDetector.empty() ? "yes" : "no");
+    qDebug() << "🎮 ===== FINAL OpenCL HOG INITIALIZATION CHECK =====";
+    qDebug() << "🎮 OpenCL HOG detector pointer:" << m_openclHogDetector.get();
+    qDebug() << "🎮 OpenCL HOG detector empty:" << (!m_openclHogDetector ? "yes" : "no");
     
-    if (m_cudaHogDetector && !m_cudaHogDetector.empty()) {
-        qDebug() << "✅ CUDA HOG detector successfully initialized and ready!";
-        m_useCUDA = true; // Ensure CUDA is enabled
+    if (m_openclHogDetector) {
+        qDebug() << "✅ OpenCL HOG detector successfully initialized and ready!";
+        m_useOpenCL = true; // Ensure OpenCL is enabled
     } else {
-        qWarning() << "⚠️ CUDA HOG detector initialization failed or not available";
-        m_cudaHogDetector = nullptr;
+        qWarning() << "⚠️ OpenCL HOG detector initialization failed or not available";
+        m_openclHogDetector = nullptr;
     }
-    qDebug() << "🎮 ===== CUDA HOG INITIALIZATION COMPLETE =====";
+    qDebug() << "🎮 ===== OpenCL HOG INITIALIZATION COMPLETE =====";
     
     // Initialize background subtractor for motion detection (matching peopledetect_v1.cpp)
     m_bgSubtractor = cv::createBackgroundSubtractorMOG2(500, 16, false);
     
-    // Check if CUDA is available for NVIDIA GPU acceleration (PRIORITY)
-    try {
-        if (cv::cuda::getCudaEnabledDeviceCount() > 0) {
-            m_useCUDA = true;
-            qDebug() << "🎮 CUDA GPU acceleration enabled for NVIDIA GPU (PRIORITY)";
-            qDebug() << "CUDA devices found:" << cv::cuda::getCudaEnabledDeviceCount();
+    // Initialize AMD GPU verification and OpenCL acceleration
+    qDebug() << "🎮 ===== STARTING AMD GPU INITIALIZATION =====";
+    
+    // Initialize AMD GPU verification
+    bool amdGPUAvailable = AMDGPUVerifier::initialize();
+    
+    if (amdGPUAvailable) {
+        qDebug() << "🎮 AMD GPU detected and verified!";
+        
+        // Check OpenCL availability
+        if (cv::ocl::useOpenCL()) {
+            cv::ocl::setUseOpenCL(true);
+            m_useOpenCL = true;
+            m_useGPU = true;
             
-            // Get CUDA device info
-            cv::cuda::DeviceInfo deviceInfo(0);
-            if (deviceInfo.isCompatible()) {
-                qDebug() << "CUDA Device:" << deviceInfo.name();
-                qDebug() << "Memory:" << deviceInfo.totalMemory() / (1024*1024) << "MB";
-                qDebug() << "Compute Capability:" << deviceInfo.majorVersion() << "." << deviceInfo.minorVersion();
-                qDebug() << "CUDA will be used for color conversion and resizing operations";
-                
-                // Pre-allocate CUDA GPU memory pools for better performance
-                qDebug() << "🎮 Pre-allocating CUDA GPU memory pools...";
-                try {
-                    // Pre-allocate common frame sizes for CUDA operations
-                    cv::cuda::GpuMat cudaFramePool1, cudaFramePool2, cudaFramePool3;
-                    cudaFramePool1.create(720, 1280, CV_8UC3);  // Common camera resolution
-                    cudaFramePool2.create(480, 640, CV_8UC3);   // Smaller processing size
-                    cudaFramePool3.create(360, 640, CV_8UC1);   // Grayscale processing
-                    
-                    qDebug() << "✅ CUDA GPU memory pools pre-allocated successfully";
-                    qDebug() << "  - CUDA Frame pool 1: 1280x720 (RGB)";
-                    qDebug() << "  - CUDA Frame pool 2: 640x480 (RGB)";
-                    qDebug() << "  - CUDA Frame pool 3: 640x360 (Grayscale)";
-                    
-                    // Set CUDA device for optimal performance
-                    cv::cuda::setDevice(0);
-                    qDebug() << "CUDA device 0 set for optimal performance";
-                    
-                } catch (const cv::Exception& e) {
-                    qWarning() << "⚠️ CUDA GPU memory pool allocation failed:" << e.what();
-                }
+            qDebug() << "🎮 OpenCL acceleration enabled for AMD GPU";
+            
+            // Get GPU info
+            AMDGPUVerifier::GPUInfo gpuInfo = AMDGPUVerifier::getGPUInfo();
+            qDebug() << "GPU Name:" << gpuInfo.name;
+            qDebug() << "GPU Memory:" << gpuInfo.totalMemory / (1024*1024) << "MB";
+            qDebug() << "Compute Units:" << gpuInfo.computeUnits;
+            
+            // Test OpenCL functionality
+            if (AMDGPUVerifier::testOpenCLAcceleration()) {
+                qDebug() << "✅ OpenCL acceleration test passed!";
+                m_openclUtilized = true;
+            } else {
+                qDebug() << "⚠️ OpenCL acceleration test failed";
+                m_openclUtilized = false;
             }
+            
+            // Test OpenGL functionality
+            if (AMDGPUVerifier::testOpenGLAcceleration()) {
+                qDebug() << "✅ OpenGL acceleration available";
+                m_useOpenGL = true;
+                m_openglUtilized = true;
+            } else {
+                qDebug() << "⚠️ OpenGL acceleration not available";
+                m_useOpenGL = false;
+                m_openglUtilized = false;
+            }
+            
         } else {
-            qDebug() << "⚠️ CUDA not available, checking OpenCL";
-            m_useCUDA = false;
+            qDebug() << "⚠️ OpenCL not available in OpenCV build";
+            m_useOpenCL = false;
+            m_useGPU = false;
         }
-    } catch (...) {
-        qDebug() << "⚠️ CUDA initialization failed, checking OpenCL";
-        m_useCUDA = false;
+    } else {
+        qDebug() << "⚠️ No AMD GPU found, using CPU fallback";
+        m_useOpenCL = false;
+        m_useGPU = false;
+        m_useOpenGL = false;
+    }
+    
+    qDebug() << "🎮 ===== AMD GPU INITIALIZATION COMPLETE =====";
+    qDebug() << "OpenCL Available:" << m_useOpenCL;
+    qDebug() << "OpenGL Available:" << m_useOpenGL;
+    qDebug() << "GPU Available:" << m_useGPU;
+    
+    // Initialize background subtractor for motion detection (matching peopledetect_v1.cpp)
+    m_bgSubtractor = cv::createBackgroundSubtractorMOG2(500, 16, false);
+    
+    // Check if OpenCL is available for AMD GPU acceleration
+    if (m_useOpenCL) {
+        qDebug() << "🎮 OpenCL GPU acceleration enabled for AMD GPU";
+        
+        // Pre-allocate OpenCL memory pools for better performance
+        qDebug() << "🎮 Pre-allocating OpenCL memory pools...";
+        try {
+            // Pre-allocate common frame sizes for OpenCL operations using UMat
+            cv::UMat openclFramePool1, openclFramePool2, openclFramePool3;
+            openclFramePool1.create(720, 1280, CV_8UC3);  // Common camera resolution
+            openclFramePool2.create(480, 640, CV_8UC3);   // Smaller processing size
+            openclFramePool3.create(360, 640, CV_8UC1);   // Grayscale processing
+            
+            qDebug() << "✅ OpenCL memory pools pre-allocated successfully";
+            qDebug() << "  - OpenCL Frame pool 1: 1280x720 (RGB)";
+            qDebug() << "  - OpenCL Frame pool 2: 640x480 (RGB)";
+            qDebug() << "  - OpenCL Frame pool 3: 640x360 (Grayscale)";
+            
+        } catch (const cv::Exception& e) {
+            qWarning() << "⚠️ OpenCL memory pool allocation failed:" << e.what();
+        }
+    } else {
+        qDebug() << "⚠️ OpenCL not available, using CPU processing";
     }
     
     // Check if OpenCL is available for HOG detection (ALWAYS ENABLE FOR HOG)
@@ -1816,7 +1881,7 @@ void Capture::initializePersonDetection()
     }
     
     // Check if OpenCL is available for AMD GPU acceleration (FALLBACK)
-    if (!m_useCUDA) {
+    if (!m_useOpenCL) {
         try {
             if (cv::ocl::useOpenCL()) {
                 m_useGPU = true;
@@ -1837,37 +1902,36 @@ void Capture::initializePersonDetection()
     connect(m_personDetectionWatcher, &QFutureWatcher<cv::Mat>::finished, 
             this, &Capture::onPersonDetectionFinished);
     
-    // Set CUDA device for optimal performance
-    if (m_useCUDA) {
+    // Set OpenCL device for optimal performance
+    if (m_useOpenCL) {
         try {
-            // Check CUDA device availability before setting
-            int deviceCount = cv::cuda::getCudaEnabledDeviceCount();
-            if (deviceCount > 0) {
-                cv::cuda::setDevice(0);
-                qDebug() << "CUDA device 0 set for optimal performance";
+            // Check OpenCL device availability before setting
+            if (cv::ocl::haveOpenCL()) {
+                cv::ocl::setUseOpenCL(true);
+                qDebug() << "OpenCL enabled for optimal performance";
                 
-                // Test CUDA memory allocation
-                cv::cuda::GpuMat testMat;
+                // Test OpenCL memory allocation
+                cv::UMat testMat;
                 testMat.create(100, 100, CV_8UC3);
                 if (testMat.empty()) {
-                    throw cv::Exception(0, "CUDA memory allocation test failed", "", "", 0);
+                    throw cv::Exception(0, "OpenCL memory allocation test failed", "", "", 0);
                 }
-                qDebug() << "CUDA memory allocation test passed";
+                qDebug() << "OpenCL memory allocation test passed";
             } else {
-                qWarning() << "No CUDA devices available, disabling CUDA";
-                m_useCUDA = false;
+                qWarning() << "No OpenCL devices available, disabling OpenCL";
+                m_useOpenCL = false;
             }
         } catch (const cv::Exception& e) {
-            qWarning() << "CUDA initialization failed:" << e.what() << "Disabling CUDA";
-            m_useCUDA = false;
+            qWarning() << "OpenCL initialization failed:" << e.what() << "Disabling OpenCL";
+            m_useOpenCL = false;
         } catch (...) {
-            qWarning() << "Unknown CUDA initialization error, disabling CUDA";
-            m_useCUDA = false;
+            qWarning() << "Unknown OpenCL initialization error, disabling OpenCL";
+            m_useOpenCL = false;
         }
     }
     
     qDebug() << "Enhanced Person Detection and Segmentation initialized successfully";
-    qDebug() << "GPU Priority: CUDA (NVIDIA) > OpenCL (AMD) > CPU (fallback)";
+            qDebug() << "GPU Priority: OpenGL (AMD) > OpenCL (AMD) > CPU (fallback)";
 }
 
 cv::Mat Capture::processFrameWithUnifiedDetection(const cv::Mat &frame)
@@ -2083,38 +2147,36 @@ cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect 
     // GPU-accelerated edge detection for full body segmentation
     cv::Mat edges;
     
-    if (m_useCUDA) {
+    if (m_useOpenCL) {
         try {
-            // Upload ROI to GPU
-            cv::cuda::GpuMat gpu_roi;
-            gpu_roi.upload(roi);
+            // Upload ROI to GPU using UMat
+            cv::UMat gpu_roi;
+            roi.copyTo(gpu_roi);
             
             // Convert to grayscale on GPU
-            cv::cuda::GpuMat gpu_gray;
-            cv::cuda::cvtColor(gpu_roi, gpu_gray, cv::COLOR_BGR2GRAY);
+            cv::UMat gpu_gray;
+            cv::cvtColor(gpu_roi, gpu_gray, cv::COLOR_BGR2GRAY);
             
-            // Apply Gaussian blur on GPU using CUDA filters
-            cv::cuda::GpuMat gpu_blurred;
-            cv::Ptr<cv::cuda::Filter> gaussian_filter = cv::cuda::createGaussianFilter(gpu_gray.type(), gpu_blurred.type(), cv::Size(5, 5), 0);
-            gaussian_filter->apply(gpu_gray, gpu_blurred);
+            // Apply Gaussian blur on GPU using OpenCL
+            cv::UMat gpu_blurred;
+            cv::GaussianBlur(gpu_gray, gpu_blurred, cv::Size(5, 5), 0);
             
-            // CUDA-accelerated Canny edge detection
-            cv::cuda::GpuMat gpu_edges;
-            cv::Ptr<cv::cuda::CannyEdgeDetector> canny_detector = cv::cuda::createCannyEdgeDetector(15, 45);
-            canny_detector->detect(gpu_blurred, gpu_edges);
+            // OpenCL-accelerated Canny edge detection
+            cv::UMat gpu_edges;
+            cv::Canny(gpu_blurred, gpu_edges, 15, 45);
             
-            // CUDA-accelerated morphological dilation
-            cv::cuda::GpuMat gpu_dilated;
-            cv::Ptr<cv::cuda::Filter> dilate_filter = cv::cuda::createMorphologyFilter(cv::MORPH_DILATE, gpu_edges.type(), cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5)));
-            dilate_filter->apply(gpu_edges, gpu_dilated);
+            // OpenCL-accelerated morphological dilation
+            cv::UMat gpu_dilated;
+            cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
+            cv::dilate(gpu_edges, gpu_dilated, kernel);
             
             // Download result back to CPU
-            gpu_dilated.download(edges);
+            gpu_dilated.copyTo(edges);
             
-            qDebug() << "🎮 GPU-accelerated edge detection applied";
+            qDebug() << "🎮 OpenCL-accelerated edge detection applied";
             
         } catch (const cv::Exception& e) {
-            qWarning() << "CUDA edge detection failed, falling back to CPU:" << e.what();
+            qWarning() << "OpenCL edge detection failed, falling back to CPU:" << e.what();
             // Fallback to CPU processing
             cv::Mat gray;
             cv::cvtColor(roi, gray, cv::COLOR_BGR2GRAY);
@@ -2184,32 +2246,29 @@ cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect 
         m_bgSubtractor->apply(roi, fgMask);
         
         // GPU-accelerated morphological operations for full body
-        if (m_useCUDA) {
+        if (m_useOpenCL) {
             try {
-                // Upload mask to GPU
-                cv::cuda::GpuMat gpu_fgMask;
-                gpu_fgMask.upload(fgMask);
+                // Upload mask to GPU using UMat
+                cv::UMat gpu_fgMask;
+                fgMask.copyTo(gpu_fgMask);
                 
                 // Create morphological kernels
                 cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(7, 7));
                 cv::Mat kernel_dilate = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
                 
-                // GPU-accelerated morphological operations
-                cv::Ptr<cv::cuda::Filter> open_filter = cv::cuda::createMorphologyFilter(cv::MORPH_OPEN, gpu_fgMask.type(), kernel);
-                cv::Ptr<cv::cuda::Filter> close_filter = cv::cuda::createMorphologyFilter(cv::MORPH_CLOSE, gpu_fgMask.type(), kernel);
-                cv::Ptr<cv::cuda::Filter> dilate_filter = cv::cuda::createMorphologyFilter(cv::MORPH_DILATE, gpu_fgMask.type(), kernel_dilate);
-                
-                open_filter->apply(gpu_fgMask, gpu_fgMask);
-                close_filter->apply(gpu_fgMask, gpu_fgMask);
-                dilate_filter->apply(gpu_fgMask, gpu_fgMask);
+                // GPU-accelerated morphological operations using OpenCL
+                cv::UMat open_result, close_result, dilate_result;
+                cv::morphologyEx(gpu_fgMask, open_result, cv::MORPH_OPEN, kernel);
+                cv::morphologyEx(open_result, close_result, cv::MORPH_CLOSE, kernel);
+                cv::dilate(close_result, dilate_result, kernel_dilate);
                 
                 // Download result back to CPU
-                gpu_fgMask.download(fgMask);
+                dilate_result.copyTo(fgMask);
                 
-                qDebug() << "🎮 GPU-accelerated morphological operations applied";
+                qDebug() << "🎮 OpenCL-accelerated morphological operations applied";
                 
             } catch (const cv::Exception& e) {
-                qWarning() << "CUDA morphological operations failed, falling back to CPU:" << e.what();
+                qWarning() << "OpenCL morphological operations failed, falling back to CPU:" << e.what();
                 // Fallback to CPU processing
                 cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(7, 7));
                 cv::morphologyEx(fgMask, fgMask, cv::MORPH_OPEN, kernel);
@@ -2238,32 +2297,32 @@ cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect 
         // GPU-accelerated color space conversion and thresholding
         cv::Mat combinedMask;
         
-        if (m_useCUDA) {
+        if (m_useOpenCL) {
             try {
-                // Upload ROI to GPU
-                cv::cuda::GpuMat gpu_roi;
-                gpu_roi.upload(roi);
+                // Upload ROI to GPU using UMat
+                cv::UMat gpu_roi;
+                roi.copyTo(gpu_roi);
                 
                 // Convert to HSV on GPU
-                cv::cuda::GpuMat gpu_hsv;
-                cv::cuda::cvtColor(gpu_roi, gpu_hsv, cv::COLOR_BGR2HSV);
+                cv::UMat gpu_hsv;
+                cv::cvtColor(gpu_roi, gpu_hsv, cv::COLOR_BGR2HSV);
                 
                 // Create masks for skin-like colors and non-background colors on GPU
-                cv::cuda::GpuMat gpu_skinMask, gpu_colorMask;
-                cv::cuda::inRange(gpu_hsv, cv::Scalar(0, 20, 70), cv::Scalar(20, 255, 255), gpu_skinMask);
-                cv::cuda::inRange(gpu_hsv, cv::Scalar(0, 30, 50), cv::Scalar(180, 255, 255), gpu_colorMask);
+                cv::UMat gpu_skinMask, gpu_colorMask;
+                cv::inRange(gpu_hsv, cv::Scalar(0, 20, 70), cv::Scalar(20, 255, 255), gpu_skinMask);
+                cv::inRange(gpu_hsv, cv::Scalar(0, 30, 50), cv::Scalar(180, 255, 255), gpu_colorMask);
                 
                 // Combine masks on GPU using bitwise_or
-                cv::cuda::GpuMat gpu_combinedMask;
-                cv::cuda::bitwise_or(gpu_skinMask, gpu_colorMask, gpu_combinedMask);
+                cv::UMat gpu_combinedMask;
+                cv::bitwise_or(gpu_skinMask, gpu_colorMask, gpu_combinedMask);
                 
                 // Download result back to CPU
-                gpu_combinedMask.download(combinedMask);
+                gpu_combinedMask.copyTo(combinedMask);
                 
-                qDebug() << "🎮 GPU-accelerated color segmentation applied";
+                qDebug() << "🎮 OpenCL-accelerated color segmentation applied";
                 
             } catch (const cv::Exception& e) {
-                qWarning() << "CUDA color segmentation failed, falling back to CPU:" << e.what();
+                qWarning() << "OpenCL color segmentation failed, falling back to CPU:" << e.what();
                 // Fallback to CPU processing
                 cv::Mat hsv;
                 cv::cvtColor(roi, hsv, cv::COLOR_BGR2HSV);
@@ -2285,29 +2344,27 @@ cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect 
         }
         
         // GPU-accelerated morphological operations for color segmentation
-        if (m_useCUDA) {
+        if (m_useOpenCL) {
             try {
-                // Upload mask to GPU
-                cv::cuda::GpuMat gpu_combinedMask;
-                gpu_combinedMask.upload(combinedMask);
+                // Upload mask to GPU using UMat
+                cv::UMat gpu_combinedMask;
+                combinedMask.copyTo(gpu_combinedMask);
                 
                 // Create morphological kernel
                 cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
                 
-                // GPU-accelerated morphological operations
-                cv::Ptr<cv::cuda::Filter> open_filter = cv::cuda::createMorphologyFilter(cv::MORPH_OPEN, gpu_combinedMask.type(), kernel);
-                cv::Ptr<cv::cuda::Filter> close_filter = cv::cuda::createMorphologyFilter(cv::MORPH_CLOSE, gpu_combinedMask.type(), kernel);
-                
-                open_filter->apply(gpu_combinedMask, gpu_combinedMask);
-                close_filter->apply(gpu_combinedMask, gpu_combinedMask);
+                // GPU-accelerated morphological operations using OpenCL
+                cv::UMat open_result, close_result;
+                cv::morphologyEx(gpu_combinedMask, open_result, cv::MORPH_OPEN, kernel);
+                cv::morphologyEx(open_result, close_result, cv::MORPH_CLOSE, kernel);
                 
                 // Download result back to CPU
-                gpu_combinedMask.download(combinedMask);
+                close_result.copyTo(combinedMask);
                 
-                qDebug() << "🎮 GPU-accelerated color morphological operations applied";
+                qDebug() << "🎮 OpenCL-accelerated color morphological operations applied";
                 
             } catch (const cv::Exception& e) {
-                qWarning() << "CUDA color morphological operations failed, falling back to CPU:" << e.what();
+                qWarning() << "OpenCL color morphological operations failed, falling back to CPU:" << e.what();
                 // Fallback to CPU processing
                 cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
                 cv::morphologyEx(combinedMask, combinedMask, cv::MORPH_OPEN, kernel);
@@ -2359,30 +2416,28 @@ cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect 
         }
         
         // GPU-accelerated final morphological cleanup for full body
-        if (m_useCUDA) {
+        if (m_useOpenCL) {
             try {
-                // Upload mask to GPU
-                cv::cuda::GpuMat gpu_roiMask;
-                gpu_roiMask.upload(roiMask);
+                // Upload mask to GPU using UMat
+                cv::UMat gpu_roiMask;
+                roiMask.copyTo(gpu_roiMask);
                 
                 // Create morphological kernels
                 cv::Mat kernel_clean = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(7, 7));
                 cv::Mat kernel_dilate = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
                 
-                // GPU-accelerated morphological operations
-                cv::Ptr<cv::cuda::Filter> close_filter = cv::cuda::createMorphologyFilter(cv::MORPH_CLOSE, gpu_roiMask.type(), kernel_clean);
-                cv::Ptr<cv::cuda::Filter> dilate_filter = cv::cuda::createMorphologyFilter(cv::MORPH_DILATE, gpu_roiMask.type(), kernel_dilate);
-                
-                close_filter->apply(gpu_roiMask, gpu_roiMask);
-                dilate_filter->apply(gpu_roiMask, gpu_roiMask);
+                // GPU-accelerated morphological operations using OpenCL
+                cv::UMat close_result, dilate_result;
+                cv::morphologyEx(gpu_roiMask, close_result, cv::MORPH_CLOSE, kernel_clean);
+                cv::dilate(close_result, dilate_result, kernel_dilate);
                 
                 // Download result back to CPU
-                gpu_roiMask.download(roiMask);
+                dilate_result.copyTo(roiMask);
                 
-                qDebug() << "🎮 GPU-accelerated final morphological cleanup applied";
+                qDebug() << "🎮 OpenCL-accelerated final morphological cleanup applied";
                 
             } catch (const cv::Exception& e) {
-                qWarning() << "CUDA final morphological cleanup failed, falling back to CPU:" << e.what();
+                qWarning() << "OpenCL final morphological cleanup failed, falling back to CPU:" << e.what();
                 // Fallback to CPU processing
                 cv::Mat kernel_clean = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(7, 7));
         cv::morphologyEx(roiMask, roiMask, cv::MORPH_CLOSE, kernel_clean);
@@ -2438,46 +2493,46 @@ std::vector<cv::Rect> Capture::detectPeople(const cv::Mat &frame)
     
 
     
-    if (m_useCUDA) {
-        // CUDA GPU-accelerated processing for NVIDIA GPU (PRIORITY)
-        m_gpuUtilized = false;
-        m_cudaUtilized = true;
+    if (m_useOpenCL) {
+        // OpenCL GPU-accelerated processing for AMD GPU
+        m_gpuUtilized = true;
+        m_openclUtilized = true;
         
         try {
-            // Validate frame before CUDA operations
+            // Validate frame before OpenCL operations
             if (frame.empty() || frame.cols <= 0 || frame.rows <= 0) {
-                throw cv::Exception(0, "Invalid frame for CUDA processing", "", "", 0);
+                throw cv::Exception(0, "Invalid frame for OpenCL processing", "", "", 0);
             }
             
             // Validate input frame dimensions before GPU operations
             if (frame.rows <= 0 || frame.cols <= 0) {
-                qWarning() << "🎮 Invalid frame dimensions for CUDA processing:" << frame.rows << "x" << frame.cols;
+                qWarning() << "🎮 Invalid frame dimensions for OpenCL processing:" << frame.rows << "x" << frame.cols;
                 found.clear();
-                m_cudaUtilized = false;
+                m_openclUtilized = false;
                 return found;
             }
             
-            // Upload to CUDA GPU
-            cv::cuda::GpuMat gpu_frame;
-            gpu_frame.upload(frame);
+            // Upload to OpenCL GPU using UMat
+            cv::UMat gpu_frame;
+            frame.copyTo(gpu_frame);
             
             // Validate uploaded GPU frame
             if (gpu_frame.empty() || gpu_frame.rows <= 0 || gpu_frame.cols <= 0) {
                 qWarning() << "🎮 Invalid GPU frame dimensions after upload:" << gpu_frame.rows << "x" << gpu_frame.cols;
                 found.clear();
-                m_cudaUtilized = false;
+                m_openclUtilized = false;
                 return found;
             }
             
             // Convert to grayscale on GPU
-            cv::cuda::GpuMat gpu_gray;
-            cv::cuda::cvtColor(gpu_frame, gpu_gray, cv::COLOR_BGR2GRAY);
+            cv::UMat gpu_gray;
+            cv::cvtColor(gpu_frame, gpu_gray, cv::COLOR_BGR2GRAY);
             
             // Validate grayscale GPU frame
             if (gpu_gray.empty() || gpu_gray.rows <= 0 || gpu_gray.cols <= 0) {
                 qWarning() << "🎮 Invalid grayscale GPU frame dimensions:" << gpu_gray.rows << "x" << gpu_gray.cols;
                 found.clear();
-                m_cudaUtilized = false;
+                m_openclUtilized = false;
                 return found;
             }
             
@@ -2493,46 +2548,50 @@ std::vector<cv::Rect> Capture::detectPeople(const cv::Mat &frame)
             if (new_width <= 0 || new_height <= 0) {
                 qWarning() << "🎮 Invalid resize dimensions:" << new_width << "x" << new_height;
                 found.clear();
-                m_cudaUtilized = false;
+                m_openclUtilized = false;
                 return found;
             }
             
             qDebug() << "🎮 Resizing GPU matrix to:" << new_width << "x" << new_height;
             
             // Resize for optimal GPU performance (ensure minimum size for HOG)
-            cv::cuda::GpuMat gpu_resized;
-            cv::cuda::resize(gpu_gray, gpu_resized, cv::Size(new_width, new_height), 0, 0, cv::INTER_LINEAR);
+            cv::UMat gpu_resized;
+            cv::resize(gpu_gray, gpu_resized, cv::Size(new_width, new_height), 0, 0, cv::INTER_LINEAR);
             
             // Validate resized GPU matrix
             if (gpu_resized.empty() || gpu_resized.rows <= 0 || gpu_resized.cols <= 0) {
                 qWarning() << "🎮 Invalid resized GPU matrix dimensions:" << gpu_resized.rows << "x" << gpu_resized.cols;
                 found.clear();
-                m_cudaUtilized = false;
+                m_openclUtilized = false;
                 return found;
             }
             
             qDebug() << "🎮 Resized GPU matrix validated - size:" << gpu_resized.rows << "x" << gpu_resized.cols;
             
-            // CUDA HOG detection
-            if (m_cudaHogDetector && !m_cudaHogDetector.empty() && m_useCUDA) {
+                         // OpenCL HOG detection
+             if (m_openclHogDetector && m_useOpenCL) {
                 try {
-                    std::vector<cv::Rect> found_cuda;
+                    std::vector<cv::Rect> found_opencl;
                     
-                    // Simple CUDA HOG detection (working state)
-                    m_cudaHogDetector->detectMultiScale(gpu_resized, found_cuda);
+                    // Convert UMat to Mat for HOG detection
+                    cv::Mat cpu_resized;
+                    gpu_resized.copyTo(cpu_resized);
                     
-                    if (!found_cuda.empty()) {
-                        found = found_cuda;
-                        m_cudaUtilized = true;
-                        qDebug() << "🎮 CUDA HOG detection SUCCESS - detected" << found_cuda.size() << "people";
+                    // Simple OpenCL HOG detection (working state)
+                    m_openclHogDetector->detectMultiScale(cpu_resized, found_opencl);
+                    
+                    if (!found_opencl.empty()) {
+                        found = found_opencl;
+                        m_openclUtilized = true;
+                        qDebug() << "🎮 OpenCL HOG detection SUCCESS - detected" << found_opencl.size() << "people";
                     } else {
-                        qDebug() << "🎮 CUDA HOG completed but no people detected";
+                        qDebug() << "🎮 OpenCL HOG completed but no people detected";
                         found.clear();
                     }
                     
                 } catch (const cv::Exception& e) {
-                    qDebug() << "🎮 CUDA HOG error:" << e.what() << "falling back to CPU";
-                    m_cudaUtilized = false;
+                    qDebug() << "🎮 OpenCL HOG error:" << e.what() << "falling back to CPU";
+                    m_openclUtilized = false;
                     
                     // Fallback to CPU HOG detection (matching peopledetect_v1.cpp)
                     cv::Mat resized;
@@ -2549,19 +2608,19 @@ std::vector<cv::Rect> Capture::detectPeople(const cv::Mat &frame)
                     }
                 }
             } else {
-                // CUDA HOG not available - check why
-                if (!m_useCUDA) {
-                    qDebug() << "🎮 CUDA not enabled, skipping CUDA HOG";
-                } else if (!m_cudaHogDetector) {
-                    qDebug() << "🎮 CUDA HOG detector not initialized";
-                } else if (m_cudaHogDetector.empty()) {
-                    qDebug() << "🎮 CUDA HOG detector is empty";
+                // OpenCL HOG not available - check why
+                if (!m_useOpenCL) {
+                    qDebug() << "🎮 OpenCL not enabled, skipping OpenCL HOG";
+                } else if (!m_openclHogDetector) {
+                    qDebug() << "🎮 OpenCL HOG detector not initialized";
+                } else if (!m_openclHogDetector) {
+                    qDebug() << "🎮 OpenCL HOG detector is null";
                 }
                 found.clear();
-                m_cudaUtilized = false;
+                m_openclUtilized = false;
             }
             
-            // Scale results back up to original size (CUDA HOG works on resized image)
+            // Scale results back up to original size (OpenGL HOG works on resized image)
             double scale_factor = 1.0 / 0.5; // 1/0.5 = 2.0 (matching peopledetect_v1.cpp)
             for (auto& rect : found) {
                 rect.x = cvRound(rect.x * scale_factor);
@@ -2570,11 +2629,11 @@ std::vector<cv::Rect> Capture::detectPeople(const cv::Mat &frame)
                 rect.height = cvRound(rect.height * scale_factor);
             }
             
-            qDebug() << "🎮 CUDA GPU: Color conversion + resize + HOG detection (GPU acceleration with CPU coordination)";
+            qDebug() << "🎮 OpenCL GPU: Color conversion + resize + HOG detection (GPU acceleration with CPU coordination)";
             
         } catch (const cv::Exception& e) {
-            qWarning() << "🎮 CUDA processing error:" << e.what() << "falling back to CPU";
-            m_cudaUtilized = false; // Switch to CPU
+            qWarning() << "🎮 OpenCL processing error:" << e.what() << "falling back to CPU";
+            m_openclUtilized = false; // Switch to CPU
             
             // Fallback to CPU HOG detection (matching peopledetect_v1.cpp)
             cv::Mat resized;
@@ -2590,8 +2649,8 @@ std::vector<cv::Rect> Capture::detectPeople(const cv::Mat &frame)
                 rect.height = cvRound(rect.height * scale_factor);
             }
         } catch (...) {
-            qWarning() << "🎮 Unknown CUDA error, falling back to CPU";
-            m_cudaUtilized = false; // Switch to CPU
+            qWarning() << "🎮 Unknown OpenCL error, falling back to CPU";
+            m_openclUtilized = false; // Switch to CPU
             
             // Fallback to CPU HOG detection (matching peopledetect_v1.cpp)
             cv::Mat resized;
@@ -2611,7 +2670,7 @@ std::vector<cv::Rect> Capture::detectPeople(const cv::Mat &frame)
     } else if (m_useGPU) {
         // OpenCL GPU-accelerated processing for AMD GPU (FALLBACK)
         m_gpuUtilized = true;
-        m_cudaUtilized = false;
+        m_openclUtilized = false;
         
         try {
             // Upload to GPU using UMat
@@ -2668,9 +2727,9 @@ std::vector<cv::Rect> Capture::detectPeople(const cv::Mat &frame)
         }
         
     } else {
-            // CPU fallback (matching peopledetect_v1.cpp)
-    m_gpuUtilized = false;
-    m_cudaUtilized = false;
+                    // CPU fallback (matching peopledetect_v1.cpp)
+        m_gpuUtilized = false;
+        m_openclUtilized = false;
     
     cv::Mat resized;
     cv::resize(frame, resized, cv::Size(), 0.5, 0.5, cv::INTER_LINEAR);
@@ -2703,12 +2762,12 @@ void Capture::onPersonDetectionFinished()
                 m_lastSegmentedFrame = result.clone();
                 
                 // Update GPU utilization status
-                if (m_useCUDA) {
-                    m_cudaUtilized = true;
+                if (m_useOpenCL) {
+                    m_openclUtilized = true;
                     m_gpuUtilized = false;
                 } else if (m_useGPU) {
                     m_gpuUtilized = true;
-                    m_cudaUtilized = false;
+                    m_openclUtilized = false;
                 }
                 
                 qDebug() << "✅ Person detection processing completed - segmented frame updated, size:" << result.cols << "x" << result.rows;
@@ -2817,42 +2876,42 @@ bool Capture::isGPUAvailable() const
     return m_useGPU;
 }
 
-bool Capture::isCUDAAvailable() const
+bool Capture::isOpenCLAvailable() const
 {
-    return m_useCUDA;
+    return m_useOpenCL;
 }
 
 cv::Mat Capture::getMotionMask(const cv::Mat &frame)
 {
     cv::Mat fgMask;
     
-    if (m_useCUDA) {
-        // CUDA-accelerated background subtraction using cv::cuda::BackgroundSubtractorMOG2
+    if (m_useOpenCL) {
+        // OpenCL-accelerated background subtraction using UMat
         try {
-            // Upload to GPU
-            cv::cuda::GpuMat gpu_frame;
-            gpu_frame.upload(frame);
+            // Upload to GPU using UMat
+            cv::UMat gpu_frame;
+            frame.copyTo(gpu_frame);
             
-            // Create CUDA background subtractor if not already created
-            static cv::Ptr<cv::cuda::BackgroundSubtractorMOG2> cuda_bg_subtractor;
-            if (cuda_bg_subtractor.empty()) {
-                cuda_bg_subtractor = cv::cuda::createBackgroundSubtractorMOG2(500, 16, false);
+            // Create OpenCL background subtractor if not already created
+            static cv::Ptr<cv::BackgroundSubtractorMOG2> opencl_bg_subtractor;
+            if (opencl_bg_subtractor.empty()) {
+                opencl_bg_subtractor = cv::createBackgroundSubtractorMOG2(500, 16, false);
             }
             
-            // CUDA-accelerated background subtraction
-            cv::cuda::GpuMat gpu_fgmask;
-            cuda_bg_subtractor->apply(gpu_frame, gpu_fgmask, -1);
+            // OpenCL-accelerated background subtraction
+            cv::UMat gpu_fgmask;
+            opencl_bg_subtractor->apply(gpu_frame, gpu_fgmask, -1);
             
             // Download result to CPU
-            gpu_fgmask.download(fgMask);
+            gpu_fgmask.copyTo(fgMask);
             
-            // Apply morphological operations on CPU (OpenCV CUDA limitation)
+            // Apply morphological operations on CPU (OpenCV OpenCL limitation)
             cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
             cv::morphologyEx(fgMask, fgMask, cv::MORPH_OPEN, kernel);
             cv::morphologyEx(fgMask, fgMask, cv::MORPH_CLOSE, kernel);
             
         } catch (...) {
-            // Fallback to CPU if CUDA fails
+            // Fallback to CPU if OpenCL fails
             m_bgSubtractor->apply(frame, fgMask);
             cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
             cv::morphologyEx(fgMask, fgMask, cv::MORPH_OPEN, kernel);
@@ -3164,7 +3223,7 @@ void Capture::disableSegmentationOutsideCapture()
     
     // Reset GPU utilization flags
     m_gpuUtilized = false;
-    m_cudaUtilized = false;
+    m_openclUtilized = false;
     
     // Update UI
     updatePersonDetectionButton();
@@ -3219,7 +3278,7 @@ void Capture::setSegmentationMode(int mode)
         // Reset utilization when switching to normal mode
         if (displayMode == NormalMode) {
             m_gpuUtilized = false;
-            m_cudaUtilized = false;
+            m_openclUtilized = false;
         }
         
         this->updatePersonDetectionButton();

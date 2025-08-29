@@ -7,10 +7,8 @@
 #include <QTimer>
 #include <QElapsedTimer>
 #include <opencv2/opencv.hpp>
-#include <opencv2/cudaimgproc.hpp>
-#include <opencv2/cudafilters.hpp>
-#include <opencv2/cudafeatures2d.hpp>
-#include <opencv2/cudaarithm.hpp>
+#include <opencv2/core/ocl.hpp>
+#include <opencv2/imgproc.hpp>
 
 // Consolidated hand detection result
 struct HandDetection {
@@ -70,7 +68,7 @@ public:
 
     // Performance monitoring
     double getHandDetectionProcessingTime() const;
-    bool isCudaAvailable() const;
+    bool isOpenGLAvailable() const; // Returns OpenCL/OpenGL availability
     QString getDetectorType() const;
     double getAverageProcessingTime() const;
     double getCurrentFPS() const;
@@ -79,7 +77,7 @@ public:
 signals:
     void detectionCompleted(const QList<HandDetection>& detections);
     void processingTimeUpdated(double milliseconds);
-    void cudaError(const QString& error);
+    void openclError(const QString& error);
     void detectorTypeChanged(const QString& type);
 
 private:
@@ -131,50 +129,54 @@ private:
     void updateBackgroundModel(const cv::Mat& frame);
     cv::Mat getBackgroundModel();
 
-    // CUDA detection methods
-    QList<HandDetection> detectHandsByCudaShape(const cv::cuda::GpuMat& gpuImage);
-    QList<HandDetection> detectHandsByCudaMotion(const cv::cuda::GpuMat& gpuImage);
-    QList<HandDetection> detectHandsByCudaKeypoints(const cv::cuda::GpuMat& gpuImage);
-    
-    // CUDA image processing
-    cv::cuda::GpuMat createCudaSkinMask(const cv::cuda::GpuMat& gpuImage);
-    cv::cuda::GpuMat createCudaMotionMask(const cv::cuda::GpuMat& gpuImage);
-    std::vector<std::vector<cv::Point>> findCudaContours(const cv::cuda::GpuMat& gpuMask);
-    
-    // Hand gesture detection with CUDA
-    QList<HandDetection> detectCudaHandGestures(const cv::Mat& image);
-    QList<HandDetection> detectCudaHandGesturesOptimized(const cv::Mat& image);
+    // Hand gesture detection with OpenCL
+    QList<HandDetection> detectOpenGLHandGestures(const cv::Mat& image);
+    QList<HandDetection> detectOpenGLHandGesturesOptimized(const cv::Mat& image);
     QList<HandDetection> detectHandGesturesOptimized(const cv::Mat& image);
-    bool isCudaHandShape(const std::vector<cv::Point>& contour, const cv::cuda::GpuMat& gpuImage);
-    double calculateCudaHandConfidence(const std::vector<cv::Point>& contour, const cv::cuda::GpuMat& gpuImage);
     
-    // CUDA shape analysis
-    std::vector<cv::Point> findCudaFingerTips(const std::vector<cv::Point>& contour);
-    cv::Point findCudaPalmCenter(const std::vector<cv::Point>& contour);
+    // OpenCL image processing utilities
+    cv::UMat convertToOpenCL(const cv::Mat& cpuImage);
+    cv::Mat convertFromOpenCL(const cv::UMat& openclImage);
+    void applyOpenCLGaussianBlur(cv::UMat& openclImage, int kernelSize = 5);
+    void applyOpenCLMorphology(cv::UMat& openclImage, int operation = cv::MORPH_CLOSE);
     
-    // CUDA motion detection and tracking
-    bool detectCudaMotion(const cv::cuda::GpuMat& gpuImage);
-    bool acquireCudaRoiFromMotion(const cv::cuda::GpuMat& gpuGray, const cv::cuda::GpuMat& gpuMotionMask);
-    void trackCudaRoiLK(const cv::cuda::GpuMat& gpuGrayPrev, const cv::cuda::GpuMat& gpuGrayCurr);
-    void updateCudaMotionHistory(const cv::cuda::GpuMat& gpuMotionMask);
-    bool isCudaMotionStable();
+    // OpenCL detection methods
+    QList<HandDetection> detectHandsByOpenCLShape(const cv::UMat& openclImage);
+    QList<HandDetection> detectHandsByOpenCLMotion(const cv::UMat& openclImage);
+    QList<HandDetection> detectHandsByOpenCLKeypoints(const cv::UMat& openclImage);
     
-    // CUDA gesture analysis
-    bool analyzeCudaGestureClosed(const cv::cuda::GpuMat& gpuGray, const cv::Rect& roi) const;
-    bool analyzeCudaGestureOpen(const cv::cuda::GpuMat& gpuGray, const cv::Rect& roi) const;
+    // OpenCL image processing
+    cv::UMat createOpenCLSkinMask(const cv::UMat& openclImage);
+    cv::UMat createOpenCLMotionMask(const cv::UMat& openclImage);
+    std::vector<std::vector<cv::Point>> findOpenCLContours(const cv::UMat& openclMask);
     
-    // CUDA image processing utilities
-    cv::cuda::GpuMat convertToCuda(const cv::Mat& cpuImage);
-    cv::Mat convertFromCuda(const cv::cuda::GpuMat& gpuImage);
-    void applyCudaGaussianBlur(cv::cuda::GpuMat& gpuImage, int kernelSize = 5);
-    void applyCudaMorphology(cv::cuda::GpuMat& gpuImage, int operation = cv::MORPH_CLOSE);
+    // Hand gesture detection with OpenCL
+    QList<HandDetection> detectOpenCLHandGestures(const cv::Mat& image);
+    QList<HandDetection> detectOpenCLHandGesturesOptimized(const cv::Mat& image);
+    bool isOpenCLHandShape(const std::vector<cv::Point>& contour, const cv::UMat& openclImage);
+    double calculateOpenCLHandConfidence(const std::vector<cv::Point>& contour, const cv::UMat& openclImage);
+    
+    // OpenCL shape analysis
+    std::vector<cv::Point> findOpenCLFingerTips(const std::vector<cv::Point>& contour);
+    cv::Point findOpenCLPalmCenter(const std::vector<cv::Point>& contour);
+    
+    // OpenCL motion detection and tracking
+    bool detectOpenCLMotion(const cv::UMat& openclImage);
+    bool acquireOpenCLRoiFromMotion(const cv::UMat& openclGray, const cv::UMat& openclMotionMask);
+    void trackOpenCLRoiLK(const cv::UMat& openclGrayPrev, const cv::UMat& openclGrayCurr);
+    void updateOpenCLMotionHistory(const cv::UMat& openclMotionMask);
+    bool isOpenCLMotionStable();
+    
+    // OpenCL gesture analysis
+    bool analyzeOpenCLGestureClosed(const cv::UMat& openclGray, const cv::Rect& roi) const;
+    bool analyzeOpenCLGestureOpen(const cv::UMat& openclGray, const cv::Rect& roi) const;
     
     // Optimized processing methods
-    cv::cuda::GpuMat createCudaSkinMaskOptimized(const cv::cuda::GpuMat& gpuImage);
-    std::vector<std::vector<cv::Point>> findCudaContoursOptimized(const cv::cuda::GpuMat& gpuMask);
-    bool isCudaHandShapeFast(const std::vector<cv::Point>& contour, const cv::cuda::GpuMat& gpuImage);
-    double calculateCudaHandConfidenceFast(const std::vector<cv::Point>& contour, const cv::cuda::GpuMat& gpuImage);
-    std::vector<cv::Point> findCudaFingerTipsFast(const std::vector<cv::Point>& contour);
+    cv::UMat createOpenCLSkinMaskOptimized(const cv::UMat& openclImage);
+    std::vector<std::vector<cv::Point>> findOpenCLContoursOptimized(const cv::UMat& openclMask);
+    bool isOpenCLHandShapeFast(const std::vector<cv::Point>& contour, const cv::UMat& openclImage);
+    double calculateOpenCLHandConfidenceFast(const std::vector<cv::Point>& contour, const cv::UMat& openclImage);
+    std::vector<cv::Point> findOpenCLFingerTipsFast(const std::vector<cv::Point>& contour);
     bool isHandOpenFast(const std::vector<cv::Point>& contour);
     cv::Mat createSkinMaskOptimized(const cv::Mat& image);
     bool isHandShapeFast(const std::vector<cv::Point>& contour);
@@ -183,16 +185,16 @@ private:
     std::vector<cv::Point> findFingerTipsFast(const std::vector<cv::Point>& contour);
     
     // Performance optimization
-    void preallocateCudaMemory(int width, int height);
-    void releaseCudaMemory();
+    void preallocateOpenCLMemory(int width, int height);
+    void releaseOpenCLMemory();
     
     // State management
     void updatePerformanceStats(double processingTime);
 
     // Member variables
     bool m_initialized;
-    bool m_cudaAvailable;
-    int m_cudaDeviceId;
+    bool m_openclAvailable;
+    bool m_openglAvailable;
     QString m_detectorType;
     double m_confidenceThreshold;
     bool m_showBoundingBox;
@@ -239,18 +241,17 @@ private:
     int m_motionHistory;
     int m_noMotionFrames;
 
-    // CUDA memory pools for performance
-    cv::cuda::GpuMat m_gpuGray;
-    cv::cuda::GpuMat m_gpuPrevGray;
-    cv::cuda::GpuMat m_gpuMotionMask;
-    cv::cuda::GpuMat m_gpuSkinMask;
-    cv::cuda::GpuMat m_gpuTemp1;
-    cv::cuda::GpuMat m_gpuTemp2;
+    // OpenCL memory pools for performance
+    cv::UMat m_openclGray;
+    cv::UMat m_openclPrevGray;
+    cv::UMat m_openclMotionMask;
+    cv::UMat m_openclSkinMask;
+    cv::UMat m_openclTemp1;
+    cv::UMat m_openclTemp2;
     
-    // CUDA filters and processors
-    cv::Ptr<cv::cuda::Filter> m_gaussianFilter;
-    cv::Ptr<cv::cuda::Filter> m_morphFilter;
-    cv::Ptr<cv::cuda::CannyEdgeDetector> m_cannyDetector;
+    // OpenCL filters and processors (using OpenCV's UMat)
+    cv::Mat m_gaussianKernel; // For GaussianBlur
+    cv::Mat m_morphKernel;    // For morphological operations
     
     // Performance monitoring
     QElapsedTimer m_processingTimer;

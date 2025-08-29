@@ -25,10 +25,9 @@
 #include <opencv2/opencv.hpp>
 #include <opencv2/objdetect.hpp>
 #include <opencv2/video.hpp>
-#include <opencv2/cudaobjdetect.hpp>
 #include <opencv2/core/ocl.hpp>
-#include <opencv2/cudaimgproc.hpp>
-#include <opencv2/cudawarping.hpp>
+#include <opencv2/imgproc.hpp>
+#include <opencv2/highgui.hpp>
 #include "core/videotemplate.h"   // Your custom VideoTemplate class
 #include "core/camera.h"          // Your custom Camera class
 #include "ui/foreground.h"        // Foreground class
@@ -105,7 +104,7 @@ public:
     void updatePersonDetectionButton();
     double getPersonDetectionProcessingTime() const;
     bool isGPUAvailable() const;
-    bool isCUDAAvailable() const;
+    bool isOpenCLAvailable() const;
 
 protected:
     void resizeEvent(QResizeEvent *event) override;
@@ -233,7 +232,8 @@ private:
     QLabel *debugLabel;
     QLabel *fpsLabel;
     QLabel *gpuStatusLabel;
-    QLabel *cudaStatusLabel;
+    QLabel *openclStatusLabel;
+    QLabel *openglStatusLabel;
     QLabel *personDetectionLabel;
     QPushButton *personDetectionButton;
     QLabel *personSegmentationLabel;
@@ -272,12 +272,14 @@ private:
     QElapsedTimer m_personDetectionTimer;
     cv::HOGDescriptor m_hogDetector;  // CPU fallback
     cv::HOGDescriptor m_hogDetectorDaimler;  // CPU fallback
-    cv::Ptr<cv::cuda::HOG> m_cudaHogDetector;  // CUDA-accelerated HOG detection
+    cv::Ptr<cv::HOGDescriptor> m_openclHogDetector;  // OpenCL-accelerated HOG detection
     cv::Ptr<cv::BackgroundSubtractorMOG2> m_bgSubtractor;
     bool m_useGPU;
-    bool m_useCUDA;
+    bool m_useOpenCL;
+    bool m_useOpenGL;
     bool m_gpuUtilized;
-    bool m_cudaUtilized;
+    bool m_openclUtilized;
+    bool m_openglUtilized;
     QFutureWatcher<cv::Mat> *m_personDetectionWatcher;
     std::vector<cv::Rect> m_lastDetections;
 

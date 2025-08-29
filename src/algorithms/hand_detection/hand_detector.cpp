@@ -1,17 +1,16 @@
 #include "algorithms/hand_detection/hand_detector.h"
+#include "core/amd_gpu_verifier.h"
 #include <QDebug>
 #include <QThread>
 #include <opencv2/imgproc.hpp>
-#include <opencv2/cudaimgproc.hpp>
-#include <opencv2/cudafilters.hpp>
-#include <opencv2/cudafeatures2d.hpp>
-#include <opencv2/cudaarithm.hpp>
+#include <opencv2/core/ocl.hpp>
+#include <opencv2/highgui.hpp>
 
 HandDetector::HandDetector(QObject *parent)
     : QObject(parent)
     , m_initialized(false)
-    , m_cudaAvailable(false)
-    , m_cudaDeviceId(0)
+    , m_openclAvailable(false)
+    , m_openglAvailable(false)
     , m_detectorType("CPU")
     , m_confidenceThreshold(0.5)
     , m_showBoundingBox(true)
@@ -45,7 +44,7 @@ HandDetector::HandDetector(QObject *parent)
 
 HandDetector::~HandDetector()
 {
-    releaseCudaMemory();
+    releaseOpenCLMemory();
     qDebug() << "HandDetector: Destructor called";
 }
 
@@ -58,33 +57,44 @@ bool HandDetector::initialize()
     qDebug() << "HandDetector: Initializing hand gesture detection...";
     
     try {
-        // Try to initialize CUDA first
-        if (cv::cuda::getCudaEnabledDeviceCount() > 0) {
-            m_cudaDeviceId = 0;
-            cv::cuda::setDevice(m_cudaDeviceId);
-            
-            cv::cuda::DeviceInfo deviceInfo(m_cudaDeviceId);
-            if (deviceInfo.isCompatible()) {
-                qDebug() << "HandDetector: Using CUDA device:" << deviceInfo.name();
-                qDebug() << "HandDetector: CUDA compute capability:" << deviceInfo.majorVersion() << "." << deviceInfo.minorVersion();
-                qDebug() << "HandDetector: GPU memory:" << deviceInfo.totalMemory() / (1024*1024) << "MB";
-
-                // Initialize CUDA filters
-                m_gaussianFilter = cv::cuda::createGaussianFilter(CV_8UC1, CV_8UC1, cv::Size(5, 5), 1.0);
-                m_morphFilter = cv::cuda::createMorphologyFilter(cv::MORPH_CLOSE, CV_8UC1, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5)));
-                m_cannyDetector = cv::cuda::createCannyEdgeDetector(50.0, 150.0);
+        // Initialize AMD GPU verification
+        bool amdGPUAvailable = AMDGPUVerifier::initialize();
+        
+        if (amdGPUAvailable) {
+            // Check OpenCL availability
+            if (cv::ocl::useOpenCL()) {
+                cv::ocl::setUseOpenCL(true);
+                m_openclAvailable = true;
+                m_detectorType = "OpenCL";
                 
-                m_cudaAvailable = true;
-                m_detectorType = "CUDA";
-                qDebug() << "🚀 CUDA-accelerated hand detection enabled!";
+                qDebug() << "HandDetector: Using AMD GPU with OpenCL acceleration";
+                qDebug() << "HandDetector: OpenCL device available for image processing";
+                
+                // Get GPU info
+                AMDGPUVerifier::GPUInfo gpuInfo = AMDGPUVerifier::getGPUInfo();
+                qDebug() << "HandDetector: GPU Name:" << gpuInfo.name;
+                qDebug() << "HandDetector: GPU Memory:" << gpuInfo.totalMemory / (1024*1024) << "MB";
+                qDebug() << "HandDetector: Compute Units:" << gpuInfo.computeUnits;
+                
+                qDebug() << "🚀 OpenCL-accelerated hand detection enabled!";
             } else {
-                qWarning() << "HandDetector: CUDA device not compatible, falling back to CPU";
-                m_cudaAvailable = false;
+                qWarning() << "HandDetector: OpenCL not available, falling back to CPU";
+                m_openclAvailable = false;
                 m_detectorType = "CPU";
             }
+            
+            // Check OpenGL availability
+            if (AMDGPUVerifier::testOpenGLAcceleration()) {
+                m_openglAvailable = true;
+                qDebug() << "HandDetector: OpenGL acceleration available";
+            } else {
+                m_openglAvailable = false;
+                qDebug() << "HandDetector: OpenGL acceleration not available";
+            }
         } else {
-            qDebug() << "HandDetector: No CUDA devices available, using CPU";
-            m_cudaAvailable = false;
+            qDebug() << "HandDetector: No AMD GPU available, using CPU";
+            m_openclAvailable = false;
+            m_openglAvailable = false;
             m_detectorType = "CPU";
         }
 
@@ -103,7 +113,8 @@ bool HandDetector::initialize()
     }
     catch (const cv::Exception& e) {
         qWarning() << "HandDetector: Initialization failed:" << e.what();
-        m_cudaAvailable = false;
+        m_openclAvailable = false;
+        m_openglAvailable = false;
         m_detectorType = "CPU";
         m_initialized = true;
         emit detectorTypeChanged(m_detectorType);
@@ -141,8 +152,8 @@ QList<HandDetection> HandDetector::detect(const cv::Mat& image)
     if (m_frameWidth != image.cols || m_frameHeight != image.rows) {
         m_frameWidth = image.cols;
         m_frameHeight = image.rows;
-        if (m_cudaAvailable) {
-            preallocateCudaMemory(m_frameWidth, m_frameHeight);
+        if (m_openclAvailable) {
+            preallocateOpenCLMemory(m_frameWidth, m_frameHeight);
         }
     }
 
@@ -187,7 +198,7 @@ QList<HandDetection> HandDetector::detect(const cv::Mat& image)
         
     } catch (const cv::Exception& e) {
         qWarning() << "HandDetector: Detection error:" << e.what();
-        emit cudaError(QString("Detection error: %1").arg(e.what()));
+        emit openclError(QString("Detection error: %1").arg(e.what()));
     }
     
     return detections;
@@ -848,14 +859,16 @@ double HandDetector::getHandDetectionProcessingTime() const
     return m_averageProcessingTime;
 }
 
-bool HandDetector::isCudaAvailable() const
+bool HandDetector::isOpenGLAvailable() const
 {
-    return m_cudaAvailable;
+    return m_openclAvailable || m_openglAvailable;
 }
 
 QString HandDetector::getDetectorType() const
 {
-    return m_detectorType;
+    if (m_openclAvailable) return "OpenCL";
+    if (m_openglAvailable) return "OpenGL";
+    return "CPU";
 }
 
 double HandDetector::getAverageProcessingTime() const
@@ -873,28 +886,28 @@ int HandDetector::getTotalFramesProcessed() const
     return m_totalFramesProcessed;
 }
 
-// CUDA detection methods
-QList<HandDetection> HandDetector::detectCudaHandGestures(const cv::Mat& image)
+// OpenCL detection methods
+QList<HandDetection> HandDetector::detectOpenGLHandGestures(const cv::Mat& image)
 {
     QList<HandDetection> detections;
     
     try {
         // Convert to GPU memory
-        cv::cuda::GpuMat gpuImage = convertToCuda(image);
+        cv::UMat gpuImage = convertToOpenCL(image);
         
         // Create skin mask on GPU
-        cv::cuda::GpuMat gpuSkinMask = createCudaSkinMask(gpuImage);
+        cv::UMat gpuSkinMask = createOpenCLSkinMask(gpuImage);
         
         // Find contours on GPU
-        std::vector<std::vector<cv::Point>> contours = findCudaContours(gpuSkinMask);
+        std::vector<std::vector<cv::Point>> contours = findOpenCLContours(gpuSkinMask);
         
         // Process each contour
         for (const auto& contour : contours) {
             if (contour.size() < 50) continue; // Skip small contours
             
             // Check if it's a hand shape
-            if (isCudaHandShape(contour, gpuImage)) {
-                double confidence = calculateCudaHandConfidence(contour, gpuImage);
+            if (isOpenCLHandShape(contour, gpuImage)) {
+                double confidence = calculateOpenCLHandConfidence(contour, gpuImage);
                 
                 if (confidence >= m_confidenceThreshold) {
                     HandDetection detection;
@@ -902,8 +915,8 @@ QList<HandDetection> HandDetector::detectCudaHandGestures(const cv::Mat& image)
                     detection.confidence = confidence;
                     detection.handType = "unknown"; // Could be enhanced with left/right detection
                     detection.landmarks = contour;
-                    detection.palmCenter = findCudaPalmCenter(contour);
-                    detection.fingerTips = findCudaFingerTips(contour);
+                    detection.palmCenter = findOpenCLPalmCenter(contour);
+                    detection.fingerTips = findOpenCLFingerTips(contour);
                     detection.isOpen = isHandOpen(contour);
                     detection.isClosed = isHandClosed(contour);
                     detection.isRaised = detection.boundingBox.y < m_frameHeight / 2;
@@ -914,33 +927,33 @@ QList<HandDetection> HandDetector::detectCudaHandGestures(const cv::Mat& image)
         }
         
     } catch (const cv::Exception& e) {
-        qWarning() << "HandDetector: CUDA detection error:" << e.what();
+        qWarning() << "HandDetector: OpenCL detection error:" << e.what();
     }
     
     return detections;
 }
 
-QList<HandDetection> HandDetector::detectCudaHandGesturesOptimized(const cv::Mat& image)
+QList<HandDetection> HandDetector::detectOpenGLHandGesturesOptimized(const cv::Mat& image)
 {
     QList<HandDetection> detections;
     
     try {
         // Convert to GPU memory
-        cv::cuda::GpuMat gpuImage = convertToCuda(image);
+        cv::UMat gpuImage = convertToOpenCL(image);
         
         // Create skin mask on GPU with optimized parameters
-        cv::cuda::GpuMat gpuSkinMask = createCudaSkinMaskOptimized(gpuImage);
+        cv::UMat gpuSkinMask = createOpenCLSkinMaskOptimized(gpuImage);
         
         // Find contours on GPU with reduced filtering
-        std::vector<std::vector<cv::Point>> contours = findCudaContoursOptimized(gpuSkinMask);
+        std::vector<std::vector<cv::Point>> contours = findOpenCLContoursOptimized(gpuSkinMask);
         
         // Process each contour with faster criteria
         for (const auto& contour : contours) {
             if (contour.size() < 30) continue; // Reduced minimum size for speed
             
             // Quick hand shape check
-            if (isCudaHandShapeFast(contour, gpuImage)) {
-                double confidence = calculateCudaHandConfidenceFast(contour, gpuImage);
+            if (isOpenCLHandShapeFast(contour, gpuImage)) {
+                double confidence = calculateOpenCLHandConfidenceFast(contour, gpuImage);
                 
                 if (confidence >= m_confidenceThreshold * 0.8) { // Slightly lower threshold for speed
                     HandDetection detection;
@@ -948,8 +961,8 @@ QList<HandDetection> HandDetector::detectCudaHandGesturesOptimized(const cv::Mat
                     detection.confidence = confidence;
                     detection.handType = "unknown";
                     detection.landmarks = contour;
-                    detection.palmCenter = findCudaPalmCenter(contour);
-                    detection.fingerTips = findCudaFingerTipsFast(contour);
+                    detection.palmCenter = findOpenCLPalmCenter(contour);
+                    detection.fingerTips = findOpenCLFingerTipsFast(contour);
                     detection.isOpen = isHandOpenFast(contour);
                     detection.isClosed = isHandClosedFast(contour);
                     detection.isRaised = detection.boundingBox.y < m_frameHeight / 2;
@@ -963,7 +976,7 @@ QList<HandDetection> HandDetector::detectCudaHandGesturesOptimized(const cv::Mat
         }
         
     } catch (const cv::Exception& e) {
-        qWarning() << "HandDetector: CUDA optimized detection error:" << e.what();
+        qWarning() << "HandDetector: OpenCL optimized detection error:" << e.what();
     }
     
     return detections;
@@ -1027,26 +1040,26 @@ QList<HandDetection> HandDetector::detectHandGesturesOptimized(const cv::Mat& im
     return detections;
 }
 
-cv::cuda::GpuMat HandDetector::createCudaSkinMask(const cv::cuda::GpuMat& gpuImage)
+cv::UMat HandDetector::createOpenCLSkinMask(const cv::UMat& gpuImage)
 {
-    cv::cuda::GpuMat gpuSkinMask;
+    cv::UMat gpuSkinMask;
     
     try {
         // Convert to HSV on GPU
-        cv::cuda::GpuMat gpuHSV;
-        cv::cuda::cvtColor(gpuImage, gpuHSV, cv::COLOR_BGR2HSV);
+        cv::UMat gpuHSV;
+        cv::cvtColor(gpuImage, gpuHSV, cv::COLOR_BGR2HSV);
         
         // Create skin color range mask
-        cv::cuda::GpuMat gpuMask1, gpuMask2;
-        cv::cuda::inRange(gpuHSV, cv::Scalar(0, 20, 70), cv::Scalar(20, 255, 255), gpuMask1);
-        cv::cuda::inRange(gpuHSV, cv::Scalar(170, 20, 70), cv::Scalar(180, 255, 255), gpuMask2);
+        cv::UMat gpuMask1, gpuMask2;
+        cv::inRange(gpuHSV, cv::Scalar(0, 20, 70), cv::Scalar(20, 255, 255), gpuMask1);
+        cv::inRange(gpuHSV, cv::Scalar(170, 20, 70), cv::Scalar(180, 255, 255), gpuMask2);
         
         // Combine masks
-        cv::cuda::add(gpuMask1, gpuMask2, gpuSkinMask);
+        cv::add(gpuMask1, gpuMask2, gpuSkinMask);
         
         // Apply morphological operations
-        applyCudaMorphology(gpuSkinMask, cv::MORPH_CLOSE);
-        applyCudaMorphology(gpuSkinMask, cv::MORPH_OPEN);
+        applyOpenCLMorphology(gpuSkinMask, cv::MORPH_CLOSE);
+        applyOpenCLMorphology(gpuSkinMask, cv::MORPH_OPEN);
         
     } catch (const cv::Exception& e) {
         qWarning() << "HandDetector: Error creating skin mask:" << e.what();
@@ -1055,13 +1068,13 @@ cv::cuda::GpuMat HandDetector::createCudaSkinMask(const cv::cuda::GpuMat& gpuIma
     return gpuSkinMask;
 }
 
-std::vector<std::vector<cv::Point>> HandDetector::findCudaContours(const cv::cuda::GpuMat& gpuMask)
+std::vector<std::vector<cv::Point>> HandDetector::findOpenCLContours(const cv::UMat& gpuMask)
 {
     std::vector<std::vector<cv::Point>> contours;
     
     try {
         // Download mask to CPU for contour detection (OpenCV contour detection is CPU-only)
-        cv::Mat cpuMask = convertFromCuda(gpuMask);
+        cv::Mat cpuMask = convertFromOpenCL(gpuMask);
         
         // Find contours
         cv::findContours(cpuMask, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
@@ -1084,7 +1097,7 @@ std::vector<std::vector<cv::Point>> HandDetector::findCudaContours(const cv::cud
     return contours;
 }
 
-bool HandDetector::isCudaHandShape(const std::vector<cv::Point>& contour, const cv::cuda::GpuMat& /*gpuImage*/)
+bool HandDetector::isOpenCLHandShape(const std::vector<cv::Point>& contour, const cv::UMat& /*gpuImage*/)
 {
     if (contour.size() < 50) return false;
     
@@ -1109,7 +1122,7 @@ bool HandDetector::isCudaHandShape(const std::vector<cv::Point>& contour, const 
     return isHandShape;
 }
 
-double HandDetector::calculateCudaHandConfidence(const std::vector<cv::Point>& contour, const cv::cuda::GpuMat& /*gpuImage*/)
+double HandDetector::calculateOpenCLHandConfidence(const std::vector<cv::Point>& contour, const cv::UMat& /*gpuImage*/)
 {
     double confidence = 0.0;
     
@@ -1144,19 +1157,31 @@ double HandDetector::calculateCudaHandConfidence(const std::vector<cv::Point>& c
     return confidence;
 }
 
-std::vector<cv::Point> HandDetector::findCudaFingerTips(const std::vector<cv::Point>& contour)
+std::vector<cv::Point> HandDetector::findOpenCLFingerTips(const std::vector<cv::Point>& contour)
 {
     std::vector<cv::Point> fingerTips;
     
     try {
+        if (contour.size() < 3) {
+            return fingerTips;
+        }
+        
         // Find convex hull and defects
         std::vector<cv::Point> hull;
         std::vector<int> hullIndices;
-        cv::convexHull(contour, hull, false);
         cv::convexHull(contour, hullIndices, false);
         
+        // Get hull points from indices
+        for (int idx : hullIndices) {
+            if (idx >= 0 && idx < static_cast<int>(contour.size())) {
+                hull.push_back(contour[idx]);
+            }
+        }
+        
         std::vector<cv::Vec4i> defects;
-        cv::convexityDefects(contour, hullIndices, defects);
+        if (hullIndices.size() > 3) {
+            cv::convexityDefects(contour, hullIndices, defects);
+        }
         
         // Find finger tips from convex hull points
         for (const auto& point : hull) {
@@ -1186,7 +1211,7 @@ std::vector<cv::Point> HandDetector::findCudaFingerTips(const std::vector<cv::Po
     return fingerTips;
 }
 
-cv::Point HandDetector::findCudaPalmCenter(const std::vector<cv::Point>& contour)
+cv::Point HandDetector::findOpenCLPalmCenter(const std::vector<cv::Point>& contour)
 {
     cv::Point palmCenter(0, 0);
     
@@ -1205,49 +1230,41 @@ cv::Point HandDetector::findCudaPalmCenter(const std::vector<cv::Point>& contour
     return palmCenter;
 }
 
-// CUDA utility methods
-cv::cuda::GpuMat HandDetector::convertToCuda(const cv::Mat& cpuImage)
+// OpenCL utility methods
+cv::UMat HandDetector::convertToOpenCL(const cv::Mat& cpuImage)
 {
-    cv::cuda::GpuMat gpuImage;
-    gpuImage.upload(cpuImage);
+    cv::UMat gpuImage;
+    cpuImage.copyTo(gpuImage);
     return gpuImage;
 }
 
-cv::Mat HandDetector::convertFromCuda(const cv::cuda::GpuMat& gpuImage)
+cv::Mat HandDetector::convertFromOpenCL(const cv::UMat& gpuImage)
 {
     cv::Mat cpuImage;
-    gpuImage.download(cpuImage);
+    gpuImage.copyTo(cpuImage);
     return cpuImage;
 }
 
-void HandDetector::applyCudaGaussianBlur(cv::cuda::GpuMat& gpuImage, int /*kernelSize*/)
+void HandDetector::applyOpenCLGaussianBlur(cv::UMat& gpuImage, int kernelSize)
 {
-    if (m_gaussianFilter) {
-        cv::cuda::GpuMat temp;
-        m_gaussianFilter->apply(gpuImage, temp);
-        temp.copyTo(gpuImage);
-    }
+    cv::GaussianBlur(gpuImage, gpuImage, cv::Size(kernelSize, kernelSize), 1.0);
 }
 
-void HandDetector::applyCudaMorphology(cv::cuda::GpuMat& gpuImage, int /*operation*/)
+void HandDetector::applyOpenCLMorphology(cv::UMat& gpuImage, int operation)
 {
-    if (m_morphFilter) {
-        cv::cuda::GpuMat temp;
-        m_morphFilter->apply(gpuImage, temp);
-        temp.copyTo(gpuImage);
-    }
+    cv::morphologyEx(gpuImage, gpuImage, operation, m_morphKernel);
 }
 
-void HandDetector::preallocateCudaMemory(int width, int height)
+void HandDetector::preallocateOpenCLMemory(int width, int height)
 {
     try {
-        // Preallocate GPU memory for better performance
-        m_gpuGray.create(height, width, CV_8UC1);
-        m_gpuPrevGray.create(height, width, CV_8UC1);
-        m_gpuMotionMask.create(height, width, CV_8UC1);
-        m_gpuSkinMask.create(height, width, CV_8UC1);
-        m_gpuTemp1.create(height, width, CV_8UC1);
-        m_gpuTemp2.create(height, width, CV_8UC1);
+        // Preallocate OpenCL memory for better performance
+        m_openclGray.create(height, width, CV_8UC1);
+        m_openclPrevGray.create(height, width, CV_8UC1);
+        m_openclMotionMask.create(height, width, CV_8UC1);
+        m_openclSkinMask.create(height, width, CV_8UC1);
+        m_openclTemp1.create(height, width, CV_8UC1);
+        m_openclTemp2.create(height, width, CV_8UC1);
         
         qDebug() << "HandDetector: Preallocated GPU memory for" << width << "x" << height;
     } catch (const cv::Exception& e) {
@@ -1255,19 +1272,15 @@ void HandDetector::preallocateCudaMemory(int width, int height)
     }
 }
 
-void HandDetector::releaseCudaMemory()
+void HandDetector::releaseOpenCLMemory()
 {
     try {
-        m_gpuGray.release();
-        m_gpuPrevGray.release();
-        m_gpuMotionMask.release();
-        m_gpuSkinMask.release();
-        m_gpuTemp1.release();
-        m_gpuTemp2.release();
-        
-        m_gaussianFilter.release();
-        m_morphFilter.release();
-        m_cannyDetector.release();
+        m_openclGray.release();
+        m_openclPrevGray.release();
+        m_openclMotionMask.release();
+        m_openclSkinMask.release();
+        m_openclTemp1.release();
+        m_openclTemp2.release();
         
         qDebug() << "HandDetector: Released GPU memory";
     } catch (const cv::Exception& e) {
@@ -1298,75 +1311,75 @@ void HandDetector::updatePerformanceStats(double processingTime)
     }
 }
 
-// Stub implementations for CUDA methods that aren't fully implemented yet
-QList<HandDetection> HandDetector::detectHandsByCudaShape(const cv::cuda::GpuMat& /*gpuImage*/)
+// Stub implementations for OpenCL methods that aren't fully implemented yet
+QList<HandDetection> HandDetector::detectHandsByOpenCLShape(const cv::UMat& /*gpuImage*/)
 {
     return QList<HandDetection>();
 }
 
-QList<HandDetection> HandDetector::detectHandsByCudaMotion(const cv::cuda::GpuMat& /*gpuImage*/)
+QList<HandDetection> HandDetector::detectHandsByOpenCLMotion(const cv::UMat& /*gpuImage*/)
 {
     return QList<HandDetection>();
 }
 
-QList<HandDetection> HandDetector::detectHandsByCudaKeypoints(const cv::cuda::GpuMat& /*gpuImage*/)
+QList<HandDetection> HandDetector::detectHandsByOpenCLKeypoints(const cv::UMat& /*gpuImage*/)
 {
     return QList<HandDetection>();
 }
 
-cv::cuda::GpuMat HandDetector::createCudaMotionMask(const cv::cuda::GpuMat& /*gpuImage*/)
+cv::UMat HandDetector::createOpenCLMotionMask(const cv::UMat& /*gpuImage*/)
 {
-    return cv::cuda::GpuMat();
+    return cv::UMat();
 }
 
-bool HandDetector::detectCudaMotion(const cv::cuda::GpuMat& /*gpuImage*/)
-{
-    return false;
-}
-
-bool HandDetector::acquireCudaRoiFromMotion(const cv::cuda::GpuMat& /*gpuGray*/, const cv::cuda::GpuMat& /*gpuMotionMask*/)
+bool HandDetector::detectOpenCLMotion(const cv::UMat& /*gpuImage*/)
 {
     return false;
 }
 
-void HandDetector::trackCudaRoiLK(const cv::cuda::GpuMat& /*gpuGrayPrev*/, const cv::cuda::GpuMat& /*gpuGrayCurr*/)
-{
-}
-
-void HandDetector::updateCudaMotionHistory(const cv::cuda::GpuMat& /*gpuMotionMask*/)
-{
-}
-
-bool HandDetector::isCudaMotionStable()
+bool HandDetector::acquireOpenCLRoiFromMotion(const cv::UMat& /*gpuGray*/, const cv::UMat& /*gpuMotionMask*/)
 {
     return false;
 }
 
-bool HandDetector::analyzeCudaGestureClosed(const cv::cuda::GpuMat& /*gpuGray*/, const cv::Rect& /*roi*/) const
+void HandDetector::trackOpenCLRoiLK(const cv::UMat& /*gpuGrayPrev*/, const cv::UMat& /*gpuGrayCurr*/)
+{
+}
+
+void HandDetector::updateOpenCLMotionHistory(const cv::UMat& /*gpuMotionMask*/)
+{
+}
+
+bool HandDetector::isOpenCLMotionStable()
 {
     return false;
 }
 
-bool HandDetector::analyzeCudaGestureOpen(const cv::cuda::GpuMat& /*gpuGray*/, const cv::Rect& /*roi*/) const
+bool HandDetector::analyzeOpenCLGestureClosed(const cv::UMat& /*gpuGray*/, const cv::Rect& /*roi*/) const
+{
+    return false;
+}
+
+bool HandDetector::analyzeOpenCLGestureOpen(const cv::UMat& /*gpuGray*/, const cv::Rect& /*roi*/) const
 {
     return false;
 }
 
 // Optimized helper methods for faster processing
-cv::cuda::GpuMat HandDetector::createCudaSkinMaskOptimized(const cv::cuda::GpuMat& gpuImage)
+cv::UMat HandDetector::createOpenCLSkinMaskOptimized(const cv::UMat& gpuImage)
 {
-    cv::cuda::GpuMat gpuSkinMask;
+    cv::UMat gpuSkinMask;
     
     try {
         // Simplified skin detection for speed
-        cv::cuda::GpuMat gpuHSV;
-        cv::cuda::cvtColor(gpuImage, gpuHSV, cv::COLOR_BGR2HSV);
+        cv::UMat gpuHSV;
+        cv::cvtColor(gpuImage, gpuHSV, cv::COLOR_BGR2HSV);
         
         // Single skin range for speed
-        cv::cuda::inRange(gpuHSV, cv::Scalar(0, 30, 60), cv::Scalar(20, 255, 255), gpuSkinMask);
+        cv::inRange(gpuHSV, cv::Scalar(0, 30, 60), cv::Scalar(20, 255, 255), gpuSkinMask);
         
         // Minimal morphological operations
-        applyCudaMorphology(gpuSkinMask, cv::MORPH_CLOSE);
+        applyOpenCLMorphology(gpuSkinMask, cv::MORPH_CLOSE);
         
     } catch (const cv::Exception& e) {
         qWarning() << "HandDetector: Error creating optimized skin mask:" << e.what();
@@ -1375,12 +1388,12 @@ cv::cuda::GpuMat HandDetector::createCudaSkinMaskOptimized(const cv::cuda::GpuMa
     return gpuSkinMask;
 }
 
-std::vector<std::vector<cv::Point>> HandDetector::findCudaContoursOptimized(const cv::cuda::GpuMat& gpuMask)
+std::vector<std::vector<cv::Point>> HandDetector::findOpenCLContoursOptimized(const cv::UMat& gpuMask)
 {
     std::vector<std::vector<cv::Point>> contours;
     
     try {
-        cv::Mat cpuMask = convertFromCuda(gpuMask);
+        cv::Mat cpuMask = convertFromOpenCL(gpuMask);
         cv::findContours(cpuMask, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
         
         // Simplified filtering
@@ -1401,7 +1414,7 @@ std::vector<std::vector<cv::Point>> HandDetector::findCudaContoursOptimized(cons
     return contours;
 }
 
-bool HandDetector::isCudaHandShapeFast(const std::vector<cv::Point>& contour, const cv::cuda::GpuMat& /*gpuImage*/)
+bool HandDetector::isOpenCLHandShapeFast(const std::vector<cv::Point>& contour, const cv::UMat& /*gpuImage*/)
 {
     if (contour.size() < 30) return false;
     
@@ -1420,7 +1433,7 @@ bool HandDetector::isCudaHandShapeFast(const std::vector<cv::Point>& contour, co
            (area > m_minMotionArea * 0.3);
 }
 
-double HandDetector::calculateCudaHandConfidenceFast(const std::vector<cv::Point>& contour, const cv::cuda::GpuMat& /*gpuImage*/)
+double HandDetector::calculateOpenCLHandConfidenceFast(const std::vector<cv::Point>& contour, const cv::UMat& /*gpuImage*/)
 {
     double confidence = 0.0;
     
@@ -1444,7 +1457,9 @@ double HandDetector::calculateCudaHandConfidenceFast(const std::vector<cv::Point
     return confidence;
 }
 
-std::vector<cv::Point> HandDetector::findCudaFingerTipsFast(const std::vector<cv::Point>& contour)
+
+
+std::vector<cv::Point> HandDetector::findOpenCLFingerTipsFast(const std::vector<cv::Point>& contour)
 {
     std::vector<cv::Point> fingerTips;
     
@@ -1469,7 +1484,7 @@ bool HandDetector::isHandOpenFast(const std::vector<cv::Point>& contour)
 {
     try {
         // More lenient detection for poor camera quality
-        std::vector<cv::Point> fingerTips = findCudaFingerTipsFast(contour);
+        std::vector<cv::Point> fingerTips = findFingerTipsFast(contour);
         
         // For poor camera quality, be more lenient with open hand detection
         if (fingerTips.size() >= 3) {
@@ -1493,7 +1508,7 @@ bool HandDetector::isHandClosedFast(const std::vector<cv::Point>& contour)
 {
     try {
         // Much more lenient detection for poor camera quality
-        std::vector<cv::Point> fingerTips = findCudaFingerTipsFast(contour);
+        std::vector<cv::Point> fingerTips = findFingerTipsFast(contour);
         
         // For poor camera quality, be very lenient with closed hand detection
         if (fingerTips.size() <= 3) {
@@ -1636,3 +1651,5 @@ std::vector<cv::Point> HandDetector::findFingerTipsFast(const std::vector<cv::Po
     
     return fingerTips;
 }
+
+

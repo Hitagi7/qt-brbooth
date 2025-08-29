@@ -2,13 +2,13 @@
 #include <QFontDatabase>
 #include "core/brbooth.h"
 #include "core/videotemplate.h"
+#include "core/amd_gpu_verifier.h"
 #include <QDebug>
 #include <opencv2/opencv.hpp>
 #include <opencv2/dnn.hpp>
 #include <opencv2/core/ocl.hpp>
-#include <opencv2/cudaimgproc.hpp>
-#include <opencv2/cudawarping.hpp>
-#include <opencv2/cudafilters.hpp>
+#include <opencv2/imgproc.hpp>
+#include <opencv2/highgui.hpp>
 
 int main(int argc, char *argv[])
 {
@@ -21,83 +21,53 @@ int main(int argc, char *argv[])
         qDebug() << "Font loaded successfully. Font ID:" << fontId;
     }
 
-    // GPU Detection Test
-    qDebug() << "=== GPU Acceleration Check ===";
+    // AMD GPU Detection and Verification
+    qDebug() << "=== AMD GPU Acceleration Check ===";
     
     // Check OpenCV version and build info
     qDebug() << "OpenCV Version:" << CV_VERSION;
     qDebug() << "OpenCV Build Information:";
     qDebug() << cv::getBuildInformation().c_str();
     
-    // Check CUDA
-    bool cudaAvailable = false;
-    try {
-        int cudaDevices = cv::cuda::getCudaEnabledDeviceCount();
-        qDebug() << "CUDA devices found:" << cudaDevices;
-        if (cudaDevices > 0) {
-            cudaAvailable = true;
-            qDebug() << "CUDA GPU acceleration available!";
-            
-            // Get CUDA device info
-            for (int i = 0; i < cudaDevices; i++) {
-                cv::cuda::setDevice(i);
-                cv::cuda::DeviceInfo devInfo(i);
-                qDebug() << "CUDA Device" << i << ":" << devInfo.name();
-                qDebug() << "  - Compute Capability:" << devInfo.majorVersion() << "." << devInfo.minorVersion();
-                qDebug() << "  - Memory:" << devInfo.totalMemory() / (1024*1024) << "MB";
-                qDebug() << "  - Multi-Processor Count:" << devInfo.multiProcessorCount();
-            }
-            
-            // Set device to 0 for testing
-            cv::cuda::setDevice(0);
-            qDebug() << "CUDA device set to 0";
-            
-            // Test basic CUDA functionality
-            qDebug() << "Testing CUDA functionality...";
-            try {
-                // Create a simple test image
-                cv::Mat testImage(100, 100, CV_8UC3, cv::Scalar(100, 150, 200));
-                
-                // Upload to GPU
-                cv::cuda::GpuMat gpuImage;
-                gpuImage.upload(testImage);
-                qDebug() << "  ✓ GPU upload successful";
-                
-                // Test CUDA image processing
-                cv::cuda::GpuMat gpuGray;
-                cv::cuda::cvtColor(gpuImage, gpuGray, cv::COLOR_BGR2GRAY);
-                qDebug() << "  ✓ CUDA color conversion successful";
-                
-                // Test CUDA filtering
-                cv::cuda::GpuMat gpuBlurred;
-                cv::Ptr<cv::cuda::Filter> filter = cv::cuda::createGaussianFilter(gpuGray.type(), gpuGray.type(), cv::Size(5, 5), 1.0);
-                filter->apply(gpuGray, gpuBlurred);
-                qDebug() << "  ✓ CUDA Gaussian blur successful";
-                
-                // Download result
-                cv::Mat result;
-                gpuBlurred.download(result);
-                qDebug() << "  ✓ GPU download successful";
-                
-                qDebug() << "  ✓ All CUDA tests passed!";
-                
-            } catch (const cv::Exception& e) {
-                qDebug() << "  ✗ CUDA functionality test failed:" << e.what();
-            }
-            
+    // Initialize AMD GPU verification
+    bool amdGPUAvailable = AMDGPUVerifier::initialize();
+    
+    if (amdGPUAvailable) {
+        qDebug() << "🎮 AMD GPU acceleration available!";
+        
+        // Get detailed GPU information
+        AMDGPUVerifier::GPUInfo gpuInfo = AMDGPUVerifier::getGPUInfo();
+        qDebug() << "GPU Name:" << gpuInfo.name;
+        qDebug() << "GPU Vendor:" << gpuInfo.vendor;
+        qDebug() << "GPU Version:" << gpuInfo.version;
+        qDebug() << "GPU Memory:" << gpuInfo.totalMemory / (1024*1024) << "MB";
+        qDebug() << "Compute Units:" << gpuInfo.computeUnits;
+        
+        // Test OpenCL acceleration
+        if (AMDGPUVerifier::testOpenCLAcceleration()) {
+            qDebug() << "✓ OpenCL acceleration working!";
         } else {
-            qDebug() << "No CUDA devices found";
+            qDebug() << "⚠ OpenCL acceleration not available";
         }
-    } catch (const cv::Exception& e) {
-        qDebug() << "CUDA not available:" << e.what();
+        
+        // Test OpenGL acceleration
+        if (AMDGPUVerifier::testOpenGLAcceleration()) {
+            qDebug() << "✓ OpenGL acceleration working!";
+        } else {
+            qDebug() << "⚠ OpenGL acceleration limited";
+        }
+        
+    } else {
+        qDebug() << "⚠ No AMD GPU found, falling back to CPU processing";
+        qDebug() << "This may impact performance for image processing tasks";
     }
     
-    // Check OpenCL
+    // Check OpenCL availability
     if (cv::ocl::useOpenCL()) {
         qDebug() << "OpenCL available for GPU acceleration";
         cv::ocl::setUseOpenCL(true);
     } else {
-        qDebug() << "OpenCL not available";
+        qDebug() << "OpenCL not available in this OpenCV build";
     }
     
     // Check DNN backends
@@ -107,22 +77,22 @@ int main(int argc, char *argv[])
         qDebug() << "  - Backend:" << static_cast<int>(backend.first) << "Target:" << static_cast<int>(backend.second);
     }
     
-    // Check for CUDA DNN backend specifically
-    bool cudaDnnAvailable = false;
+    // Check for OpenCL DNN backend specifically
+    bool openclDnnAvailable = false;
     for (auto backend : backends) {
-        if (backend.first == cv::dnn::DNN_BACKEND_CUDA && backend.second == cv::dnn::DNN_TARGET_CUDA) {
-            cudaDnnAvailable = true;
+        if (backend.first == cv::dnn::DNN_BACKEND_OPENCV && backend.second == cv::dnn::DNN_TARGET_OPENCL) {
+            openclDnnAvailable = true;
             break;
         }
     }
-    if (cudaDnnAvailable) {
-        qDebug() << "✓ CUDA DNN backend available!";
+    if (openclDnnAvailable) {
+        qDebug() << "✓ OpenCL DNN backend available!";
     } else {
-        qDebug() << "✗ CUDA DNN backend not available";
+        qDebug() << "✗ OpenCL DNN backend not available";
     }
     
-    qDebug() << "=== End GPU Check ===";
-    qDebug() << "Summary: CUDA Available:" << cudaAvailable << "| CUDA DNN:" << cudaDnnAvailable;
+    qDebug() << "=== End AMD GPU Check ===";
+    qDebug() << "Summary: AMD GPU Available:" << amdGPUAvailable << "| OpenCL DNN:" << openclDnnAvailable;
 
     qRegisterMetaType<VideoTemplate>("Video Template");
     BRBooth w;

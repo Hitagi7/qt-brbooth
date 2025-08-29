@@ -1,4 +1,5 @@
 #include "core/brbooth.h"
+#include "core/amd_gpu_verifier.h"
 #include <QApplication>
 #include "ui/background.h"
 #include "core/camera.h"
@@ -10,9 +11,9 @@
 #include <QThread>
 #include <QDebug>
 #include <opencv2/opencv.hpp> // Using CV_VERSION for debug
-#include <opencv2/cudaimgproc.hpp> // For CUDA image processing functions
-#include <opencv2/cudafilters.hpp> // For CUDA filter functions
-#include <opencv2/cudawarping.hpp> // For CUDA resize and other warping functions
+#include <opencv2/core/ocl.hpp> // For OpenCL support
+#include <opencv2/imgproc.hpp> // For image processing functions
+#include <opencv2/highgui.hpp> // For highgui functions
 #include <QMessageBox>
 #include <QTimer>
 #include <QStyle>
@@ -33,16 +34,16 @@ BRBooth::BRBooth(QWidget *parent)
 {
     qDebug() << "OpenCV Version: " << CV_VERSION;
     
-    // Check CUDA availability at startup
-    int cudaDevices = cv::cuda::getCudaEnabledDeviceCount();
-    if (cudaDevices > 0) {
-        qDebug() << "🎮 CUDA GPU Acceleration: ENABLED (" << cudaDevices << " device(s) found)";
-        cv::cuda::setDevice(0);
-        cv::cuda::DeviceInfo deviceInfo(0);
-        qDebug() << "   GPU: " << deviceInfo.name();
-        qDebug() << "   Memory: " << deviceInfo.totalMemory() / (1024*1024) << " MB";
+    // Check AMD GPU availability at startup
+    bool amdGPUAvailable = AMDGPUVerifier::initialize();
+    if (amdGPUAvailable) {
+        qDebug() << "🎮 AMD GPU Acceleration: ENABLED";
+        AMDGPUVerifier::GPUInfo gpuInfo = AMDGPUVerifier::getGPUInfo();
+        qDebug() << "   GPU: " << gpuInfo.name;
+        qDebug() << "   Memory: " << gpuInfo.totalMemory / (1024*1024) << " MB";
+        qDebug() << "   Compute Units: " << gpuInfo.computeUnits;
     } else {
-        qDebug() << "⚠️  CUDA GPU Acceleration: DISABLED (no CUDA devices found)";
+        qDebug() << "⚠️  AMD GPU Acceleration: DISABLED (no AMD GPU found)";
     }
     ui->setupUi(this);
     setCentralWidget(ui->stackedWidget); // Set the stacked widget as the central widget
@@ -258,9 +259,9 @@ BRBooth::BRBooth(QWidget *parent)
     connect(foregroundPage, &Foreground::backtoLandingPage, this, &BRBooth::showLandingPage);
     connect(foregroundPage, &Foreground::imageSelectedTwice, this, &BRBooth::showBackgroundPage);
     
-    // Add keyboard shortcut for CUDA testing (Ctrl+T)
-    QShortcut *cudaTestShortcut = new QShortcut(QKeySequence("Ctrl+T"), this);
-    connect(cudaTestShortcut, &QShortcut::activated, this, &BRBooth::testCudaFunctionality);
+    // Add keyboard shortcut for OpenGL testing (Ctrl+T)
+    QShortcut *openGLTestShortcut = new QShortcut(QKeySequence("Ctrl+T"), this);
+    connect(openGLTestShortcut, &QShortcut::activated, this, &BRBooth::testOpenGLFunctionality);
 
     if (dynamicPage) {
         connect(dynamicPage, &Dynamic::backtoLandingPage, this, &BRBooth::showLandingPage);
@@ -588,69 +589,70 @@ void BRBooth::on_dynamicButton_clicked()
     showDynamicPage();
 }
 
-void BRBooth::testCudaFunctionality()
+void BRBooth::testOpenGLFunctionality()
 {
-    qDebug() << "=== BRBooth CUDA Test Function ===";
+    qDebug() << "=== BRBooth AMD GPU Test Function ===";
     
     try {
-        // Check if CUDA is available
-        int cudaDevices = cv::cuda::getCudaEnabledDeviceCount();
-        if (cudaDevices == 0) {
-            qDebug() << "No CUDA devices found";
+        // Check if AMD GPU is available
+        bool amdGPUAvailable = AMDGPUVerifier::initialize();
+        if (!amdGPUAvailable) {
+            qDebug() << "No AMD GPU found";
             return;
         }
         
-        qDebug() << "CUDA devices found:" << cudaDevices;
+        qDebug() << "AMD GPU found and verified";
         
-        // Set device
-        cv::cuda::setDevice(0);
+        // Get GPU info
+        AMDGPUVerifier::GPUInfo gpuInfo = AMDGPUVerifier::getGPUInfo();
+        qDebug() << "GPU Name:" << gpuInfo.name;
+        qDebug() << "GPU Memory:" << gpuInfo.totalMemory / (1024*1024) << "MB";
         
         // Create a test image
         cv::Mat testImage(480, 640, CV_8UC3, cv::Scalar(100, 150, 200));
         
-        // Test GPU upload
-        cv::cuda::GpuMat gpuImage;
-        gpuImage.upload(testImage);
-        qDebug() << "✓ GPU upload successful";
+        // Test OpenCL upload
+        cv::UMat gpuImage;
+        testImage.copyTo(gpuImage);
+        qDebug() << "✓ OpenCL upload successful";
         
-        // Test CUDA image processing operations
-        cv::cuda::GpuMat gpuGray, gpuBlurred, gpuResized;
+        // Test OpenCL image processing operations
+        cv::UMat gpuGray, gpuBlurred, gpuResized;
         
         // Color conversion
-        cv::cuda::cvtColor(gpuImage, gpuGray, cv::COLOR_BGR2GRAY);
-        qDebug() << "✓ CUDA color conversion successful";
+        cv::cvtColor(gpuImage, gpuGray, cv::COLOR_BGR2GRAY);
+        qDebug() << "✓ OpenCL color conversion successful";
         
         // Gaussian blur
-        cv::Ptr<cv::cuda::Filter> gaussianFilter = cv::cuda::createGaussianFilter(gpuGray.type(), gpuGray.type(), cv::Size(15, 15), 2.0);
-        gaussianFilter->apply(gpuGray, gpuBlurred);
-        qDebug() << "✓ CUDA Gaussian blur successful";
+        cv::GaussianBlur(gpuGray, gpuBlurred, cv::Size(15, 15), 2.0);
+        qDebug() << "✓ OpenCL Gaussian blur successful";
         
         // Resize
-        cv::cuda::resize(gpuBlurred, gpuResized, cv::Size(320, 240));
-        qDebug() << "✓ CUDA resize successful";
+        cv::resize(gpuBlurred, gpuResized, cv::Size(320, 240));
+        qDebug() << "✓ OpenCL resize successful";
         
         // Download result
         cv::Mat result;
-        gpuResized.download(result);
-        qDebug() << "✓ GPU download successful";
+        gpuResized.copyTo(result);
+        qDebug() << "✓ OpenCL download successful";
         
         // Test performance
         auto start = std::chrono::high_resolution_clock::now();
         for (int i = 0; i < 100; i++) {
-            cv::cuda::cvtColor(gpuImage, gpuGray, cv::COLOR_BGR2GRAY);
-            gaussianFilter->apply(gpuGray, gpuBlurred);
-            cv::cuda::resize(gpuBlurred, gpuResized, cv::Size(320, 240));
+            cv::cvtColor(gpuImage, gpuGray, cv::COLOR_BGR2GRAY);
+            cv::GaussianBlur(gpuGray, gpuBlurred, cv::Size(15, 15), 2.0);
+            cv::resize(gpuBlurred, gpuResized, cv::Size(320, 240));
         }
         auto end = std::chrono::high_resolution_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
         qDebug() << "✓ Performance test: 100 iterations completed in" << duration.count() << "ms";
         
-        qDebug() << "=== All CUDA tests passed! ===";
+        qDebug() << "=== All AMD GPU tests passed! ===";
         
     } catch (const cv::Exception& e) {
-        qDebug() << "✗ CUDA test failed:" << e.what();
+        qDebug() << "✗ AMD GPU test failed:" << e.what();
     } catch (const std::exception& e) {
-                 qDebug() << "✗ CUDA test failed with exception:" << e.what();
+                 qDebug() << "✗ AMD GPU test failed with exception:" << e.what();
      }
  }
 

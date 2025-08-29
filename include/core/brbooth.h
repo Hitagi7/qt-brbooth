@@ -29,7 +29,7 @@ public:
     ~BRBooth();
     
     // CUDA test function
-    void testCudaFunctionality();
+    void testOpenGLFunctionality();
 
 protected:
     void resizeEvent(QResizeEvent *event) override;
