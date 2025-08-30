@@ -461,20 +461,29 @@ void Capture::updateCameraFeed(const QImage &image)
             Qt::FastTransformation
         );
         
-        // Apply frame scaling for all modes when person scale factor is not 1.0
+        // Apply person-only scaling for background template mode, frame scaling for other modes
         if (qAbs(m_personScaleFactor - 1.0) > 0.01) {
-            QSize originalSize = scaledPixmap.size();
-            int newWidth = qRound(originalSize.width() * m_personScaleFactor);
-            int newHeight = qRound(originalSize.height() * m_personScaleFactor);
-            
-            scaledPixmap = scaledPixmap.scaled(
-                newWidth, newHeight,
-                Qt::KeepAspectRatio,
-                Qt::FastTransformation
-            );
-            
-            qDebug() << "🎯 Frame scaled to" << newWidth << "x" << newHeight 
-                     << "with factor" << m_personScaleFactor;
+            // Check if we're in segmentation mode with background template
+            if (m_displayMode == SegmentationMode && m_useBackgroundTemplate && 
+                !m_selectedBackgroundTemplate.isEmpty()) {
+                // For background template mode, don't scale the entire frame
+                // Person scaling is handled in createSegmentedFrame
+                qDebug() << "🎯 Person-only scaling applied in segmentation mode (background template)";
+            } else {
+                // Apply frame scaling for other modes (normal, rectangle, black background)
+                QSize originalSize = scaledPixmap.size();
+                int newWidth = qRound(originalSize.width() * m_personScaleFactor);
+                int newHeight = qRound(originalSize.height() * m_personScaleFactor);
+                
+                scaledPixmap = scaledPixmap.scaled(
+                    newWidth, newHeight,
+                    Qt::KeepAspectRatio,
+                    Qt::FastTransformation
+                );
+                
+                qDebug() << "🎯 Frame scaled to" << newWidth << "x" << newHeight 
+                         << "with factor" << m_personScaleFactor;
+            }
         }
         
         ui->videoLabel->setPixmap(scaledPixmap);
@@ -1602,17 +1611,29 @@ void Capture::performImageCapture()
             Qt::FastTransformation
         );
 
-        // Apply person scaling if needed
+        // Apply person-only scaling for background template mode, frame scaling for other modes
         if (qAbs(m_personScaleFactor - 1.0) > 0.01) {
-            QSize originalSize = scaledPixmap.size();
-            int newWidth = qRound(originalSize.width() * m_personScaleFactor);
-            int newHeight = qRound(originalSize.height() * m_personScaleFactor);
-            
-            scaledPixmap = scaledPixmap.scaled(
-                newWidth, newHeight,
-                Qt::KeepAspectRatio,
-                Qt::FastTransformation
-            );
+            // Check if we're in segmentation mode with background template
+            if (m_displayMode == SegmentationMode && m_useBackgroundTemplate && 
+                !m_selectedBackgroundTemplate.isEmpty()) {
+                // For background template mode, don't scale the entire frame
+                // Person scaling is already applied in createSegmentedFrame
+                qDebug() << "🎯 Person-only scaling preserved in final output (background template mode)";
+            } else {
+                // Apply frame scaling for other modes (normal, rectangle, black background)
+                QSize originalSize = scaledPixmap.size();
+                int newWidth = qRound(originalSize.width() * m_personScaleFactor);
+                int newHeight = qRound(originalSize.height() * m_personScaleFactor);
+                
+                scaledPixmap = scaledPixmap.scaled(
+                    newWidth, newHeight,
+                    Qt::KeepAspectRatio,
+                    Qt::FastTransformation
+                );
+                
+                qDebug() << "🎯 Frame scaled in final output to" << newWidth << "x" << newHeight 
+                         << "with factor" << m_personScaleFactor;
+            }
         }
         
         m_capturedImage = scaledPixmap;
@@ -2051,14 +2072,60 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
             cv::Mat personRegion;
             frame.copyTo(personRegion, personMask);
             
-            // Scale the person region to match background size
+            // Scale the person region with person-only scaling for background template mode
             cv::Mat scaledPersonRegion, scaledPersonMask;
-            cv::resize(personRegion, scaledPersonRegion, segmentedFrame.size(), 0, 0, cv::INTER_LINEAR);
-            cv::resize(personMask, scaledPersonMask, segmentedFrame.size(), 0, 0, cv::INTER_LINEAR);
             
-            // Simple compositing: copy scaled person region directly to background where mask is non-zero
-            // This ensures solid, non-translucent appearance
-            scaledPersonRegion.copyTo(segmentedFrame, scaledPersonMask);
+            // Apply person-only scaling if we're using background template
+            if (m_useBackgroundTemplate && !m_selectedBackgroundTemplate.isEmpty()) {
+                // Calculate scaled size for person based on background size and person scale factor
+                cv::Size backgroundSize = segmentedFrame.size();
+                cv::Size scaledPersonSize;
+                
+                if (qAbs(m_personScaleFactor - 1.0) > 0.01) {
+                    // Apply person scale factor
+                    int scaledWidth = static_cast<int>(backgroundSize.width * m_personScaleFactor + 0.5);
+                    int scaledHeight = static_cast<int>(backgroundSize.height * m_personScaleFactor + 0.5);
+                    scaledPersonSize = cv::Size(scaledWidth, scaledHeight);
+                    
+                    qDebug() << "🎯 Person scaled to" << scaledWidth << "x" << scaledHeight 
+                             << "with factor" << m_personScaleFactor;
+                } else {
+                    // No scaling needed, use background size
+                    scaledPersonSize = backgroundSize;
+                }
+                
+                // Scale person to the calculated size
+                cv::resize(personRegion, scaledPersonRegion, scaledPersonSize, 0, 0, cv::INTER_LINEAR);
+                cv::resize(personMask, scaledPersonMask, scaledPersonSize, 0, 0, cv::INTER_LINEAR);
+                
+                // Calculate position to center the scaled person on the background
+                int xOffset = (backgroundSize.width - scaledPersonSize.width) / 2;
+                int yOffset = (backgroundSize.height - scaledPersonSize.height) / 2;
+                
+                // Ensure ROI is within background bounds
+                if (xOffset >= 0 && yOffset >= 0 && 
+                    xOffset + scaledPersonSize.width <= backgroundSize.width &&
+                    yOffset + scaledPersonSize.height <= backgroundSize.height) {
+                    
+                    // Create ROI for compositing using proper cv::Rect constructor
+                    cv::Rect backgroundRect(cv::Point(xOffset, yOffset), scaledPersonSize);
+                    cv::Rect personRect(cv::Point(0, 0), scaledPersonSize);
+                    
+                    // Composite scaled person onto background at calculated position
+                    cv::Mat backgroundROI = segmentedFrame(backgroundRect);
+                    scaledPersonRegion(personRect).copyTo(backgroundROI, scaledPersonMask(personRect));
+                } else {
+                    // Fallback: composite at origin if scaling makes person too large
+                    scaledPersonRegion.copyTo(segmentedFrame, scaledPersonMask);
+                }
+            } else {
+                // For black background, scale to match frame size (original behavior)
+                cv::resize(personRegion, scaledPersonRegion, segmentedFrame.size(), 0, 0, cv::INTER_LINEAR);
+                cv::resize(personMask, scaledPersonMask, segmentedFrame.size(), 0, 0, cv::INTER_LINEAR);
+                
+                // Simple compositing: copy scaled person region directly to background where mask is non-zero
+                scaledPersonRegion.copyTo(segmentedFrame, scaledPersonMask);
+            }
         }
         
         qDebug() << "🎯 Segmentation complete, returning segmented frame";
