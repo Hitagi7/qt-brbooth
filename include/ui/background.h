@@ -21,6 +21,10 @@ class Background : public QWidget
 public:
     explicit Background(QWidget *parent = nullptr);
     ~Background();
+    
+    // setter & getters for background template selection
+    void setSelectedBackground(const QString &path);
+    QString getSelectedBackground() const;
 
 public slots:
     void resetPage();
@@ -28,6 +32,7 @@ public slots:
 signals:
     void backtoForegroundPage();
     void imageSelectedTwice();
+    void backgroundChanged(const QString &newPath);
 
 protected:
     bool eventFilter(QObject *obj, QEvent *event) override;
@@ -51,6 +56,8 @@ private:
 
     void applyHighlightStyle(QPushButton *button, bool highlight);
     void processImageButtonClick(QPushButton *button);
+    
+    QString selectedBackground; // store user selected background template
 };
 
 #endif

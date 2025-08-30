@@ -114,6 +114,31 @@ void Background::processImageButtonClick(QPushButton *button)
         return;
     }
 
+    // Set selected background based on objectName
+    QString name = button->objectName(); // e.g., "image1"
+    QString path;
+
+    if (name == "image1")
+        path = ":/background/templates/background/bg1.png";
+    else if (name == "image2")
+        path = ":/background/templates/background/bg2.png";
+    else if (name == "image3")
+        path = ":/background/templates/background/bg3.png";
+    else if (name == "image4")
+        path = ":/background/templates/background/bg4.png";
+    else if (name == "image5")
+        path = ":/background/templates/background/bg5.png";
+    else if (name == "image6")
+        path = ":/background/templates/background/bg6.png";
+
+    if (!path.isEmpty()) {
+        setSelectedBackground(path);
+        qDebug() << "🎯 Background selected:" << path;
+        qDebug() << "🎯 Background stored:" << getSelectedBackground();
+        emit backgroundChanged(getSelectedBackground());
+    }
+
+    // Handle double click selection logic
     if (button == currentSelectedImageButton) {
         applyHighlightStyle(button, false);
         currentSelectedImageButton = nullptr;
@@ -128,9 +153,63 @@ void Background::processImageButtonClick(QPushButton *button)
     }
 }
 
-void Background::on_image1_clicked() {}
-void Background::on_image2_clicked() {}
-void Background::on_image3_clicked() {}
-void Background::on_image4_clicked() {}
-void Background::on_image5_clicked() {}
-void Background::on_image6_clicked() {}
+void Background::setSelectedBackground(const QString &path)
+{
+    selectedBackground = path;
+}
+
+QString Background::getSelectedBackground() const
+{
+    return selectedBackground;
+}
+
+// Implement the missing on_imageX_clicked methods that are referenced by MOC
+void Background::on_image1_clicked()
+{
+    QPushButton *button = findChild<QPushButton *>("image1");
+    if (button) {
+        processImageButtonClick(button);
+    }
+}
+
+void Background::on_image2_clicked()
+{
+    QPushButton *button = findChild<QPushButton *>("image2");
+    if (button) {
+        processImageButtonClick(button);
+    }
+}
+
+void Background::on_image3_clicked()
+{
+    QPushButton *button = findChild<QPushButton *>("image3");
+    if (button) {
+        processImageButtonClick(button);
+    }
+}
+
+void Background::on_image4_clicked()
+{
+    QPushButton *button = findChild<QPushButton *>("image4");
+    if (button) {
+        processImageButtonClick(button);
+    }
+}
+
+void Background::on_image5_clicked()
+{
+    QPushButton *button = findChild<QPushButton *>("image5");
+    if (button) {
+        processImageButtonClick(button);
+    }
+}
+
+void Background::on_image6_clicked()
+{
+    QPushButton *button = findChild<QPushButton *>("image6");
+    if (button) {
+        processImageButtonClick(button);
+    }
+}
+
+

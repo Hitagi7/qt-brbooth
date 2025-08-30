@@ -300,8 +300,28 @@ BRBooth::BRBooth(QWidget *parent)
             // Camera is already running continuously, no need to start it
             qDebug() << "📹 Camera already running continuously, proceeding to capture...";
             
+            // Pass the selected background template to capture page
+            if (capturePage && backgroundPage) {
+                QString selectedBackground = backgroundPage->getSelectedBackground();
+                if (!selectedBackground.isEmpty()) {
+                    capturePage->setSelectedBackgroundTemplate(selectedBackground);
+                    qDebug() << "🎯 Background template passed to capture:" << selectedBackground;
+                } else {
+                    qDebug() << "🎯 No background template selected - will use black background";
+                }
+            }
+            
             capturePage->setCaptureMode(Capture::ImageCaptureMode);
             showCapturePage(); // This call will now correctly store the background page index as lastVisited
+        });
+        
+        // Connect background selection to capture page for real-time updates
+        connect(backgroundPage, &Background::backgroundChanged, this, [this](const QString &backgroundPath) {
+            if (capturePage) {
+                capturePage->setSelectedBackgroundTemplate(backgroundPath);
+                qDebug() << "🎯 Background template updated in capture:" << backgroundPath;
+                qDebug() << "🎯 Capture page background template set to:" << capturePage->getSelectedBackgroundTemplate();
+            }
         });
     }
 
@@ -309,11 +329,18 @@ BRBooth::BRBooth(QWidget *parent)
         // Handle the 'back' action from the Capture page
         connect(capturePage, &Capture::backtoPreviousPage, this, [this]() {
             // lastVisitedPageIndex should correctly hold the index of the page *before* Capture.
+            qDebug() << "🎯 Capture back button pressed. lastVisitedPageIndex:" << lastVisitedPageIndex 
+                     << "backgroundPageIndex:" << backgroundPageIndex 
+                     << "dynamicPageIndex:" << dynamicPageIndex;
+            
             if (lastVisitedPageIndex == backgroundPageIndex) {
+                qDebug() << "🎯 Going back to background page";
                 showBackgroundPage();
             } else if (lastVisitedPageIndex == dynamicPageIndex) {
+                qDebug() << "🎯 Going back to dynamic page";
                 showDynamicPage(); // Will transition to the correct page
             } else {
+                qDebug() << "🎯 lastVisitedPageIndex doesn't match expected values, going to landing page";
                 showLandingPage(); // Fallback if lastVisitedPageIndex is unexpected
             }
         });
@@ -324,7 +351,12 @@ BRBooth::BRBooth(QWidget *parent)
     }
 
     if (finalOutputPage) {
-        connect(finalOutputPage, &Final::backToCapturePage, this, &BRBooth::showCapturePage);
+        connect(finalOutputPage, &Final::backToCapturePage, this, [this]() {
+            // When going back from final output to capture, preserve the original lastVisitedPageIndex
+            // so we can go back to the correct page (background or dynamic)
+            qDebug() << "🎯 Going back from final output to capture page";
+            showCapturePage();
+        });
         connect(finalOutputPage, &Final::backToLandingPage, this, &BRBooth::showLandingPage);
     }
 
@@ -552,9 +584,15 @@ void BRBooth::showCapturePage()
 {
     // CRITICAL FIX: When we call showCapturePage(), the *current* page is the one we want to remember
     // as the "last visited" (the page to go back to).
-    lastVisitedPageIndex = ui->stackedWidget->currentIndex();
-    qDebug() << "DEBUG: showCapturePage() called. Setting index to:" << capturePageIndex
-             << ". SAVED lastVisitedPageIndex (page we just came from):" << lastVisitedPageIndex;
+    // BUT: If we're coming from final output page, don't overwrite the original lastVisitedPageIndex
+    int currentIndex = ui->stackedWidget->currentIndex();
+    if (currentIndex != finalOutputPageIndex) {
+        lastVisitedPageIndex = currentIndex;
+        qDebug() << "DEBUG: showCapturePage() called. Setting index to:" << capturePageIndex
+                 << ". SAVED lastVisitedPageIndex (page we just came from):" << lastVisitedPageIndex;
+    } else {
+        qDebug() << "DEBUG: showCapturePage() called from final output page. Keeping lastVisitedPageIndex:" << lastVisitedPageIndex;
+    }
     
     // Camera is now started by page change handler for all relevant pages
     
@@ -571,9 +609,10 @@ void BRBooth::showCapturePage()
 
 void BRBooth::showFinalOutputPage()
 {
-    // CRITICAL FIX: Similar to Capture, when moving to Final, save the current page (Capture)
-    // as the last visited one to return to.
-    lastVisitedPageIndex = ui->stackedWidget->currentIndex();
+    // CRITICAL FIX: When moving to Final, DON'T overwrite lastVisitedPageIndex
+    // We want to preserve the original page (background/dynamic) that led to capture
+    // The capture page is always the immediate previous page, so we don't need to save it
+    qDebug() << "DEBUG: showFinalOutputPage() called. Preserving lastVisitedPageIndex:" << lastVisitedPageIndex;
     ui->stackedWidget->setCurrentIndex(finalOutputPageIndex);
 }
 

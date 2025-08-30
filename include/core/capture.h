@@ -61,7 +61,9 @@ public:
     void setCaptureMode(CaptureMode mode);
     void setVideoTemplate(const VideoTemplate &templateData);
     
-
+    // Background Template Control Methods
+    void setSelectedBackgroundTemplate(const QString &path);
+    QString getSelectedBackgroundTemplate() const;
 
     // Hand Detection Control Methods
     void setShowHandDetection(bool show);
@@ -264,6 +266,11 @@ private:
     DisplayMode m_displayMode;  // Three-way toggle: Normal -> Rectangles -> Segmentation -> Normal
     DisplayMode m_lastSegmentationMode;  // Store the last segmentation mode when leaving capture page
     bool m_segmentationEnabledInCapture;  // Track if segmentation should be enabled in capture interface
+    
+    // Background Template Members
+    QString m_selectedBackgroundTemplate;  // Store the selected background template path
+    bool m_useBackgroundTemplate;  // Track if background template should be used in segmentation
+    
     double m_personDetectionFPS;
     double m_lastPersonDetectionTime;
     cv::Mat m_currentFrame;

@@ -17,6 +17,8 @@
 #include <QKeyEvent>
 #include <QApplication>
 #include <QPushButton>
+#include <QCoreApplication>
+#include <QDir>
 #include <QMessageBox>
 #include <QDateTime>
 #include <QStackedLayout>
@@ -104,6 +106,8 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     , m_cachedPixmap(640, 480)
     , m_segmentationEnabledInCapture(false)
     , m_lastSegmentationMode(NormalMode)
+    , m_selectedBackgroundTemplate()
+    , m_useBackgroundTemplate(false)
 {
     ui->setupUi(this);
 
@@ -457,7 +461,7 @@ void Capture::updateCameraFeed(const QImage &image)
             Qt::FastTransformation
         );
         
-        // Apply frame scaling if needed
+        // Apply frame scaling for all modes when person scale factor is not 1.0
         if (qAbs(m_personScaleFactor - 1.0) > 0.01) {
             QSize originalSize = scaledPixmap.size();
             int newWidth = qRound(originalSize.width() * m_personScaleFactor);
@@ -468,6 +472,9 @@ void Capture::updateCameraFeed(const QImage &image)
                 Qt::KeepAspectRatio,
                 Qt::FastTransformation
             );
+            
+            qDebug() << "🎯 Frame scaled to" << newWidth << "x" << newHeight 
+                     << "with factor" << m_personScaleFactor;
         }
         
         ui->videoLabel->setPixmap(scaledPixmap);
@@ -1331,6 +1338,7 @@ void Capture::keyPressEvent(QKeyEvent *event)
             // Temporarily disabled debug frame save
             qDebug() << "Debug frame save disabled";
             break;
+
         default:
             QWidget::keyPressEvent(event);
     }
@@ -1420,6 +1428,8 @@ void Capture::updateDebugDisplay()
         QString modeText;
         QString segmentationStatus = m_segmentationEnabledInCapture ? "ENABLED" : "DISABLED";
         
+        QString backgroundStatus = m_useBackgroundTemplate ? "TEMPLATE" : "BLACK";
+        
         switch (m_displayMode) {
             case NormalMode:
                 modeText = "NORMAL VIEW";
@@ -1428,14 +1438,15 @@ void Capture::updateDebugDisplay()
                 modeText = "ORIGINAL + RECTANGLES";
                 break;
             case SegmentationMode:
-                modeText = "BLACK BG + EDGE SILHOUETTES";
+                modeText = QString("SEGMENTATION (%1 BG)").arg(backgroundStatus);
                 break;
         }
-        QString debugInfo = QString("FPS: %1 | %2 | People: %3 | Segmentation: %4")
+        QString debugInfo = QString("FPS: %1 | %2 | People: %3 | Segmentation: %4 | BG: %5")
                            .arg(m_currentFPS)
                            .arg(modeText)
                            .arg(peopleDetected)
-                           .arg(segmentationStatus);
+                           .arg(segmentationStatus)
+                           .arg(backgroundStatus);
         debugLabel->setText(debugInfo);
     }
     
@@ -1566,10 +1577,22 @@ void Capture::stopRecording()
 
 void Capture::performImageCapture()
 {
-    // Capture the scaled frame exactly as it appears in the UI (ignoring foreground template)
+    // Capture the processed frame that includes background template and segmentation
     if (!m_originalCameraImage.isNull()) {
-        QPixmap cameraPixmap = QPixmap::fromImage(m_originalCameraImage);
+        QPixmap cameraPixmap;
         QSize labelSize = ui->videoLabel->size();
+
+        // Check if we have a processed segmented frame to capture
+        if ((m_displayMode == SegmentationMode || m_displayMode == RectangleMode) && !m_lastSegmentedFrame.empty()) {
+            // Convert the processed OpenCV frame to QImage for capture
+            QImage processedImage = cvMatToQImage(m_lastSegmentedFrame);
+            cameraPixmap = QPixmap::fromImage(processedImage);
+            qDebug() << "🎯 Capturing processed segmented frame with background template";
+        } else {
+            // Use original camera image for normal mode
+            cameraPixmap = QPixmap::fromImage(m_originalCameraImage);
+            qDebug() << "🎯 Capturing original camera frame (normal mode)";
+        }
 
         // Apply the same scaling logic as the live display
         // First scale to fit the label - use FastTransformation for better performance
@@ -1593,8 +1616,8 @@ void Capture::performImageCapture()
         }
         
         m_capturedImage = scaledPixmap;
-            emit imageCaptured(m_capturedImage);
-        qDebug() << "Image captured (scaled frame exactly as displayed, no foreground compositing).";
+        emit imageCaptured(m_capturedImage);
+        qDebug() << "Image captured (includes background template and segmentation).";
         qDebug() << "Captured image size:" << m_capturedImage.size() << "Original size:" << cameraPixmap.size();
     } else {
         qWarning() << "Failed to capture image: original camera image is empty.";
@@ -1958,9 +1981,60 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
     int maxDetections = std::min(3, (int)detections.size());
     
     if (m_displayMode == SegmentationMode) {
-        qDebug() << "🎯 SEGMENTATION MODE: Creating black background + edge-based silhouettes";
-        // Create black background for edge-based segmentation
-        cv::Mat segmentedFrame = cv::Mat::zeros(frame.size(), frame.type());
+        qDebug() << "🎯 SEGMENTATION MODE: Creating background + edge-based silhouettes";
+        
+        // Create background for edge-based segmentation
+        cv::Mat segmentedFrame;
+        
+        // Use cached background template for performance
+        static cv::Mat cachedBackgroundTemplate;
+        static QString lastBackgroundPath;
+        
+        if (m_useBackgroundTemplate && !m_selectedBackgroundTemplate.isEmpty()) {
+            // Check if we need to reload the background template
+            bool needReload = cachedBackgroundTemplate.empty() || 
+                             lastBackgroundPath != m_selectedBackgroundTemplate;
+            
+            if (needReload) {
+                qDebug() << "🎯 Loading background template:" << m_selectedBackgroundTemplate;
+                
+                // Check if this is image6 (white background special case)
+                if (m_selectedBackgroundTemplate.contains("bg6.png")) {
+                    // Create white background instead of loading a file
+                    // OpenCV uses BGR format, so we need to set all channels to 255 for white
+                    cachedBackgroundTemplate = cv::Mat(frame.size(), frame.type(), cv::Scalar(255, 255, 255));
+                    lastBackgroundPath = m_selectedBackgroundTemplate;
+                    qDebug() << "🎯 White background created for image6, size:" << frame.cols << "x" << frame.rows;
+                } else {
+                    // Convert Qt resource path to file system path for direct OpenCV loading
+                    QString filePath = m_selectedBackgroundTemplate;
+                    if (filePath.startsWith(":/background/")) {
+                        // Convert Qt resource path to actual file path
+                        filePath = "C:/Users/User/Documents/qt-brbooth/templates/background/" + 
+                                  filePath.mid(filePath.lastIndexOf('/') + 1);
+                    }
+                    
+                    // Load background image directly using OpenCV for better performance
+                    cv::Mat backgroundImage = cv::imread(filePath.toStdString());
+                    if (!backgroundImage.empty()) {
+                        // Resize background to match frame size (like original black background logic)
+                        cv::resize(backgroundImage, cachedBackgroundTemplate, frame.size(), 0, 0, cv::INTER_LINEAR);
+                        lastBackgroundPath = m_selectedBackgroundTemplate;
+                        qDebug() << "🎯 Background template cached and resized to" << frame.cols << "x" << frame.rows;
+                    } else {
+                        qWarning() << "🎯 Failed to load background template from:" << filePath << "- using black background";
+                        cachedBackgroundTemplate = cv::Mat::zeros(frame.size(), frame.type());
+                    }
+                }
+            }
+            
+            // Use cached background template
+            segmentedFrame = cachedBackgroundTemplate.clone();
+        } else {
+            // Use black background (default) - same size as frame
+            segmentedFrame = cv::Mat::zeros(frame.size(), frame.type());
+            qDebug() << "🎯 Using black background (no template selected)";
+        }
         
         for (int i = 0; i < maxDetections; i++) {
             const auto& detection = detections[i];
@@ -1973,12 +2047,18 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
             int nonZeroPixels = cv::countNonZero(personMask);
             qDebug() << "🎯 Person mask has" << nonZeroPixels << "non-zero pixels";
             
-            // Apply mask to extract person
+            // Apply mask to extract person from camera frame
             cv::Mat personRegion;
             frame.copyTo(personRegion, personMask);
             
-            // Add to segmented frame (black background + edge-based silhouettes)
-            cv::add(segmentedFrame, personRegion, segmentedFrame);
+            // Scale the person region to match background size
+            cv::Mat scaledPersonRegion, scaledPersonMask;
+            cv::resize(personRegion, scaledPersonRegion, segmentedFrame.size(), 0, 0, cv::INTER_LINEAR);
+            cv::resize(personMask, scaledPersonMask, segmentedFrame.size(), 0, 0, cv::INTER_LINEAR);
+            
+            // Simple compositing: copy scaled person region directly to background where mask is non-zero
+            // This ensures solid, non-translucent appearance
+            scaledPersonRegion.copyTo(segmentedFrame, scaledPersonMask);
         }
         
         qDebug() << "🎯 Segmentation complete, returning segmented frame";
@@ -3230,6 +3310,21 @@ void Capture::setSegmentationMode(int mode)
         qDebug() << "🎯 Cannot set segmentation mode - segmentation not enabled in capture interface";
     }
 }
+
+// Background Template Control Methods
+void Capture::setSelectedBackgroundTemplate(const QString &path)
+{
+    m_selectedBackgroundTemplate = path;
+    m_useBackgroundTemplate = !path.isEmpty();
+    qDebug() << "🎯 Background template set to:" << path << "Use template:" << m_useBackgroundTemplate;
+}
+
+QString Capture::getSelectedBackgroundTemplate() const
+{
+    return m_selectedBackgroundTemplate;
+}
+
+
 
 
 
