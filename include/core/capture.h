@@ -112,6 +112,10 @@ public:
     void switchHandDetectionProcessingMode();
     QString getCurrentSegmentationModeString() const;
     QString getCurrentHandDetectionModeString() const;
+    
+    // Mode optimization methods
+    void validateAndOptimizeProcessingModes();
+    void preallocateGPUResources();
 
 protected:
     void resizeEvent(QResizeEvent *event) override;

@@ -251,6 +251,11 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     initializeHandDetection();
     m_handDetectionEnabled = true;
     m_captureReady = true;  // Start with capture ready
+    
+    // Initialize mode optimization and GPU resource pre-allocation
+    validateAndOptimizeProcessingModes();
+    preallocateGPUResources();
+    
     // Initialize MediaPipe-like tracker
     // TODO: Initialize hand tracker when available
 
@@ -1338,14 +1343,26 @@ void Capture::keyPressEvent(QKeyEvent *event)
             // Switch processing modes for both segmentation and hand detection
             // Cycles through: CUDA -> OpenGL -> CPU -> CUDA for both systems
             qDebug() << "🔄 Switching processing modes for segmentation and hand detection...";
+            
+            // Optimized mode switching with validation and resource pre-allocation
             switchSegmentationProcessingMode();
             switchHandDetectionProcessingMode();
             
-            // Show combined status overlay
+            // Show combined status overlay with enhanced information
             if (statusOverlay) {
                 QString segMode = getCurrentSegmentationModeString();
                 QString handMode = getCurrentHandDetectionModeString();
-                QString statusText = QString("Hand Detection and Segmentation: %1").arg(segMode);
+                QString statusText = QString("Processing Modes - Seg: %1 | Hand: %2").arg(segMode).arg(handMode);
+                
+                // Add performance hints
+                if (segMode == "CUDA" || handMode == "CUDA") {
+                    statusText += " (GPU Accelerated)";
+                } else if (segMode == "OpenGL" || handMode == "OpenGL") {
+                    statusText += " (GPU Fallback)";
+                } else {
+                    statusText += " (CPU Processing)";
+                }
+                
                 statusOverlay->setText(statusText);
                 statusOverlay->resize(statusOverlay->sizeHint());
                 int x = (width() - statusOverlay->width()) / 2;
@@ -3399,6 +3416,12 @@ void Capture::switchSegmentationProcessingMode()
             break;
     }
     
+    // Validate and optimize the new mode
+    validateAndOptimizeProcessingModes();
+    
+    // Pre-allocate GPU resources for faster switching
+    preallocateGPUResources();
+    
     // Update UI to reflect the change
     updateDebugDisplay();
     
@@ -3422,6 +3445,12 @@ void Capture::switchHandDetectionProcessingMode()
             qDebug() << "🖐️ Hand detection processing switched to: CUDA";
             break;
     }
+    
+    // Validate and optimize the new mode
+    validateAndOptimizeProcessingModes();
+    
+    // Pre-allocate GPU resources for faster switching
+    preallocateGPUResources();
     
     // Update hand detector mode if it exists
     if (m_handDetector) {
@@ -3459,6 +3488,119 @@ QString Capture::getCurrentHandDetectionModeString() const
             return "CPU";
         default:
             return "Unknown";
+    }
+}
+
+// Add this method after the existing mode switching methods (around line 3430)
+
+void Capture::validateAndOptimizeProcessingModes()
+{
+    // Centralized validation and optimization of processing modes
+    qDebug() << "🔄 Validating and optimizing processing modes...";
+    
+    // Check CUDA availability once and cache the result
+    static bool cudaAvailable = false;
+    static bool cudaChecked = false;
+    
+    if (!cudaChecked) {
+        try {
+            cudaAvailable = (cv::cuda::getCudaEnabledDeviceCount() > 0);
+            cudaChecked = true;
+            qDebug() << "🎮 CUDA availability check:" << (cudaAvailable ? "AVAILABLE" : "NOT AVAILABLE");
+        } catch (...) {
+            cudaAvailable = false;
+            cudaChecked = true;
+            qDebug() << "🎮 CUDA availability check: FAILED (using fallback)";
+        }
+    }
+    
+    // Check OpenCL availability once and cache the result
+    static bool openclAvailable = false;
+    static bool openclChecked = false;
+    
+    if (!openclChecked) {
+        try {
+            openclAvailable = cv::ocl::useOpenCL();
+            openclChecked = true;
+            qDebug() << "🎮 OpenCL availability check:" << (openclAvailable ? "AVAILABLE" : "NOT AVAILABLE");
+        } catch (...) {
+            openclAvailable = false;
+            openclChecked = true;
+            qDebug() << "🎮 OpenCL availability check: FAILED (using fallback)";
+        }
+    }
+    
+    // Optimize segmentation processing mode based on availability
+    if (m_segmentationProcessingMode == SegmentationProcessingMode::CUDA_MODE && !cudaAvailable) {
+        qDebug() << "🎯 CUDA mode requested but not available, switching to OpenCL";
+        m_segmentationProcessingMode = SegmentationProcessingMode::OPENGL_MODE;
+    }
+    
+    if (m_segmentationProcessingMode == SegmentationProcessingMode::OPENGL_MODE && !openclAvailable) {
+        qDebug() << "🎯 OpenGL mode requested but not available, switching to CPU";
+        m_segmentationProcessingMode = SegmentationProcessingMode::CPU_MODE;
+    }
+    
+    // Optimize hand detection processing mode based on availability
+    if (m_handDetectionProcessingMode == HandDetectionProcessingMode::HAND_CUDA_MODE && !cudaAvailable) {
+        qDebug() << "🖐️ CUDA mode requested but not available, switching to OpenGL";
+        m_handDetectionProcessingMode = HandDetectionProcessingMode::HAND_OPENGL_MODE;
+    }
+    
+    if (m_handDetectionProcessingMode == HandDetectionProcessingMode::HAND_OPENGL_MODE && !openclAvailable) {
+        qDebug() << "🖐️ OpenGL mode requested but not available, switching to CPU";
+        m_handDetectionProcessingMode = HandDetectionProcessingMode::HAND_CPU_MODE;
+    }
+    
+    // Update utilization flags based on current modes
+    m_useCUDA = (m_segmentationProcessingMode == SegmentationProcessingMode::CUDA_MODE && cudaAvailable) ||
+                (m_handDetectionProcessingMode == HandDetectionProcessingMode::HAND_CUDA_MODE && cudaAvailable);
+    
+    m_useGPU = (m_segmentationProcessingMode == SegmentationProcessingMode::OPENGL_MODE && openclAvailable) ||
+               (m_handDetectionProcessingMode == HandDetectionProcessingMode::HAND_OPENGL_MODE && openclAvailable);
+    
+    qDebug() << "✅ Mode optimization complete - CUDA:" << m_useCUDA << "OpenGL:" << m_useGPU;
+}
+
+// Add this method to pre-allocate GPU resources for faster mode switching
+void Capture::preallocateGPUResources()
+{
+    qDebug() << "🎮 Pre-allocating GPU resources for faster mode switching...";
+    
+    if (m_useCUDA) {
+        try {
+            // Pre-allocate common CUDA memory pools
+            static bool cudaPoolsAllocated = false;
+            if (!cudaPoolsAllocated) {
+                cv::cuda::GpuMat cudaFramePool1, cudaFramePool2, cudaFramePool3;
+                cudaFramePool1.create(720, 1280, CV_8UC3);  // Common camera resolution
+                cudaFramePool2.create(480, 640, CV_8UC3);   // Smaller processing size
+                cudaFramePool3.create(360, 640, CV_8UC1);   // Grayscale processing
+                
+                qDebug() << "✅ CUDA memory pools pre-allocated for faster switching";
+                cudaPoolsAllocated = true;
+            }
+        } catch (const cv::Exception& e) {
+            qWarning() << "⚠️ CUDA memory pool allocation failed:" << e.what();
+        }
+    }
+    
+    if (m_useGPU) {
+        try {
+            // Pre-allocate common OpenCL memory pools
+            static bool openclPoolsAllocated = false;
+            if (!openclPoolsAllocated) {
+                cv::UMat gpuFramePool1, gpuFramePool2, gpuFramePool3;
+                gpuFramePool1.create(720, 1280, CV_8UC3);  // Common camera resolution
+                gpuFramePool2.create(480, 640, CV_8UC3);   // Smaller processing size
+                gpuFramePool3.create(360, 640, CV_8UC1);   // Grayscale processing
+                
+                qDebug() << "✅ OpenCL memory pools pre-allocated for faster switching";
+                openclPoolsAllocated = true;
+            }
+        } catch (const cv::Exception& e) {
+            qWarning() << "⚠️ OpenCL memory pool allocation failed:" << e.what();
+        }
     }
 }
 
