@@ -188,6 +188,18 @@ private:
     void preallocateOpenCLMemory(int width, int height);
     void releaseOpenCLMemory();
     
+    // Enhanced segmentation methods
+    QList<HandDetection> detectEnhancedSegmentation(const cv::Mat& image);
+    cv::Mat enhanceMorphologicalProcessing(const cv::Mat& mask);
+    std::vector<std::vector<cv::Point>> findMultiScaleContours(const cv::Mat& mask);
+    bool isEnhancedHandShape(const std::vector<cv::Point>& contour, const cv::Mat& image);
+    double calculateEnhancedConfidence(const std::vector<cv::Point>& contour, const cv::Mat& image);
+    cv::Point findEnhancedPalmCenter(const std::vector<cv::Point>& contour);
+    std::vector<cv::Point> findEnhancedFingerTips(const std::vector<cv::Point>& contour);
+    bool isEnhancedHandOpen(const std::vector<cv::Point>& contour);
+    bool isEnhancedHandClosed(const std::vector<cv::Point>& contour);
+    QList<HandDetection> applyTemporalConsistency(const QList<HandDetection>& detections);
+    
     // State management
     void updatePerformanceStats(double processingTime);
 

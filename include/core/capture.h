@@ -296,6 +296,10 @@ private:
     cv::Mat getMotionMask(const cv::Mat &frame);
     void adjustRect(cv::Rect &r) const;
     
+    // GPU utilization monitoring
+    void logGPUUtilizationStatus();
+    bool isGPUActuallyUtilized() const;
+    
     // Helper methods (implemented in .cpp)
     void updateDebugDisplay();
     void setupDebugDisplay();

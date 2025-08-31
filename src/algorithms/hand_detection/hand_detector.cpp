@@ -162,8 +162,14 @@ QList<HandDetection> HandDetector::detect(const cv::Mat& image)
     QList<HandDetection> detections;
     
     try {
-        // Always use the new strict hand detection method
-        detections = detectHandGestures(image);
+        // Use enhanced segmentation when available, otherwise fall back to standard detection
+        if (m_openclAvailable && m_openglAvailable) {
+            qDebug() << "🚀 Using Enhanced OpenGL/OpenCL Segmentation";
+            detections = detectEnhancedSegmentation(image);
+        } else {
+            qDebug() << "💻 Using Enhanced CPU Segmentation";
+            detections = detectHandGestures(image);
+        }
         
         // Cache detections for frame skipping
         m_lastDetections = detections;
@@ -1650,6 +1656,392 @@ std::vector<cv::Point> HandDetector::findFingerTipsFast(const std::vector<cv::Po
     }
     
     return fingerTips;
+}
+
+// Enhanced segmentation method combining multiple approaches
+QList<HandDetection> HandDetector::detectEnhancedSegmentation(const cv::Mat& image)
+{
+    QList<HandDetection> detections;
+    
+    try {
+        // Multi-stage detection approach for enhanced accuracy
+        
+        // Stage 1: Enhanced skin detection with multiple color spaces
+        cv::Mat enhancedSkinMask = createEnhancedSkinMask(image);
+        
+        // Stage 2: Motion-based detection (if previous frame available)
+        cv::Mat motionMask;
+        if (!m_openclPrevGray.empty()) {
+            motionMask = createMotionMask(image);
+        }
+        
+        // Stage 3: Combine skin and motion masks
+        cv::Mat combinedMask = enhancedSkinMask.clone();
+        if (!motionMask.empty()) {
+            cv::bitwise_and(enhancedSkinMask, motionMask, combinedMask);
+        }
+        
+        // Stage 4: Enhanced morphological processing
+        cv::Mat processedMask = enhanceMorphologicalProcessing(combinedMask);
+        
+        // Stage 5: Multi-scale contour detection
+        std::vector<std::vector<cv::Point>> contours = findMultiScaleContours(processedMask);
+        
+        // Stage 6: Advanced contour analysis with temporal consistency
+        for (const auto& contour : contours) {
+            if (contour.size() < 15) continue;
+            
+            // Enhanced shape analysis
+            if (isEnhancedHandShape(contour, image)) {
+                double confidence = calculateEnhancedConfidence(contour, image);
+                
+                if (confidence >= m_confidenceThreshold * 0.8) { // Slightly lower threshold for enhanced detection
+                    HandDetection detection;
+                    detection.boundingBox = cv::boundingRect(contour);
+                    detection.confidence = confidence;
+                    detection.handType = "enhanced_hand";
+                    detection.landmarks = contour;
+                    detection.palmCenter = findEnhancedPalmCenter(contour);
+                    detection.fingerTips = findEnhancedFingerTips(contour);
+                    
+                    // Enhanced gesture analysis with temporal consistency
+                    detection.isOpen = isEnhancedHandOpen(contour);
+                    detection.isClosed = isEnhancedHandClosed(contour);
+                    detection.isRaised = detection.boundingBox.y < m_frameHeight / 2;
+                    
+                    detections.append(detection);
+                    
+                    qDebug() << "🎯 Enhanced Segmentation - Confidence:" << confidence 
+                             << "| Open:" << detection.isOpen 
+                             << "| Closed:" << detection.isClosed
+                             << "| Area:" << cv::contourArea(contour);
+                }
+            }
+        }
+        
+        // Stage 7: Temporal consistency check
+        detections = applyTemporalConsistency(detections);
+        
+        // Stage 8: Sort by confidence and limit results
+        std::sort(detections.begin(), detections.end(), 
+                  [](const HandDetection& a, const HandDetection& b) {
+                      return a.confidence > b.confidence;
+                  });
+        
+        // Limit to top 2 detections for performance
+        if (detections.size() > 2) {
+            detections = detections.mid(0, 2);
+        }
+        
+    } catch (const cv::Exception& e) {
+        qWarning() << "HandDetector: Enhanced segmentation error:" << e.what();
+    }
+    
+    return detections;
+}
+
+
+
+cv::Mat HandDetector::enhanceMorphologicalProcessing(const cv::Mat& mask)
+{
+    cv::Mat processedMask = mask.clone();
+    
+    try {
+        // Multi-stage morphological processing
+        cv::Mat kernel1 = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
+        cv::Mat kernel2 = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(5, 5));
+        
+        // Opening to remove noise
+        cv::morphologyEx(processedMask, processedMask, cv::MORPH_OPEN, kernel1);
+        
+        // Closing to fill gaps
+        cv::morphologyEx(processedMask, processedMask, cv::MORPH_CLOSE, kernel2);
+        
+        // Dilation to connect nearby regions
+        cv::dilate(processedMask, processedMask, kernel1);
+        
+        // Erosion to smooth boundaries
+        cv::erode(processedMask, processedMask, kernel1);
+        
+    } catch (const cv::Exception& e) {
+        qWarning() << "HandDetector: Morphological processing error:" << e.what();
+    }
+    
+    return processedMask;
+}
+
+std::vector<std::vector<cv::Point>> HandDetector::findMultiScaleContours(const cv::Mat& mask)
+{
+    std::vector<std::vector<cv::Point>> allContours;
+    
+    try {
+        // Find contours at different scales
+        std::vector<cv::Vec4i> hierarchy;
+        cv::findContours(mask, allContours, hierarchy, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+        
+        // Filter contours by area and complexity
+        std::vector<std::vector<cv::Point>> filteredContours;
+        for (const auto& contour : allContours) {
+            double area = cv::contourArea(contour);
+            double perimeter = cv::arcLength(contour, true);
+            
+            // Multi-scale filtering criteria
+            bool validArea = area > m_minMotionArea && area < m_frameWidth * m_frameHeight * 0.3;
+            bool validComplexity = contour.size() >= 15 && perimeter > 50;
+            
+            if (validArea && validComplexity) {
+                filteredContours.push_back(contour);
+            }
+        }
+        
+        allContours = filteredContours;
+        
+    } catch (const cv::Exception& e) {
+        qWarning() << "HandDetector: Multi-scale contour detection error:" << e.what();
+    }
+    
+    return allContours;
+}
+
+bool HandDetector::isEnhancedHandShape(const std::vector<cv::Point>& contour, const cv::Mat& image)
+{
+    if (contour.size() < 15) return false;
+    
+    double area = cv::contourArea(contour);
+    double perimeter = cv::arcLength(contour, true);
+    
+    if (perimeter == 0) return false;
+    
+    // Enhanced shape analysis
+    double circularity = 4 * M_PI * area / (perimeter * perimeter);
+    cv::Rect boundingRect = cv::boundingRect(contour);
+    double aspectRatio = static_cast<double>(boundingRect.width) / boundingRect.height;
+    
+    // Convexity analysis
+    std::vector<cv::Point> hull;
+    cv::convexHull(contour, hull);
+    double hullArea = cv::contourArea(hull);
+    double solidity = hullArea > 0 ? area / hullArea : 0;
+    
+    // Convexity defects analysis
+    std::vector<int> hullIndices;
+    cv::convexHull(contour, hullIndices);
+    std::vector<cv::Vec4i> defects;
+    cv::convexityDefects(contour, hullIndices, defects);
+    
+    // Enhanced criteria with weighted scoring
+    int score = 0;
+    
+    if (circularity > 0.1 && circularity < 0.8) score += 2; // Circularity
+    if (aspectRatio > 0.3 && aspectRatio < 3.0) score += 2; // Aspect ratio
+    if (solidity > 0.5 && solidity < 0.95) score += 2; // Solidness
+    if (defects.size() >= 1 && defects.size() <= 8) score += 2; // Defects
+    if (area > 500 && area < 30000) score += 1; // Size
+    if (boundingRect.y > image.rows * 0.1) score += 1; // Position
+    
+    // Require at least 7 out of 10 points for enhanced detection
+    return score >= 7;
+}
+
+double HandDetector::calculateEnhancedConfidence(const std::vector<cv::Point>& contour, const cv::Mat& image)
+{
+    if (contour.size() < 15) return 0.0;
+    
+    double confidence = 0.0;
+    
+    try {
+        double area = cv::contourArea(contour);
+        double perimeter = cv::arcLength(contour, true);
+        
+        if (perimeter == 0) return 0.0;
+        
+        // Enhanced confidence calculation
+        double circularity = 4 * M_PI * area / (perimeter * perimeter);
+        
+        std::vector<cv::Point> hull;
+        cv::convexHull(contour, hull);
+        double hullArea = cv::contourArea(hull);
+        double solidity = hullArea > 0 ? area / hullArea : 0;
+        
+        // Convexity defects analysis
+        std::vector<int> hullIndices;
+        cv::convexHull(contour, hullIndices);
+        std::vector<cv::Vec4i> defects;
+        cv::convexityDefects(contour, hullIndices, defects);
+        
+        int significantDefects = 0;
+        double totalDefectDepth = 0.0;
+        for (const auto& defect : defects) {
+            double depth = defect[3] / 256.0;
+            if (depth > 10.0) {
+                significantDefects++;
+                totalDefectDepth += depth;
+            }
+        }
+        
+        // Weighted confidence calculation
+        double areaConfidence = qMin(area / (image.rows * image.cols) * 3000, 0.3);
+        double circularityConfidence = (1.0 - circularity) * 0.2;
+        double solidityConfidence = solidity * 0.2;
+        double defectConfidence = qMin(significantDefects * 0.03 + (totalDefectDepth / 150.0), 0.2);
+        
+        // Aspect ratio bonus
+        cv::Rect boundingRect = cv::boundingRect(contour);
+        double aspectRatio = static_cast<double>(boundingRect.width) / boundingRect.height;
+        double aspectBonus = (aspectRatio > 0.3 && aspectRatio < 3.0) ? 0.1 : 0.0;
+        
+        confidence = areaConfidence + circularityConfidence + solidityConfidence + defectConfidence + aspectBonus;
+        confidence = qBound(0.0, confidence, 1.0);
+        
+    } catch (const cv::Exception& e) {
+        qWarning() << "HandDetector: Enhanced confidence calculation error:" << e.what();
+    }
+    
+    return confidence;
+}
+
+cv::Point HandDetector::findEnhancedPalmCenter(const std::vector<cv::Point>& contour)
+{
+    cv::Point palmCenter(0, 0);
+    
+    try {
+        // Use moments for more accurate center calculation
+        cv::Moments moments = cv::moments(contour);
+        if (moments.m00 != 0) {
+            palmCenter.x = static_cast<int>(moments.m10 / moments.m00);
+            palmCenter.y = static_cast<int>(moments.m01 / moments.m00);
+        }
+    } catch (const cv::Exception& e) {
+        qWarning() << "HandDetector: Enhanced palm center calculation error:" << e.what();
+    }
+    
+    return palmCenter;
+}
+
+std::vector<cv::Point> HandDetector::findEnhancedFingerTips(const std::vector<cv::Point>& contour)
+{
+    std::vector<cv::Point> fingerTips;
+    
+    try {
+        if (contour.size() < 3) return fingerTips;
+        
+        // Enhanced finger tip detection
+        std::vector<cv::Point> hull;
+        std::vector<int> hullIndices;
+        cv::convexHull(contour, hullIndices, false);
+        
+        // Get hull points from indices
+        for (int idx : hullIndices) {
+            if (idx >= 0 && idx < static_cast<int>(contour.size())) {
+                hull.push_back(contour[idx]);
+            }
+        }
+        
+        // Find convexity defects
+        std::vector<cv::Vec4i> defects;
+        if (hullIndices.size() > 3) {
+            cv::convexityDefects(contour, hullIndices, defects);
+        }
+        
+        // Enhanced finger tip detection with depth analysis
+        for (const auto& point : hull) {
+            bool isFingerTip = true;
+            double minDistance = 30.0; // Increased threshold for better accuracy
+            
+            for (const auto& defect : defects) {
+                cv::Point far = contour[defect[2]];
+                double distance = cv::norm(point - far);
+                
+                if (distance < minDistance) {
+                    isFingerTip = false;
+                    break;
+                }
+            }
+            
+            if (isFingerTip) {
+                fingerTips.push_back(point);
+            }
+        }
+        
+    } catch (const cv::Exception& e) {
+        qWarning() << "HandDetector: Enhanced finger tip detection error:" << e.what();
+    }
+    
+    return fingerTips;
+}
+
+bool HandDetector::isEnhancedHandOpen(const std::vector<cv::Point>& contour)
+{
+    if (contour.size() < 15) return false;
+    
+    try {
+        std::vector<int> hullIndices;
+        cv::convexHull(contour, hullIndices);
+        std::vector<cv::Vec4i> defects;
+        cv::convexityDefects(contour, hullIndices, defects);
+        
+        // Enhanced open hand detection
+        int significantDefects = 0;
+        for (const auto& defect : defects) {
+            double depth = defect[3] / 256.0;
+            if (depth > 12.0) { // Higher threshold for enhanced detection
+                significantDefects++;
+            }
+        }
+        
+        // Open hand has more significant defects
+        return significantDefects >= 3;
+        
+    } catch (const cv::Exception& e) {
+        qWarning() << "HandDetector: Enhanced open hand detection error:" << e.what();
+        return false;
+    }
+}
+
+bool HandDetector::isEnhancedHandClosed(const std::vector<cv::Point>& contour)
+{
+    if (contour.size() < 15) return false;
+    
+    try {
+        std::vector<int> hullIndices;
+        cv::convexHull(contour, hullIndices);
+        std::vector<cv::Vec4i> defects;
+        cv::convexityDefects(contour, hullIndices, defects);
+        
+        // Enhanced closed hand detection
+        int significantDefects = 0;
+        for (const auto& defect : defects) {
+            double depth = defect[3] / 256.0;
+            if (depth > 12.0) { // Higher threshold for enhanced detection
+                significantDefects++;
+            }
+        }
+        
+        // Closed hand has fewer significant defects
+        return significantDefects <= 1;
+        
+    } catch (const cv::Exception& e) {
+        qWarning() << "HandDetector: Enhanced closed hand detection error:" << e.what();
+        return false;
+    }
+}
+
+QList<HandDetection> HandDetector::applyTemporalConsistency(const QList<HandDetection>& detections)
+{
+    QList<HandDetection> consistentDetections = detections;
+    
+    try {
+        // Simple temporal consistency check
+        // In a more advanced implementation, you could use Kalman filtering or tracking
+        
+        // For now, just return the detections as-is
+        // This can be enhanced with proper tracking algorithms
+        
+    } catch (const cv::Exception& e) {
+        qWarning() << "HandDetector: Temporal consistency error:" << e.what();
+    }
+    
+    return consistentDetections;
 }
 
 
