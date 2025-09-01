@@ -29,6 +29,7 @@
 #include <opencv2/core/ocl.hpp>
 #include <opencv2/cudaimgproc.hpp>
 #include <opencv2/cudawarping.hpp>
+#include <opencv2/cudacodec.hpp>
 #include "core/videotemplate.h"   // Your custom VideoTemplate class
 #include "core/camera.h"          // Your custom Camera class
 #include "ui/foreground.h"        // Foreground class
@@ -60,6 +61,10 @@ public:
 
     void setCaptureMode(CaptureMode mode);
     void setVideoTemplate(const VideoTemplate &templateData);
+    // Dynamic video background control
+    void enableDynamicVideoBackground(const QString &videoPath);
+    void disableDynamicVideoBackground();
+    bool isDynamicVideoBackgroundEnabled() const;
     
     // Background Template Control Methods
     void setSelectedBackgroundTemplate(const QString &path);
@@ -270,6 +275,14 @@ private:
     // Background Template Members
     QString m_selectedBackgroundTemplate;  // Store the selected background template path
     bool m_useBackgroundTemplate;  // Track if background template should be used in segmentation
+
+    // Dynamic Video Background Members
+    bool m_useDynamicVideoBackground; // If true, use video frames as segmentation background
+    QString m_dynamicVideoPath; // Absolute path to selected video
+    cv::VideoCapture m_dynamicVideoCap; // Reader for dynamic background
+    cv::Mat m_dynamicVideoFrame; // Last fetched frame for reuse if needed
+    cv::Ptr<cv::cudacodec::VideoReader> m_dynamicGpuReader; // GPU video reader if available
+    cv::cuda::GpuMat m_dynamicGpuFrame; // GPU frame buffer
     
     double m_personDetectionFPS;
     double m_lastPersonDetectionTime;

@@ -425,7 +425,7 @@ bool Dynamic::eventFilter(QObject *obj, QEvent *event)
             if (obj == fullscreenVideoWidget && fullscreenVideoWidget->isVisible()) {
                 qDebug() << "Dynamic::eventFilter - Click on fullscreen video widget. Emitting videoSelectedAndConfirmed().";
                 fullscreenPlayer->stop(); // Stop the preview
-                emit videoSelectedAndConfirmed(); // Signal that video is confirmed for capture
+                emit videoSelectedAndConfirmed(m_selectedVideoPath); // Signal that video is confirmed for capture
                 hideOverlayVideo(); // Hide the overlay and restart GIFs
                 return true; // Event handled
             }
@@ -561,7 +561,21 @@ void Dynamic::showOverlayVideo(const QString& videoPath)
     // Position and size the fullscreen video widget to cover the desired area
     QRect targetRect = videoGridContent->geometry();
     fullscreenVideoWidget->setGeometry(targetRect);
-    fullscreenPlayer->setSource(QUrl(videoPath));
+    // Store absolute path to emit to Capture/BRBooth
+    QString absolutePath = videoPath;
+    if (QFileInfo(videoPath).isRelative()) {
+        // The desired location is build/.../videos, which is one level above appDir (debug/release)
+        QString appDir = QCoreApplication::applicationDirPath();
+        QString buildDir = QDir(appDir).absoluteFilePath("..");
+        // If the incoming path starts with "videos/", resolve from buildDir/videos
+        if (videoPath.startsWith("videos/", Qt::CaseInsensitive)) {
+            absolutePath = QDir(buildDir).absoluteFilePath(videoPath);
+        } else {
+            absolutePath = QDir(appDir).absoluteFilePath(videoPath);
+        }
+    }
+    m_selectedVideoPath = absolutePath;
+    fullscreenPlayer->setSource(QUrl::fromLocalFile(absolutePath));
     fullscreenVideoWidget->show();
     fullscreenVideoWidget->raise(); // Bring to front
     qDebug() << "Dynamic::showOverlayVideo - Fullscreen video widget shown.";

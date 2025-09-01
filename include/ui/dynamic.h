@@ -2,6 +2,7 @@
 #define DYNAMIC_H
 
 #include <QWidget>
+#include <QString>
 // All these includes are fine for forward declarations or if directly used in header for members
 #include <QLabel>
 #include <QMediaPlayer>
@@ -35,7 +36,7 @@ public:
 signals:
     void backtoLandingPage();
     // Renamed from showCapturePage() to more clearly indicate a confirmed selection for capture
-    void videoSelectedAndConfirmed();
+    void videoSelectedAndConfirmed(const QString &videoPath);
 
 protected:
     // Event filter to handle clicks on the fullscreen video and background
@@ -58,6 +59,7 @@ private:
     QTimer* debounceTimer;
     bool debounceActive;
     QPushButton* currentSelectedVideoWidget; // Stores the button that was last clicked (for highlighting)
+    QString m_selectedVideoPath; // Absolute path for the selected video, emitted on confirm
 
     // Helper functions
     void updateGifLabelsGeometry();

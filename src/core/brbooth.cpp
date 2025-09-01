@@ -264,20 +264,22 @@ BRBooth::BRBooth(QWidget *parent)
 
     if (dynamicPage) {
         connect(dynamicPage, &Dynamic::backtoLandingPage, this, &BRBooth::showLandingPage);
-        // CRITICAL CHANGE: Connect to the new signal 'videoSelectedAndConfirmed' from Dynamic
-        connect(dynamicPage, &Dynamic::videoSelectedAndConfirmed, this, [this]() {
+        // CRITICAL CHANGE: Connect to the new signal 'videoSelectedAndConfirmed' from Dynamic carrying path
+        connect(dynamicPage, &Dynamic::videoSelectedAndConfirmed, this, [this](const QString &videoPath) {
             m_transitioningToCapture = true; // Mark that we're transitioning to capture
             
             // Camera is already running continuously, no need to start it
             qDebug() << "📹 Camera already running continuously, proceeding to capture...";
             
             // Set capture mode and video template asynchronously to prevent blocking
-            QTimer::singleShot(0, [this]() {
+            QTimer::singleShot(0, [this, videoPath]() {
                 capturePage->setCaptureMode(Capture::VideoRecordMode);
                 // You might want to pass the actual selected video template information from Dynamic here
                 // For now, using a default placeholder if Dynamic doesn't pass specific template info back.
                 VideoTemplate defaultVideoTemplate("Default Dynamic Template", 10);
                 capturePage->setVideoTemplate(defaultVideoTemplate);
+                // Enable dynamic video background in capture with the selected path
+                capturePage->enableDynamicVideoBackground(videoPath);
                 showCapturePage(); // This call will now correctly store the dynamic page index as lastVisited
             });
         });

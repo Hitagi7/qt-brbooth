@@ -83,6 +83,7 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     , m_personDetectionWatcher(nullptr)
     , m_lastDetections()
     // , m_tfliteModelLoaded(false)
+    , m_cachedPixmap(640, 480)
     , debugWidget(nullptr)
     , debugLabel(nullptr)
     , fpsLabel(nullptr)
@@ -103,13 +104,21 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     , m_handDetectionTimer()
     , m_lastHandDetectionTime(0.0)
     , m_handDetectionFPS(0)
-    , m_cachedPixmap(640, 480)
-    , m_segmentationEnabledInCapture(false)
     , m_lastSegmentationMode(NormalMode)
+    , m_segmentationEnabledInCapture(false)
     , m_selectedBackgroundTemplate()
     , m_useBackgroundTemplate(false)
 {
     ui->setupUi(this);
+    // Dynamic video background defaults
+    m_useDynamicVideoBackground = false;
+    m_dynamicVideoPath.clear();
+    if (m_dynamicVideoCap.isOpened()) {
+        m_dynamicVideoCap.release();
+    }
+    m_dynamicVideoFrame.release();
+    m_dynamicGpuReader.release();
+    m_dynamicGpuFrame.release();
 
     setContentsMargins(0, 0, 0, 0);
     
@@ -461,14 +470,14 @@ void Capture::updateCameraFeed(const QImage &image)
             Qt::FastTransformation
         );
         
-        // Apply person-only scaling for background template mode, frame scaling for other modes
+        // Apply person-only scaling for background template/dynamic video mode, frame scaling for other modes
         if (qAbs(m_personScaleFactor - 1.0) > 0.01) {
-            // Check if we're in segmentation mode with background template
-            if (m_displayMode == SegmentationMode && m_useBackgroundTemplate && 
-                !m_selectedBackgroundTemplate.isEmpty()) {
-                // For background template mode, don't scale the entire frame
+            // Check if we're in segmentation mode with background template or dynamic video background
+            if (m_displayMode == SegmentationMode && ((m_useBackgroundTemplate && 
+                !m_selectedBackgroundTemplate.isEmpty()) || m_useDynamicVideoBackground)) {
+                // For background template mode or dynamic video mode, don't scale the entire frame
                 // Person scaling is handled in createSegmentedFrame
-                qDebug() << "🎯 Person-only scaling applied in segmentation mode (background template)";
+                qDebug() << "🎯 Person-only scaling applied in segmentation mode (background template or dynamic video)";
             } else {
                 // Apply frame scaling for other modes (normal, rectangle, black background)
                 QSize originalSize = scaledPixmap.size();
@@ -1611,14 +1620,14 @@ void Capture::performImageCapture()
             Qt::FastTransformation
         );
 
-        // Apply person-only scaling for background template mode, frame scaling for other modes
+        // Apply person-only scaling for background template/dynamic video mode, frame scaling for other modes
         if (qAbs(m_personScaleFactor - 1.0) > 0.01) {
-            // Check if we're in segmentation mode with background template
-            if (m_displayMode == SegmentationMode && m_useBackgroundTemplate && 
-                !m_selectedBackgroundTemplate.isEmpty()) {
-                // For background template mode, don't scale the entire frame
+            // Check if we're in segmentation mode with background template or dynamic video background
+            if (m_displayMode == SegmentationMode && ((m_useBackgroundTemplate && 
+                !m_selectedBackgroundTemplate.isEmpty()) || m_useDynamicVideoBackground)) {
+                // For background template mode or dynamic video mode, don't scale the entire frame
                 // Person scaling is already applied in createSegmentedFrame
-                qDebug() << "🎯 Person-only scaling preserved in final output (background template mode)";
+                qDebug() << "🎯 Person-only scaling preserved in final output (background template or dynamic video mode)";
             } else {
                 // Apply frame scaling for other modes (normal, rectangle, black background)
                 QSize originalSize = scaledPixmap.size();
@@ -1698,6 +1707,80 @@ void Capture::setVideoTemplate(const VideoTemplate &templateData)
         m_displayMode = NormalMode;
         qDebug() << "Switched to normal mode to prevent freezing during template transition";
     }
+}
+
+void Capture::enableDynamicVideoBackground(const QString &videoPath)
+{
+    // Close previous if open
+    if (m_dynamicVideoCap.isOpened()) {
+        m_dynamicVideoCap.release();
+    }
+    if (!m_dynamicGpuReader.empty()) {
+        m_dynamicGpuReader.release();
+    }
+    m_dynamicVideoPath = videoPath;
+    m_useDynamicVideoBackground = false;
+
+    bool opened = false;
+    // Try GPU reader first (NVDEC)
+    try {
+        m_dynamicGpuReader = cv::cudacodec::createVideoReader(m_dynamicVideoPath.toStdString());
+        opened = !m_dynamicGpuReader.empty();
+    } catch (const cv::Exception &e) {
+        qWarning() << "GPU video reader unavailable:" << e.what();
+        m_dynamicGpuReader.release();
+    }
+    if (!opened) {
+        // Open using FFMPEG backend; if system has NVDEC via ffmpeg, it may use it
+        m_dynamicVideoCap.open(m_dynamicVideoPath.toStdString(), cv::CAP_FFMPEG);
+        opened = m_dynamicVideoCap.isOpened();
+    }
+    if (!opened) {
+        qWarning() << "Failed to open dynamic video background:" << m_dynamicVideoPath;
+        return;
+    }
+
+    // Prime first frame
+    cv::Mat first;
+    if (!m_dynamicGpuReader.empty()) {
+        cv::cuda::GpuMat gpu;
+        if (m_dynamicGpuReader->nextFrame(gpu) && !gpu.empty()) {
+            cv::cuda::cvtColor(gpu, gpu, cv::COLOR_BGRA2BGR);
+            gpu.download(first);
+        }
+    } else if (m_dynamicVideoCap.isOpened()) {
+        m_dynamicVideoCap.read(first);
+    }
+    if (!first.empty()) {
+        m_dynamicVideoFrame = first.clone();
+        m_useDynamicVideoBackground = true;
+        qDebug() << "🎞️ Dynamic video background enabled:" << m_dynamicVideoPath;
+    } else {
+        qWarning() << "Could not read first frame from dynamic background video:" << m_dynamicVideoPath;
+        if (m_dynamicVideoCap.isOpened()) m_dynamicVideoCap.release();
+        m_dynamicGpuReader.release();
+    }
+
+    // When using dynamic video, disable static background template and foreground overlay
+    m_useBackgroundTemplate = false;
+    m_selectedBackgroundTemplate.clear();
+    if (overlayImageLabel) {
+        overlayImageLabel->hide();
+    }
+}
+
+void Capture::disableDynamicVideoBackground()
+{
+    if (m_dynamicVideoCap.isOpened()) m_dynamicVideoCap.release();
+    m_dynamicGpuReader.release();
+    m_dynamicVideoFrame.release();
+    m_dynamicVideoPath.clear();
+    m_useDynamicVideoBackground = false;
+}
+
+bool Capture::isDynamicVideoBackgroundEnabled() const
+{
+    return m_useDynamicVideoBackground;
 }
 
 // Enhanced Person Detection and Segmentation methods
@@ -2011,7 +2094,38 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
         static cv::Mat cachedBackgroundTemplate;
         static QString lastBackgroundPath;
         
-        if (m_useBackgroundTemplate && !m_selectedBackgroundTemplate.isEmpty()) {
+        if (m_useDynamicVideoBackground && (!m_dynamicGpuReader.empty() || m_dynamicVideoCap.isOpened())) {
+            cv::Mat nextBg;
+            if (!m_dynamicGpuReader.empty()) {
+                cv::cuda::GpuMat gpu;
+                if (!m_dynamicGpuReader->nextFrame(gpu) || gpu.empty()) {
+                    // cudacodec doesn't expose random seek universally; recreate reader to loop
+                    try {
+                        m_dynamicGpuReader.release();
+                        m_dynamicGpuReader = cv::cudacodec::createVideoReader(m_dynamicVideoPath.toStdString());
+                        m_dynamicGpuReader->nextFrame(gpu);
+                    } catch (...) {}
+                }
+                if (!gpu.empty()) {
+                    cv::cuda::cvtColor(gpu, gpu, cv::COLOR_BGRA2BGR);
+                    gpu.download(nextBg);
+                }
+            }
+            if (nextBg.empty() && m_dynamicVideoCap.isOpened()) {
+                if (!m_dynamicVideoCap.read(nextBg) || nextBg.empty()) {
+                    m_dynamicVideoCap.set(cv::CAP_PROP_POS_FRAMES, 0);
+                    m_dynamicVideoCap.read(nextBg);
+                }
+            }
+            if (!nextBg.empty()) {
+                cv::resize(nextBg, segmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
+                m_dynamicVideoFrame = segmentedFrame.clone();
+            } else if (!m_dynamicVideoFrame.empty()) {
+                segmentedFrame = m_dynamicVideoFrame.clone();
+            } else {
+                segmentedFrame = cv::Mat::zeros(frame.size(), frame.type());
+            }
+        } else if (m_useBackgroundTemplate && !m_selectedBackgroundTemplate.isEmpty()) {
             // Check if we need to reload the background template
             bool needReload = cachedBackgroundTemplate.empty() || 
                              lastBackgroundPath != m_selectedBackgroundTemplate;
@@ -2072,11 +2186,11 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
             cv::Mat personRegion;
             frame.copyTo(personRegion, personMask);
             
-            // Scale the person region with person-only scaling for background template mode
+            // Scale the person region with person-only scaling for background template mode and dynamic video mode
             cv::Mat scaledPersonRegion, scaledPersonMask;
             
-            // Apply person-only scaling if we're using background template
-            if (m_useBackgroundTemplate && !m_selectedBackgroundTemplate.isEmpty()) {
+            // Apply person-only scaling if we're using background template OR dynamic video background
+            if ((m_useBackgroundTemplate && !m_selectedBackgroundTemplate.isEmpty()) || m_useDynamicVideoBackground) {
                 // Calculate scaled size for person based on background size and person scale factor
                 cv::Size backgroundSize = segmentedFrame.size();
                 cv::Size scaledPersonSize;
