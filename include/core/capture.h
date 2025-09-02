@@ -15,6 +15,7 @@
 #include <QTimer>             // Required for QTimer
 #include <QWidget>            // Required for QWidget base class
 #include <QList>              // Required for QList<HandDetection> and QList<QPixmap>
+#include <QQueue>              // Required for QQueue<cv::Mat>
 #include <QFutureWatcher>
 #include <QtConcurrent>
 #include <QMutex>
@@ -35,6 +36,67 @@
 #include "ui/foreground.h"        // Foreground class
 #include "core/common_types.h"    // Common data structures
 #include "algorithms/hand_detection/hand_detector.h"
+
+// 🚀 GPU Memory Pool for optimized CUDA operations
+class GPUMemoryPool {
+private:
+    // Pre-allocated GPU buffers for triple buffering
+    cv::cuda::GpuMat gpuFrameBuffers[3];        // Frame buffers
+    cv::cuda::GpuMat gpuSegmentationBuffers[2]; // Segmentation buffers
+    cv::cuda::GpuMat gpuDetectionBuffers[2];    // Detection buffers
+    cv::cuda::GpuMat gpuTempBuffers[2];         // Temporary processing buffers
+    
+    // Reusable CUDA filters (create once, use many times)
+    cv::Ptr<cv::cuda::Filter> morphCloseFilter;
+    cv::Ptr<cv::cuda::Filter> morphOpenFilter;
+    cv::Ptr<cv::cuda::Filter> morphDilateFilter;
+    cv::Ptr<cv::cuda::CannyEdgeDetector> cannyDetector;
+    
+    // CUDA streams for parallel processing
+    cv::cuda::Stream detectionStream;
+    cv::cuda::Stream segmentationStream;
+    cv::cuda::Stream compositionStream;
+    
+    // Buffer rotation indices
+    int currentFrameBuffer = 0;
+    int currentSegBuffer = 0;
+    int currentDetBuffer = 0;
+    int currentTempBuffer = 0;
+    
+    // Pool state
+    bool initialized = false;
+    int poolWidth = 0;
+    int poolHeight = 0;
+    
+public:
+    GPUMemoryPool();
+    ~GPUMemoryPool();
+    
+    // Initialization
+    void initialize(int width, int height);
+    bool isInitialized() const { return initialized; }
+    
+    // Buffer management
+    cv::cuda::GpuMat& getNextFrameBuffer();
+    cv::cuda::GpuMat& getNextSegmentationBuffer();
+    cv::cuda::GpuMat& getNextDetectionBuffer();
+    cv::cuda::GpuMat& getNextTempBuffer();
+    
+    // Filter access
+    cv::Ptr<cv::cuda::Filter>& getMorphCloseFilter() { return morphCloseFilter; }
+    cv::Ptr<cv::cuda::Filter>& getMorphOpenFilter() { return morphOpenFilter; }
+    cv::Ptr<cv::cuda::Filter>& getMorphDilateFilter() { return morphDilateFilter; }
+    cv::Ptr<cv::cuda::CannyEdgeDetector>& getCannyDetector() { return cannyDetector; }
+    
+    // Stream access
+    cv::cuda::Stream& getDetectionStream() { return detectionStream; }
+    cv::cuda::Stream& getSegmentationStream() { return segmentationStream; }
+    cv::cuda::Stream& getCompositionStream() { return compositionStream; }
+    
+    // Memory management
+    void release();
+    void resetBuffers();
+};
 
 QT_BEGIN_NAMESPACE
 namespace Ui { class Capture; }
@@ -65,10 +127,15 @@ public:
     void enableDynamicVideoBackground(const QString &videoPath);
     void disableDynamicVideoBackground();
     bool isDynamicVideoBackgroundEnabled() const;
+    void resetDynamicVideoToStart(); // Reset video to beginning for re-recording
     
     // Background Template Control Methods
     void setSelectedBackgroundTemplate(const QString &path);
     QString getSelectedBackgroundTemplate() const;
+    
+    // Video Template Duration Control Methods
+    void setVideoTemplateDuration(int durationSeconds);
+    int getVideoTemplateDuration() const;
 
     // Hand Detection Control Methods
     void setShowHandDetection(bool show);
@@ -152,10 +219,16 @@ private slots:
 
     // Unified Person Detection and Segmentation Slots
     void onPersonDetectionFinished();
+    
+    // Video Playback Timer Slots
+    void onVideoPlaybackTimer(); // Handle video frame advancement at native frame rate
 
     // Hand Detection Slots
     void startHandTriggeredCountdown();
     void onHandTriggeredCapture();
+    
+    // 🚀 Asynchronous Recording Slots
+    void processRecordingFrame();
 
 private:
     // Declare these private functions here (already correct)
@@ -284,6 +357,20 @@ private:
     cv::Ptr<cv::cudacodec::VideoReader> m_dynamicGpuReader; // GPU video reader if available
     cv::cuda::GpuMat m_dynamicGpuFrame; // GPU frame buffer
     
+    // Video Playback Timer for Phase 1: Frame Rate Synchronization
+    QTimer *m_videoPlaybackTimer; // Separate timer for video frame rate synchronization
+    double m_videoFrameRate; // Native video frame rate (FPS)
+    int m_videoFrameInterval; // Timer interval in milliseconds
+    bool m_videoPlaybackActive; // Track if video playback is active
+    
+    // Phase 2A: GPU-Only Video Processing Members
+    cv::cuda::GpuMat m_gpuVideoFrame; // GPU video frame buffer
+    cv::cuda::GpuMat m_gpuSegmentedFrame; // GPU segmented frame buffer
+    cv::cuda::GpuMat m_gpuPersonMask; // GPU person mask buffer
+    cv::cuda::GpuMat m_gpuBackgroundFrame; // GPU background frame buffer
+    bool m_gpuOnlyProcessingEnabled; // Enable GPU-only processing pipeline
+    bool m_gpuProcessingAvailable; // Check if GPU processing is available
+    
     double m_personDetectionFPS;
     double m_lastPersonDetectionTime;
     cv::Mat m_currentFrame;
@@ -301,6 +388,19 @@ private:
     QFutureWatcher<cv::Mat> *m_personDetectionWatcher;
     std::vector<cv::Rect> m_lastDetections;
 
+    // 🚀 GPU Memory Pool for optimized CUDA operations
+    GPUMemoryPool m_gpuMemoryPool;
+    bool m_gpuMemoryPoolInitialized;
+    
+    // 🚀 Asynchronous Recording System
+    QThread *m_recordingThread;
+    QTimer *m_recordingFrameTimer;
+    QMutex m_recordingMutex;
+    QQueue<cv::Mat> m_recordingFrameQueue;
+    bool m_recordingThreadActive;
+    cv::cuda::Stream m_recordingStream;
+    cv::cuda::GpuMat m_recordingGpuBuffer;
+
     // Performance optimization
     QPixmap m_cachedPixmap;
 
@@ -309,6 +409,14 @@ private:
     cv::Mat processFrameWithUnifiedDetection(const cv::Mat &frame);
     cv::Mat createSegmentedFrame(const cv::Mat &frame, const std::vector<cv::Rect> &detections);
     cv::Mat enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect &detection);
+    
+    // Phase 2A: GPU-Only Processing Methods
+    void initializeGPUOnlyProcessing();
+    bool isGPUOnlyProcessingAvailable() const;
+    cv::Mat processFrameWithGPUOnlyPipeline(const cv::Mat &frame);
+    cv::Mat createSegmentedFrameGPUOnly(const cv::Mat &frame, const std::vector<cv::Rect> &detections);
+    cv::Mat enhancedSilhouetteSegmentGPUOnly(const cv::cuda::GpuMat &gpuFrame, const cv::Rect &detection);
+    void validateGPUResults(const cv::Mat &gpuResult, const cv::Mat &cpuResult);
     std::vector<cv::Rect> detectPeople(const cv::Mat &frame);
     std::vector<cv::Rect> filterByMotion(const std::vector<cv::Rect> &detections, const cv::Mat &motionMask);
     cv::Mat getMotionMask(const cv::Mat &frame);
@@ -322,6 +430,12 @@ private:
     void printPerformanceStats();
     // --- END PERFORMANCE MONITORING ---
 
+    // 🚀 Asynchronous Recording Methods
+    void initializeRecordingSystem();
+    void cleanupRecordingSystem();
+    void queueFrameForRecording(const cv::Mat &frame);
+    QPixmap processFrameForRecordingGPU(const cv::Mat &frame);
+    
     // Utility functions
     QImage cvMatToQImage(const cv::Mat &mat);
     cv::Mat qImageToCvMat(const QImage &image);
