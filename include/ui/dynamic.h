@@ -46,6 +46,7 @@ protected:
 
 private slots:
     void on_back_clicked();
+    void onVideoPreviewBackClicked(); // New slot for video preview back button
     void resetDebounce();
     void onPlayerMediaStatusChanged(QMediaPlayer::MediaStatus status);
     void processVideoClick(QObject *buttonObj); // Handles clicks on individual video buttons
@@ -53,8 +54,10 @@ private slots:
 private:
     Ui::Dynamic *ui;
 
+    QWidget* fullscreenStackWidget; // Stack widget to layer video and back button
     QVideoWidget* fullscreenVideoWidget;
     QMediaPlayer* fullscreenPlayer;
+    QPushButton* videoPreviewBackButton; // Dedicated back button for video preview
 
     QTimer* debounceTimer;
     bool debounceActive;

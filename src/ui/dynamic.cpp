@@ -1,5 +1,6 @@
 #include "ui/dynamic.h"
-#include "ui_dynamic.h" // This MUST be included for Ui::Dynamic to be defined
+
+#include "../../build/Desktop_Qt_6_9_1_MSVC2022_64bit-Debug/ui_dynamic.h"  // Full definition of Ui::Dynamic class
 #include "ui/iconhover.h"  // Assuming this is a local class for hover effects
 #include <QStyle>       // For QStyle::polish
 #include <QDebug>
@@ -33,7 +34,6 @@ Dynamic::Dynamic(QWidget* parent)
     , fullscreenVideoWidget(nullptr)
     , fullscreenPlayer(nullptr)
 {
-    qDebug() << "Dynamic::Dynamic - Constructor started.";
     ui->setupUi(this); // This call populates the 'ui' object with widgets from dynamic.ui
 
     // Back button setup
@@ -47,15 +47,12 @@ Dynamic::Dynamic(QWidget* parent)
         ui->back->setIcon(backIcon);
         ui->back->setIconSize(QSize(100, 100));
         ui->back->setFlat(true);
-        qDebug() << "Dynamic::Dynamic - Back button setup complete.";
 
         // Assuming Iconhover is defined and works as expected
         Iconhover* backButtonHover = new Iconhover(this); // Parent Iconhover to Dynamic widget
         ui->back->installEventFilter(backButtonHover);
-        qDebug() << "Dynamic::Dynamic - Back button event filter installed.";
 
         connect(ui->back, &QPushButton::clicked, this, &Dynamic::on_back_clicked);
-        qDebug() << "Dynamic::Dynamic - Back button clicked signal connected.";
     }
 
     // Debounce timer setup
@@ -63,7 +60,6 @@ Dynamic::Dynamic(QWidget* parent)
     debounceTimer->setSingleShot(true);
     debounceTimer->setInterval(400); // 400ms debounce
     connect(debounceTimer, &QTimer::timeout, this, &Dynamic::resetDebounce);
-    qDebug() << "Dynamic::Dynamic - Debounce timer setup complete.";
 
     debounceActive = false;
     currentSelectedVideoWidget = nullptr;
@@ -74,32 +70,89 @@ Dynamic::Dynamic(QWidget* parent)
 #else
     qDebug() << "OpenCV Version: Not defined or available at compile time.";
 #endif
-    // Debug: Current working directory and application directory
-    qDebug() << "APP PATH: Current applicationDirPath:" << QCoreApplication::applicationDirPath();
-    qDebug() << "APP PATH: Current currentPath:" << QDir::currentPath();
-
-    qDebug() << "Supported Image Formats by QImageReader:";
-    for (const QByteArray& format : QImageReader::supportedImageFormats()) {
-        qDebug() << "  - " << format;
-    }
-
     // Set up video players (GIFs on buttons)
     setupVideoPlayers();
-    qDebug() << "Dynamic::Dynamic - setupVideoPlayers() called.";
 
-    // Fullscreen video widget and player setup
-    fullscreenVideoWidget = new QVideoWidget(this);
+    // Create a stacked widget to properly layer the video and back button
+    fullscreenStackWidget = new QWidget(this);
+    fullscreenStackWidget->setMinimumSize(QSize(640, 480));
+    fullscreenStackWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    fullscreenStackWidget->setAttribute(Qt::WA_StyledBackground, true);
+    fullscreenStackWidget->setStyleSheet("background-color: transparent; border: 5px solid #FFC20F; border-radius: 8px;");
+    fullscreenStackWidget->hide(); // Start hidden
+    
+    // Create a layout for the stack widget that allows absolute positioning
+    QVBoxLayout* stackLayout = new QVBoxLayout(fullscreenStackWidget);
+    stackLayout->setContentsMargins(0, 0, 0, 0);
+    stackLayout->setSpacing(0);
+    
+    // Fullscreen video widget setup
+    fullscreenVideoWidget = new QVideoWidget(fullscreenStackWidget);
     fullscreenVideoWidget->setMinimumSize(QSize(640, 480));
     fullscreenVideoWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     fullscreenVideoWidget->setAttribute(Qt::WA_StyledBackground, true);
-    fullscreenVideoWidget->setStyleSheet("background-color: transparent; border: 5px solid #FFC20F; border-radius: 8px;");
-    fullscreenVideoWidget->hide(); // Start hidden
-    qDebug() << "Dynamic::Dynamic - Fullscreen video widget setup complete.";
+    fullscreenVideoWidget->setStyleSheet("background-color: transparent;");
+    
+    // Add video widget to stack layout
+    stackLayout->addWidget(fullscreenVideoWidget);
+    
+    // Set the stack widget to use absolute positioning for the back button
+    fullscreenStackWidget->setLayout(stackLayout);
+    
+    qDebug() << "Dynamic::Dynamic - Fullscreen stack widget setup complete.";
 
     fullscreenPlayer = new QMediaPlayer(this);
     fullscreenPlayer->setVideoOutput(fullscreenVideoWidget);
     fullscreenVideoWidget->setAspectRatioMode(Qt::IgnoreAspectRatio); // Important for video scaling
     qDebug() << "Dynamic::Dynamic - Fullscreen media player setup complete.";
+
+    // Create dedicated back button for video preview as a floating overlay
+    videoPreviewBackButton = new QPushButton(this); // Parent to main widget for floating behavior
+    
+    // Load the icon from resources
+    QIcon backIcon(":/icons/Icons/normal.svg");
+    if (backIcon.isNull()) {
+        qWarning() << "Dynamic::Dynamic - Failed to load back button icon from :/icons/Icons/normal.svg";
+        // Fallback: create a text button if icon fails
+        videoPreviewBackButton->setText("← BACK");
+    } else {
+        qDebug() << "Dynamic::Dynamic - Back button icon loaded successfully";
+        videoPreviewBackButton->setIcon(backIcon);
+        videoPreviewBackButton->setIconSize(QSize(80, 80)); // Slightly smaller icon
+    }
+    
+    // Set button properties
+    videoPreviewBackButton->setFixedSize(120, 120);
+    videoPreviewBackButton->setText("BACK"); // Always show text for maximum visibility
+    
+    // Make button EXTREMELY visible with bright green background and thick border
+    videoPreviewBackButton->setStyleSheet(
+        "QPushButton { "
+        "    background-color: #00FF00 !important; "  // Bright green background
+        "    color: white !important; "
+        "    border: 8px solid #000000 !important; "  // Very thick black border
+        "    border-radius: 25px !important; "
+        "    padding: 20px !important; "
+        "    font-weight: bold !important; "
+        "    font-size: 20px !important; "
+        "} "
+        "QPushButton:hover { "
+        "    background-color: #00DD00 !important; "
+        "    border: 8px solid #333333 !important; "
+        "}"
+    );
+    
+    // Make button float above everything
+    videoPreviewBackButton->setWindowFlags(Qt::WindowStaysOnTopHint | Qt::FramelessWindowHint);
+    videoPreviewBackButton->setAttribute(Qt::WA_TranslucentBackground, false);
+    
+    // Debug: Check button properties after creation
+    qDebug() << "Dynamic::Dynamic - Button created with size:" << videoPreviewBackButton->size();
+    qDebug() << "Dynamic::Dynamic - Button stylesheet:" << videoPreviewBackButton->styleSheet();
+    qDebug() << "Dynamic::Dynamic - Button is visible:" << videoPreviewBackButton->isVisible();
+    
+    videoPreviewBackButton->hide(); // Start hidden
+    connect(videoPreviewBackButton, &QPushButton::clicked, this, &Dynamic::onVideoPreviewBackClicked);
 
     // Connect fullscreen player to loop at end of media
     connect(fullscreenPlayer, &QMediaPlayer::mediaStatusChanged, this, [this](QMediaPlayer::MediaStatus status) {
@@ -120,8 +173,6 @@ Dynamic::Dynamic(QWidget* parent)
 
 Dynamic::~Dynamic()
 {
-    qDebug() << "Dynamic::~Dynamic - Destructor started.";
-
     // Stop all GIF movies before cleanup
     QList<QPushButton*> buttons;
     buttons << ui->videoButton1 << ui->videoButton2 << ui->videoButton3 << ui->videoButton4 << ui->videoButton5;
@@ -132,7 +183,6 @@ Dynamic::~Dynamic()
                 QMovie* movie = gifLabel->movie();
                 if (movie && movie->state() == QMovie::Running) {
                     movie->stop();
-                    qDebug() << "Dynamic::~Dynamic - Stopped GIF movie for button:" << button->objectName();
                 }
             }
         }
@@ -143,22 +193,17 @@ Dynamic::~Dynamic()
         fullscreenPlayer->stop();
         delete fullscreenPlayer;
         fullscreenPlayer = nullptr;
-        qDebug() << "Dynamic::~Dynamic - fullscreenPlayer deleted.";
     }
     if (fullscreenVideoWidget) {
         delete fullscreenVideoWidget;
         fullscreenVideoWidget = nullptr;
-        qDebug() << "Dynamic::~Dynamic - fullscreenVideoWidget deleted.";
     }
 
     delete ui; // Delete the generated UI object, which will delete child widgets
-    qDebug() << "Dynamic::~Dynamic - Destructor finished.";
 }
 
 void Dynamic::setupVideoPlayers()
 {
-    qDebug() << "Dynamic::setupVideoPlayers - Started.";
-
     // Get the application directory and navigate to build directory
     QString appDir = QCoreApplication::applicationDirPath();
     // Go up one level from debug/ to the build directory
@@ -404,7 +449,7 @@ void Dynamic::resizeEvent(QResizeEvent *event)
 
     // If the fullscreen video is visible, ensure it also resizes correctly
     if (fullscreenVideoWidget && fullscreenVideoWidget->isVisible()) {
-        QWidget* videoGridContent = ui->videoGridContent; // This is the widget that defines the area for the fullscreen video
+        QWidget* videoGridContent = this; // Use the main widget as the video area
         if (videoGridContent) {
             fullscreenVideoWidget->setGeometry(videoGridContent->geometry());
             qDebug() << "Dynamic::resizeEvent - Resized fullscreenVideoWidget to:" << videoGridContent->geometry();
@@ -437,7 +482,7 @@ bool Dynamic::eventFilter(QObject *obj, QEvent *event)
                 // Get geometries of relevant UI elements to exclude them from "outside" clicks
                 QRect fgLabelRect = ui->fglabel ? ui->fglabel->geometry() : QRect();
                 QRect backButtonRect = ui->back ? ui->back->geometry() : QRect();
-                QRect videoGridContentRect = ui->videoGridContent ? ui->videoGridContent->geometry() : QRect();
+                QRect videoGridContentRect = this->geometry();
 
                 qDebug() << "Dynamic::eventFilter - Click on main widget while fullscreen visible.";
                 qDebug() << "Click pos:" << clickPos << "Fullscreen rect:" << fullscreenVideoWidget->geometry()
@@ -483,12 +528,12 @@ void Dynamic::applyHighlightStyle(QObject *obj, bool highlight)
 
 void Dynamic::on_back_clicked()
 {
-    qDebug() << "Dynamic::on_back_clicked - Back button clicked.";
-    if (fullscreenVideoWidget && fullscreenVideoWidget->isVisible()) {
-        hideOverlayVideo(); // If fullscreen video is showing, hide it first
-    } else {
-        emit backtoLandingPage(); // Otherwise, go back to landing page
-    }
+    emit backtoLandingPage(); // Always go back to landing page from template selection
+}
+
+void Dynamic::onVideoPreviewBackClicked()
+{
+    hideOverlayVideo(); // Hide video and return to template selection
 }
 
 void Dynamic::processVideoClick(QObject *buttonObj)
@@ -552,15 +597,16 @@ void Dynamic::onPlayerMediaStatusChanged(QMediaPlayer::MediaStatus status)
 void Dynamic::showOverlayVideo(const QString& videoPath)
 {
     qDebug() << "Dynamic::showOverlayVideo - Showing overlay for video:" << videoPath;
-    QWidget* videoGridContent = ui->videoGridContent; // Assuming this is the parent area for the fullscreen video
+    QWidget* videoGridContent = this; // Use the main widget as the video area
     if (!fullscreenPlayer || !fullscreenVideoWidget || !videoGridContent) {
         qWarning() << "showOverlayVideo: Essential components are null (player, widget, or videoGridContent).";
         return;
     }
 
-    // Position and size the fullscreen video widget to cover the desired area
+    // Position and size the stack widget to cover the desired area
     QRect targetRect = videoGridContent->geometry();
-    fullscreenVideoWidget->setGeometry(targetRect);
+    fullscreenStackWidget->setGeometry(targetRect);
+    
     // Store absolute path to emit to Capture/BRBooth
     QString absolutePath = videoPath;
     if (QFileInfo(videoPath).isRelative()) {
@@ -576,10 +622,46 @@ void Dynamic::showOverlayVideo(const QString& videoPath)
     }
     m_selectedVideoPath = absolutePath;
     fullscreenPlayer->setSource(QUrl::fromLocalFile(absolutePath));
-    fullscreenVideoWidget->show();
-    fullscreenVideoWidget->raise(); // Bring to front
-    qDebug() << "Dynamic::showOverlayVideo - Fullscreen video widget shown.";
-    qDebug() << "Dynamic::showOverlayVideo - fullscreenVideoWidget isVisible:" << fullscreenVideoWidget->isVisible();
+    
+    // Show the stack widget (which contains both video and back button)
+    fullscreenStackWidget->show();
+    fullscreenStackWidget->raise(); // Bring to front
+
+    // Hide original back button and show video preview back button
+    if (ui->back) {
+        ui->back->hide();
+    }
+    
+    // Position the floating back button over the video area
+    // Since it's a floating window, position it relative to the main widget
+    QPoint globalPos = this->mapToGlobal(QPoint(targetRect.x() + 50, targetRect.y() + 50));
+    videoPreviewBackButton->move(globalPos);
+    
+    // Show the floating button
+    videoPreviewBackButton->show();
+    videoPreviewBackButton->setVisible(true);
+    
+    // Force the button to be on top of everything
+    videoPreviewBackButton->raise();
+    
+    // Force a repaint to ensure visibility
+    videoPreviewBackButton->repaint();
+    
+    // Debug: Check button state
+    qDebug() << "Dynamic::showOverlayVideo - Button positioned at: 50, 50 (absolute)";
+    qDebug() << "Dynamic::showOverlayVideo - Button visible:" << videoPreviewBackButton->isVisible();
+    qDebug() << "Dynamic::showOverlayVideo - Button geometry:" << videoPreviewBackButton->geometry();
+    qDebug() << "Dynamic::showOverlayVideo - Button parent:" << videoPreviewBackButton->parent();
+    qDebug() << "Dynamic::showOverlayVideo - Button size:" << videoPreviewBackButton->size();
+    qDebug() << "Dynamic::showOverlayVideo - Button stylesheet:" << videoPreviewBackButton->styleSheet();
+    qDebug() << "Dynamic::showOverlayVideo - Button text:" << videoPreviewBackButton->text();
+    qDebug() << "Dynamic::showOverlayVideo - Fullscreen stack widget visible:" << fullscreenStackWidget->isVisible();
+    qDebug() << "Dynamic::showOverlayVideo - Fullscreen stack widget geometry:" << fullscreenStackWidget->geometry();
+    qDebug() << "Dynamic::showOverlayVideo - Button window flags:" << videoPreviewBackButton->windowFlags();
+    qDebug() << "Dynamic::showOverlayVideo - Button attributes:" << videoPreviewBackButton->testAttribute(Qt::WA_TransparentForMouseEvents) << videoPreviewBackButton->testAttribute(Qt::WA_NoSystemBackground);
+    
+    // Button styling is already set in constructor, just ensure it's visible
+    // The stack layout approach ensures proper layering above the video
 
     // Optionally disable the back button while the video preview is active
     QPushButton* backButton = ui->back;
@@ -591,18 +673,25 @@ void Dynamic::showOverlayVideo(const QString& videoPath)
 
 void Dynamic::hideOverlayVideo()
 {
-    qDebug() << "Dynamic::hideOverlayVideo - Hiding overlay video asynchronously.";
     if (!fullscreenPlayer || !fullscreenVideoWidget) {
         qWarning() << "hideOverlayVideo: Essential components are null (player or widget).";
         return;
     }
 
-    // Stop player and hide widget immediately (non-blocking)
+    // Stop player and hide stack widget immediately (non-blocking)
     fullscreenPlayer->stop();
     fullscreenPlayer->setSource(QUrl()); // Clear current media source
-    fullscreenVideoWidget->hide();
-    qDebug() << "Dynamic::hideOverlayVideo - Fullscreen video widget hidden.";
-    qDebug() << "Dynamic::hideOverlayVideo - fullscreenVideoWidget isVisible:" << fullscreenVideoWidget->isVisible();
+    fullscreenStackWidget->hide();
+    
+    // Hide video preview back button and show original back button
+    videoPreviewBackButton->hide();
+    
+    // Reset the floating button to its original position
+    videoPreviewBackButton->move(0, 0);
+    
+    if (ui->back) {
+        ui->back->show();
+    }
 
     // Use QTimer::singleShot to make the rest of the operations non-blocking
     QTimer::singleShot(0, [this]() {
@@ -670,3 +759,5 @@ void Dynamic::stopAllGifs()
         qDebug() << "Dynamic::stopAllGifs - All GIFs stopped asynchronously.";
     });
 }
+
+

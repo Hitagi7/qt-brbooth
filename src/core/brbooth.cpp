@@ -32,7 +32,7 @@ BRBooth::BRBooth(QWidget *parent)
           0) // Initialize lastVisitedPageIndex (will be overwritten by initial showLandingPage)
 {
     qDebug() << "OpenCV Version: " << CV_VERSION;
-    
+
     // Check CUDA availability at startup
     int cudaDevices = cv::cuda::getCudaEnabledDeviceCount();
     if (cudaDevices > 0) {
@@ -74,19 +74,19 @@ BRBooth::BRBooth(QWidget *parent)
 
         // Load and play the GIF from file system
         QString gifPath = "gif templates/dynamicbg3.gif";
-        
+
         // Debug: Print current working directory and check if file exists
         qDebug() << "Current working directory:" << QDir::currentPath();
         qDebug() << "Application directory:" << QCoreApplication::applicationDirPath();
         qDebug() << "Looking for GIF at:" << QDir::currentPath() + "/" + gifPath;
         qDebug() << "File exists:" << QFile::exists(gifPath);
-        
+
         // Check if we're in a build directory (debug/release) and try to find project root
         QString currentDir = QDir::currentPath();
         QString appDir = QCoreApplication::applicationDirPath();
         qDebug() << "Current dir contains 'debug' or 'release':" << (currentDir.contains("debug") || currentDir.contains("release"));
         qDebug() << "App dir contains 'debug' or 'release':" << (appDir.contains("debug") || appDir.contains("release"));
-        
+
         // Try alternative paths if the direct path doesn't work
         QStringList possiblePaths;
         possiblePaths << gifPath
@@ -97,12 +97,12 @@ BRBooth::BRBooth(QWidget *parent)
                       << "../" + gifPath
                       << "../../" + gifPath
                       << "../../../" + gifPath;
-        
+
         // Add the known working path as a fallback
-        QString knownPath = "C:/Users/dorot/Documents/qt-brbooth/gif templates/dynamicbg3.gif";
+        QString knownPath = "D:/Users/Documents/Files/Coolege/Thesis/qt-brbooth/gif templates/dynamicbg3.gif";
         possiblePaths << knownPath;
         qDebug() << "Added known working path:" << knownPath;
-        
+
         // Try to find project root by looking for qt-brbooth.pro file
         QString projectRoot;
         QStringList searchDirs;
@@ -113,7 +113,7 @@ BRBooth::BRBooth(QWidget *parent)
                    << "../"
                    << "../../"
                    << "../../../";
-        
+
         for (const QString& searchDir : searchDirs) {
             if (QFile::exists(searchDir + "/qt-brbooth.pro")) {
                 projectRoot = searchDir;
@@ -121,18 +121,18 @@ BRBooth::BRBooth(QWidget *parent)
                 break;
             }
         }
-        
+
         if (!projectRoot.isEmpty()) {
             possiblePaths.prepend(projectRoot + "/" + gifPath);
             qDebug() << "Added project root path:" << projectRoot + "/" + gifPath;
         }
-        
+
         // Debug: Print all paths we're going to try
         qDebug() << "All paths to try for GIF:";
         for (int i = 0; i < possiblePaths.size(); ++i) {
             qDebug() << "  " << i << ":" << possiblePaths[i] << "(exists:" << QFile::exists(possiblePaths[i]) << ")";
         }
-        
+
         QString validPath;
         for (const QString& path : possiblePaths) {
             if (QFile::exists(path)) {
@@ -141,7 +141,7 @@ BRBooth::BRBooth(QWidget *parent)
                 break;
             }
         }
-        
+
         if (validPath.isEmpty()) {
             qWarning() << "GIF file not found in any of the expected locations:";
             for (const QString& path : possiblePaths) {
@@ -204,11 +204,11 @@ BRBooth::BRBooth(QWidget *parent)
 
     // Set camera properties
     cameraWorker->setDesiredCameraProperties(1280, 720, 60.0);
-    
+
     // Start the camera thread
     cameraThread->start();
     qDebug() << "BRBooth: Camera thread started.";
-    
+
     // Start camera immediately for continuous operation
     emit startCameraWorker();
     qDebug() << "BRBooth: Camera started immediately for continuous operation.";
@@ -239,25 +239,25 @@ BRBooth::BRBooth(QWidget *parent)
 
     // Set initial page
     showLandingPage();
-    
+
     // Initialize landing page GIF management
     m_landingPageGifMovie = nullptr;
-    
+
     // Initialize transition tracking
     m_transitioningToCapture = false;
-    
 
-    
+
+
     // Start the landing page GIF since we're on the landing page initially
     startLandingPageGif();
-    
+
     // Install event filter to handle window focus changes
     installEventFilter(this);
 
     // Connect signals for page navigation and actions
     connect(foregroundPage, &Foreground::backtoLandingPage, this, &BRBooth::showLandingPage);
     connect(foregroundPage, &Foreground::imageSelectedTwice, this, &BRBooth::showBackgroundPage);
-    
+
     // Add keyboard shortcut for CUDA testing (Ctrl+T)
     QShortcut *cudaTestShortcut = new QShortcut(QKeySequence("Ctrl+T"), this);
     connect(cudaTestShortcut, &QShortcut::activated, this, &BRBooth::testCudaFunctionality);
@@ -267,10 +267,10 @@ BRBooth::BRBooth(QWidget *parent)
         // CRITICAL CHANGE: Connect to the new signal 'videoSelectedAndConfirmed' from Dynamic carrying path
         connect(dynamicPage, &Dynamic::videoSelectedAndConfirmed, this, [this](const QString &videoPath) {
             m_transitioningToCapture = true; // Mark that we're transitioning to capture
-            
+
             // Camera is already running continuously, no need to start it
             qDebug() << "📹 Camera already running continuously, proceeding to capture...";
-            
+
             // Set capture mode and video template asynchronously to prevent blocking
             QTimer::singleShot(0, [this, videoPath]() {
                 capturePage->setCaptureMode(Capture::VideoRecordMode);
@@ -298,10 +298,10 @@ BRBooth::BRBooth(QWidget *parent)
                 &BRBooth::showForegroundPage);
         connect(backgroundPage, &Background::imageSelectedTwice, this, [this]() {
             m_transitioningToCapture = true; // Mark that we're transitioning to capture
-            
+
             // Camera is already running continuously, no need to start it
             qDebug() << "📹 Camera already running continuously, proceeding to capture...";
-            
+
             // Pass the selected background template to capture page
             if (capturePage && backgroundPage) {
                 QString selectedBackground = backgroundPage->getSelectedBackground();
@@ -312,11 +312,11 @@ BRBooth::BRBooth(QWidget *parent)
                     qDebug() << "🎯 No background template selected - will use black background";
                 }
             }
-            
+
             capturePage->setCaptureMode(Capture::ImageCaptureMode);
             showCapturePage(); // This call will now correctly store the background page index as lastVisited
         });
-        
+
         // Connect background selection to capture page for real-time updates
         connect(backgroundPage, &Background::backgroundChanged, this, [this](const QString &backgroundPath) {
             if (capturePage) {
@@ -331,10 +331,10 @@ BRBooth::BRBooth(QWidget *parent)
         // Handle the 'back' action from the Capture page
         connect(capturePage, &Capture::backtoPreviousPage, this, [this]() {
             // lastVisitedPageIndex should correctly hold the index of the page *before* Capture.
-            qDebug() << "🎯 Capture back button pressed. lastVisitedPageIndex:" << lastVisitedPageIndex 
-                     << "backgroundPageIndex:" << backgroundPageIndex 
+            qDebug() << "🎯 Capture back button pressed. lastVisitedPageIndex:" << lastVisitedPageIndex
+                     << "backgroundPageIndex:" << backgroundPageIndex
                      << "dynamicPageIndex:" << dynamicPageIndex;
-            
+
             if (lastVisitedPageIndex == backgroundPageIndex) {
                 qDebug() << "🎯 Going back to background page";
                 showBackgroundPage();
@@ -365,7 +365,7 @@ BRBooth::BRBooth(QWidget *parent)
     // Resets pages when they are loaded (useful for clearing selections etc.)
     connect(ui->stackedWidget, &QStackedWidget::currentChanged, this, [this](int index) {
         qDebug() << "DEBUG: Stacked widget current index changed to:" << index;
-        
+
         // CONTINUOUS CAMERA MANAGEMENT: Keep camera running throughout the program
         if (index == capturePageIndex) {
             // Ensure camera is running for capture page
@@ -375,7 +375,7 @@ BRBooth::BRBooth(QWidget *parent)
             } else {
                 qDebug() << "📹 Camera already running for Capture page";
             }
-            
+
             // Enable processing modes for capture page
             QTimer::singleShot(100, [this]() {
                 if (capturePage) {
@@ -392,7 +392,7 @@ BRBooth::BRBooth(QWidget *parent)
             } else {
                 qDebug() << "📹 Camera running continuously for page (index:" << index << ")";
             }
-            
+
             // Disable heavy processing for non-capture pages
             QTimer::singleShot(50, [this]() {
                 if (capturePage) {
@@ -402,14 +402,14 @@ BRBooth::BRBooth(QWidget *parent)
                 }
             });
         }
-        
+
         // Manage GIFs based on page changes
         if (index == landingPageIndex) {
             startLandingPageGif();
         } else {
             stopLandingPageGif();
         }
-        
+
         if (index == dynamicPageIndex) {
             dynamicPage->resetPage(); // Dynamic page reset will also hide overlay and restart GIFs
         } else if (dynamicPage && index != capturePageIndex && !m_transitioningToCapture) {
@@ -417,7 +417,7 @@ BRBooth::BRBooth(QWidget *parent)
             // This prevents delay/freezing when transitioning to capture
             dynamicPage->stopAllGifs(); // Stop GIFs when leaving dynamic page
         }
-        
+
         if (index == foregroundPageIndex && !m_transitioningToCapture) {
             foregroundPage->resetPage();
         }
@@ -427,17 +427,17 @@ BRBooth::BRBooth(QWidget *parent)
         if (index == capturePageIndex) {
             // Reset the transition flag since we've reached the capture page
             m_transitioningToCapture = false;
-            
+
             capturePage->enableHandDetectionForCapture(); // Enable hand detection for capture page
             capturePage->enableSegmentationInCapture(); // Enable segmentation for capture page
-            
+
             // Clean up GIFs from previous page after capture page is shown (non-blocking)
             if (dynamicPage && lastVisitedPageIndex == dynamicPageIndex) {
                 QTimer::singleShot(100, [this]() {
                     dynamicPage->stopAllGifs(); // Stop GIFs asynchronously after capture page is ready
                 });
             }
-            
+
             // Clean up previous page state after capture page is ready (non-blocking)
             QTimer::singleShot(50, [this]() {
                 if (lastVisitedPageIndex == backgroundPageIndex) {
@@ -475,7 +475,7 @@ void BRBooth::resizeEvent(QResizeEvent *event)
             gifLabel->setGeometry(margin, margin, dynamicButton->width() - 2 * margin, dynamicButton->height() - 2 * margin);
         }
     }
-    
+
 
 }
 
@@ -517,8 +517,8 @@ void BRBooth::startLandingPageGif()
                               << "../" + gifPath
                               << "../../" + gifPath
                               << "../../../" + gifPath
-                              << "C:/Users/dorot/Documents/qt-brbooth/gif templates/dynamicbg3.gif";
-                
+                              << "D:/Users/Documents/Files/Coolege/Thesis/qt-brbooth/gif templates/dynamicbg3.gif";
+
                 QString validPath;
                 for (const QString& path : possiblePaths) {
                     if (QFile::exists(path)) {
@@ -526,7 +526,7 @@ void BRBooth::startLandingPageGif()
                         break;
                     }
                 }
-                
+
                 if (!validPath.isEmpty()) {
                     m_landingPageGifMovie = new QMovie(validPath, QByteArray(), gifLabel);
                     if (m_landingPageGifMovie->isValid()) {
@@ -595,9 +595,9 @@ void BRBooth::showCapturePage()
     } else {
         qDebug() << "DEBUG: showCapturePage() called from final output page. Keeping lastVisitedPageIndex:" << lastVisitedPageIndex;
     }
-    
+
     // Camera is now started by page change handler for all relevant pages
-    
+
     // Pass the current foreground template to the final interface
     if (foregroundPage && finalOutputPage) {
         QString currentForegroundPath = foregroundPage->getSelectedForeground();
@@ -605,7 +605,7 @@ void BRBooth::showCapturePage()
             finalOutputPage->setForegroundOverlay(currentForegroundPath);
         }
     }
-    
+
     ui->stackedWidget->setCurrentIndex(capturePageIndex);
 }
 
@@ -632,7 +632,7 @@ void BRBooth::on_dynamicButton_clicked()
 void BRBooth::testCudaFunctionality()
 {
     qDebug() << "=== BRBooth CUDA Test Function ===";
-    
+
     try {
         // Check if CUDA is available
         int cudaDevices = cv::cuda::getCudaEnabledDeviceCount();
@@ -640,41 +640,41 @@ void BRBooth::testCudaFunctionality()
             qDebug() << "No CUDA devices found";
             return;
         }
-        
+
         qDebug() << "CUDA devices found:" << cudaDevices;
-        
+
         // Set device
         cv::cuda::setDevice(0);
-        
+
         // Create a test image
         cv::Mat testImage(480, 640, CV_8UC3, cv::Scalar(100, 150, 200));
-        
+
         // Test GPU upload
         cv::cuda::GpuMat gpuImage;
         gpuImage.upload(testImage);
         qDebug() << "✓ GPU upload successful";
-        
+
         // Test CUDA image processing operations
         cv::cuda::GpuMat gpuGray, gpuBlurred, gpuResized;
-        
+
         // Color conversion
         cv::cuda::cvtColor(gpuImage, gpuGray, cv::COLOR_BGR2GRAY);
         qDebug() << "✓ CUDA color conversion successful";
-        
+
         // Gaussian blur
         cv::Ptr<cv::cuda::Filter> gaussianFilter = cv::cuda::createGaussianFilter(gpuGray.type(), gpuGray.type(), cv::Size(15, 15), 2.0);
         gaussianFilter->apply(gpuGray, gpuBlurred);
         qDebug() << "✓ CUDA Gaussian blur successful";
-        
+
         // Resize
         cv::cuda::resize(gpuBlurred, gpuResized, cv::Size(320, 240));
         qDebug() << "✓ CUDA resize successful";
-        
+
         // Download result
         cv::Mat result;
         gpuResized.download(result);
         qDebug() << "✓ GPU download successful";
-        
+
         // Test performance
         auto start = std::chrono::high_resolution_clock::now();
         for (int i = 0; i < 100; i++) {
@@ -685,9 +685,9 @@ void BRBooth::testCudaFunctionality()
         auto end = std::chrono::high_resolution_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
         qDebug() << "✓ Performance test: 100 iterations completed in" << duration.count() << "ms";
-        
+
         qDebug() << "=== All CUDA tests passed! ===";
-        
+
     } catch (const cv::Exception& e) {
         qDebug() << "✗ CUDA test failed:" << e.what();
     } catch (const std::exception& e) {

@@ -33,7 +33,9 @@ INCLUDEPATH += include \
                include/core \
                include/ui \
                ui \
-               .
+               . \
+               build/Desktop_Qt_6_9_1_MSVC2022_64bit-Debug \
+               build/Desktop_Qt_6_9_1_MinGW_64_bit-Debug
 
 # Source files organized by category
 SOURCES += \

@@ -149,33 +149,33 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     m_dynamicVideoFrame.release();
     m_dynamicGpuReader.release();
     m_dynamicGpuFrame.release();
-    
+
     // Initialize video playback timer for Phase 1
     m_videoPlaybackTimer = new QTimer(this);
     m_videoPlaybackTimer->setSingleShot(false); // Continuous timer
     m_videoFrameRate = 30.0; // Default to 30 FPS
     m_videoFrameInterval = 33; // Default interval (1000ms / 30fps ≈ 33ms)
     m_videoPlaybackActive = false;
-    
+
     // Connect video playback timer to slot
     connect(m_videoPlaybackTimer, &QTimer::timeout, this, &Capture::onVideoPlaybackTimer);
-    
+
     // Phase 2A: Initialize GPU-only processing
     initializeGPUOnlyProcessing();
 
     setContentsMargins(0, 0, 0, 0);
-    
+
     // Enable keyboard focus for this widget
     setFocusPolicy(Qt::StrongFocus);
     setFocus();
 
     // Setup Debug Display
     setupDebugDisplay();
-    
+
     // Update button states
     updatePersonDetectionButton();
     // updateHandDetectionButton();
-    
+
     // Ensure video label fills the entire window
     if (ui->videoLabel) {
         ui->videoLabel->setMinimumSize(this->size());
@@ -228,7 +228,7 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     );
     loadingCameraLabel->setText("Loading Camera...");
     loadingCameraLabel->hide();
-    
+
     // Flag to track if camera has been initialized for the first time
     m_cameraFirstInitialized = false;
 
@@ -278,10 +278,10 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
         connect(cameraWorker, &Camera::frameReady, this, &Capture::updateCameraFeed, Qt::QueuedConnection);
         connect(cameraWorker, &Camera::cameraOpened, this, &Capture::handleCameraOpened, Qt::QueuedConnection);
         connect(cameraWorker, &Camera::error, this, &Capture::handleCameraError, Qt::QueuedConnection);
-        
+
         // Connect first frame signal to hide loading label
         connect(cameraWorker, &Camera::firstFrameEmitted, this, &Capture::handleFirstFrame, Qt::QueuedConnection);
-        
+
         // Show loading label only on first initialization
         if (!cameraWorker->isCameraOpen() && !m_cameraFirstInitialized) {
             showLoadingCameraLabel();
@@ -297,7 +297,7 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
 
     // Initialize Enhanced Person Detection and Segmentation
     initializePersonDetection();
-    
+
     // Initialize Hand Detection (enabled by default)
     initializeHandDetection();
     m_handDetectionEnabled = true;
@@ -333,12 +333,12 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
 
     // Initialize async processing for person detection
     m_personDetectionWatcher = new QFutureWatcher<cv::Mat>(this);
-    connect(m_personDetectionWatcher, &QFutureWatcher<cv::Mat>::finished, 
+    connect(m_personDetectionWatcher, &QFutureWatcher<cv::Mat>::finished,
             this, &Capture::onPersonDetectionFinished);
-            
+
     // Connect hand detection signal to slot for thread-safe UI updates
     connect(this, &Capture::handTriggeredCapture, this, &Capture::onHandTriggeredCapture);
-            
+
     ui->capture->setEnabled(true);
 
     // Countdown label overlays on the overlayWidget
@@ -378,7 +378,7 @@ Capture::~Capture()
     if (recordTimer){ recordTimer->stop(); delete recordTimer; recordTimer = nullptr; }
     if (recordingFrameTimer){ recordingFrameTimer->stop(); delete recordingFrameTimer; recordingFrameTimer = nullptr; }
     if (debugUpdateTimer){ debugUpdateTimer->stop(); delete debugUpdateTimer; debugUpdateTimer = nullptr; }
-    
+
     // Clean up person detection watcher
     if (m_personDetectionWatcher) {
         if (m_personDetectionWatcher->isRunning()) {
@@ -422,7 +422,7 @@ void Capture::handleCameraOpened(bool success,
 {
     Q_UNUSED(actual_width);
     Q_UNUSED(actual_height);
-    
+
     // Store the actual camera FPS for correct video playback speed
     m_actualCameraFPS = actual_fps;
     qDebug() << "Capture: Stored actual camera FPS:" << m_actualCameraFPS;
@@ -431,7 +431,7 @@ void Capture::handleCameraOpened(bool success,
         qDebug() << "Capture: Camera worker reported open success. Enabling capture button.";
         ui->capture->setEnabled(true);
         ui->videoLabel->show();
-        
+
 
     } else {
         qWarning() << "Capture: Camera worker reported open failure.";
@@ -448,7 +448,7 @@ void Capture::handleCameraError(const QString &msg)
     QMessageBox::critical(this, "Camera Error", msg);
     ui->capture->setEnabled(false);
     qWarning() << "Capture: Camera error received:" << msg;
-    
+
     ui->videoLabel->show();
     ui->videoLabel->setStyleSheet("background-color: #333; color: white; border-radius: 10px;");
     ui->videoLabel->setText(QString("Error: %1").arg(msg));
@@ -482,7 +482,7 @@ void Capture::updateCameraFeed(const QImage &image)
         qDebug() << "Debug widget can be toggled with 'D' key";
         qDebug() << "----------------------------------------";
         firstFrame = false;
-        
+
                     // Handle first frame in main thread (thread-safe)
         QMetaObject::invokeMethod(this, &Capture::handleFirstFrame, Qt::QueuedConnection);
     }
@@ -492,7 +492,7 @@ void Capture::updateCameraFeed(const QImage &image)
 
     // SIMPLIFIED CAMERA FEED: Display immediately without blocking
     QImage displayImage = image;
-    
+
     // Check if we have processed segmentation results to display
     if ((m_displayMode == RectangleMode || m_displayMode == SegmentationMode) && !m_lastSegmentedFrame.empty()) {
         // Convert the processed OpenCV frame back to QImage for display
@@ -502,7 +502,7 @@ void Capture::updateCameraFeed(const QImage &image)
         // Use original camera image
         displayImage = image;
     }
-    
+
     QPixmap pixmap = QPixmap::fromImage(displayImage);
 
     if (ui->videoLabel) {
@@ -512,11 +512,11 @@ void Capture::updateCameraFeed(const QImage &image)
             Qt::KeepAspectRatioByExpanding,
             Qt::FastTransformation
         );
-        
+
         // Apply person-only scaling for background template/dynamic video mode, frame scaling for other modes
         if (qAbs(m_personScaleFactor - 1.0) > 0.01) {
             // Check if we're in segmentation mode with background template or dynamic video background
-            if (m_displayMode == SegmentationMode && ((m_useBackgroundTemplate && 
+            if (m_displayMode == SegmentationMode && ((m_useBackgroundTemplate &&
                 !m_selectedBackgroundTemplate.isEmpty()) || m_useDynamicVideoBackground)) {
                 // For background template mode or dynamic video mode, don't scale the entire frame
                 // Person scaling is handled in createSegmentedFrame
@@ -526,18 +526,18 @@ void Capture::updateCameraFeed(const QImage &image)
                 QSize originalSize = scaledPixmap.size();
                 int newWidth = qRound(originalSize.width() * m_personScaleFactor);
                 int newHeight = qRound(originalSize.height() * m_personScaleFactor);
-                
+
                 scaledPixmap = scaledPixmap.scaled(
                     newWidth, newHeight,
                     Qt::KeepAspectRatio,
                     Qt::FastTransformation
                 );
-                
-                qDebug() << "🎯 Frame scaled to" << newWidth << "x" << newHeight 
+
+                qDebug() << "🎯 Frame scaled to" << newWidth << "x" << newHeight
                          << "with factor" << m_personScaleFactor;
             }
         }
-        
+
         ui->videoLabel->setPixmap(scaledPixmap);
         ui->videoLabel->setAlignment(Qt::AlignCenter);
         ui->videoLabel->update();
@@ -550,24 +550,24 @@ void Capture::updateCameraFeed(const QImage &image)
             qDebug() << "🎯 Starting person detection processing - frame:" << frameCount << "mode:" << m_displayMode;
             QMutexLocker locker(&m_personDetectionMutex);
             m_currentFrame = qImageToCvMat(image);
-            
+
             // Process unified detection in background thread
             QFuture<cv::Mat> future = QtConcurrent::run([this]() {
                 return processFrameWithUnifiedDetection(m_currentFrame);
             });
             m_personDetectionWatcher->setFuture(future);
         }
-        
+
         // Process hand detection in background (non-blocking) - only after initial frames
         if (m_handDetectionEnabled && frameCount > 30) {
             QMutexLocker locker(&m_handDetectionMutex);
             m_currentFrame = qImageToCvMat(image);
-            
+
             // Process hand detection in background thread
             QFuture<QList<HandDetection>> future = QtConcurrent::run([this]() {
                 return m_handDetector->detect(m_currentFrame);
             });
-            
+
             // Store the future for later processing
             m_handDetectionFuture = future;
         }
@@ -582,13 +582,13 @@ void Capture::updateCameraFeed(const QImage &image)
     static QElapsedTimer fpsTimer;
     static int fpsFrameCount = 0;
     static bool fpsTimerInitialized = false;
-    
+
     if (!fpsTimerInitialized) {
         fpsTimer.start();
         fpsTimerInitialized = true;
     }
     fpsFrameCount++;
-    
+
     // Adaptive FPS calculation based on actual camera FPS (30-60 FPS range)
     int targetFPS = qMax(30, qMin(60, static_cast<int>(m_actualCameraFPS)));
     if (fpsFrameCount >= targetFPS) { // Update FPS every targetFPS frames
@@ -602,7 +602,7 @@ void Capture::updateCameraFeed(const QImage &image)
     if (frameCount % targetFPS == 0) {
         printPerformanceStats();
     }
-    
+
     // Enable processing modes after camera is stable
     if (frameCount == 50) {
         enableProcessingModes();
@@ -755,7 +755,7 @@ void Capture::printPerformanceStats() {
     qDebug() << "Hand Detection FPS: N/A (DISABLED)";
     qDebug() << "Person Scale Factor:" << QString::number(m_personScaleFactor * 100, 'f', 0) << "%";
     qDebug() << "----------------------------------------";
-    
+
     // Reset counters for next batch
     frameCount = 0;
     totalTime = 0;
@@ -770,7 +770,7 @@ void Capture::captureRecordingFrame()
 
     // 🚀 CAPTURE EXACTLY WHAT'S DISPLAYED ON SCREEN (with video template)
     QPixmap currentDisplayPixmap;
-    
+
     // Get the current display from the video label (what user actually sees)
     if (ui->videoLabel) {
         QPixmap labelPixmap = ui->videoLabel->pixmap();
@@ -783,7 +783,7 @@ void Capture::captureRecordingFrame()
             } else {
         // Fallback: Get the appropriate frame to record
         cv::Mat frameToRecord;
-        
+
         if ((m_displayMode == SegmentationMode || m_displayMode == RectangleMode) && !m_lastSegmentedFrame.empty()) {
             frameToRecord = m_lastSegmentedFrame.clone();
             qDebug() << "🚀 DIRECT CAPTURE: Fallback - using segmented frame";
@@ -794,12 +794,12 @@ void Capture::captureRecordingFrame()
             qWarning() << "🚀 DIRECT CAPTURE: No frame available for recording";
             return;
         }
-        
+
         // Convert to QPixmap for recording
         QImage qImage = cvMatToQImage(frameToRecord);
         currentDisplayPixmap = QPixmap::fromImage(qImage);
     }
-    
+
     // Add the current display directly to recorded frames (no additional processing needed)
     m_recordedFrames.append(currentDisplayPixmap);
     qDebug() << "🚀 DIRECT CAPTURE: Display frame captured directly, total frames:" << m_recordedFrames.size();
@@ -839,10 +839,10 @@ void Capture::on_capture_clicked()
         qDebug() << "🖐️ Hand detection RE-ENABLED by recapture button press";
         return; // Don't start countdown, just enable hand detection
     }
-    
+
     // If hand detection is already enabled, then start the countdown
     ui->capture->setEnabled(false);
-    
+
     // Start the countdown timer properly
     if (countdownTimer && !countdownTimer->isActive()) {
         countdownValue = 5; // 5 second countdown
@@ -880,7 +880,7 @@ void Capture::updateCountdown()
 
         if (m_currentCaptureMode == ImageCaptureMode) {
             performImageCapture();
-            
+
             // Reset capture button for next capture (hand detection stays disabled until button press)
             ui->capture->setEnabled(true);
             qDebug() << "🎯 Capture completed - hand detection disabled until recapture button is pressed";
@@ -895,14 +895,14 @@ void Capture::updateRecordTimer()
     m_recordedSeconds++;
 
     if (m_recordedSeconds >= m_currentVideoTemplate.durationSeconds) {
-        qDebug() << "🎯 RECORDING COMPLETE: Reached video template duration (" 
+        qDebug() << "🎯 RECORDING COMPLETE: Reached video template duration ("
                  << m_currentVideoTemplate.durationSeconds << " seconds)";
         stopRecording();
     } else {
         // Show progress every 2 seconds or when near completion
-        if (m_recordedSeconds % 2 == 0 || 
+        if (m_recordedSeconds % 2 == 0 ||
             m_recordedSeconds >= m_currentVideoTemplate.durationSeconds - 2) {
-            qDebug() << "🎯 RECORDING PROGRESS:" << m_recordedSeconds << "/" 
+            qDebug() << "🎯 RECORDING PROGRESS:" << m_recordedSeconds << "/"
                      << m_currentVideoTemplate.durationSeconds << "seconds";
         }
     }
@@ -925,7 +925,7 @@ void Capture::updateForegroundOverlay(const QString &path)
     }
     overlayImageLabel->setPixmap(overlayPixmap);
     overlayImageLabel->show();
-    
+
     // Emit signal to notify final interface about foreground path change
     emit foregroundPathChanged(path);
 }
@@ -942,16 +942,16 @@ void Capture::on_verticalSlider_valueChanged(int value)
     if (value != snappedValue) {
         ui->verticalSlider->setValue(snappedValue);
     }
-    
+
     // Debug: Print actual slider values
     qDebug() << "Slider value:" << value << "Snapped value:" << snappedValue;
-    
+
     // --- SCALING FUNCTIONALITY (TICK-BASED) ---
     // Convert slider value (0-100) to scale factor (1.0-0.5) in 10-unit steps
     // Since slider default is 0: 0 = 1.0x scale (normal size), 100 = 0.5x scale (50% smaller)
     // Tick intervals: 0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100
     double newScaleFactor = 1.0 - (snappedValue / 100.0) * 0.5;
-    
+
     if (qAbs(newScaleFactor - m_personScaleFactor) > 0.01) { // Only update if change is significant
         m_personScaleFactor = newScaleFactor;
         qDebug() << "=== TICK-BASED SCALING ===";
@@ -959,7 +959,7 @@ void Capture::on_verticalSlider_valueChanged(int value)
         qDebug() << "Person scaling factor:" << m_personScaleFactor;
         qDebug() << "Scale percentage:" << (m_personScaleFactor * 100) << "%";
         qDebug() << "========================";
-        
+
         // Trigger a refresh of the camera feed to apply the new scaling
         // The scaling will be applied in the next updateCameraFeed call
         if (!m_originalCameraImage.isNull()) {
@@ -997,9 +997,9 @@ void Capture::setupDebugDisplay()
     // Create debug widget
     debugWidget = new QWidget(this);
     debugWidget->setStyleSheet("QWidget { background-color: rgba(0, 0, 0, 0.8); color: white; border-radius: 5px; }");
-    
+
     QVBoxLayout *debugLayout = new QVBoxLayout(debugWidget);
-    
+
     // Debug info label
     debugLabel = new QLabel("Initializing...", debugWidget);
     debugLabel->setStyleSheet("QLabel { color: white; font-size: 12px; font-weight: bold; }");
@@ -1009,62 +1009,62 @@ void Capture::setupDebugDisplay()
     fpsLabel = new QLabel("FPS: 0", debugWidget);
     fpsLabel->setStyleSheet("QLabel { color: #00ff00; font-size: 12px; }");
     debugLayout->addWidget(fpsLabel);
-    
+
     // GPU Status label
     gpuStatusLabel = new QLabel("GPU: Checking...", debugWidget);
     gpuStatusLabel->setStyleSheet("QLabel { color: #00aaff; font-size: 12px; }");
     debugLayout->addWidget(gpuStatusLabel);
-    
+
     // CUDA Status label
     cudaStatusLabel = new QLabel("CUDA: Checking...", debugWidget);
     cudaStatusLabel->setStyleSheet("QLabel { color: #ff00ff; font-size: 12px; }");
     debugLayout->addWidget(cudaStatusLabel);
-    
+
     // Unified Detection label
     personDetectionLabel = new QLabel("Unified Detection: OFF", debugWidget);
     personDetectionLabel->setStyleSheet("QLabel { color: #ffaa00; font-size: 12px; }");
     debugLayout->addWidget(personDetectionLabel);
-    
+
     // Unified Detection button
     personDetectionButton = new QPushButton("Enable Unified Detection", debugWidget);
     personDetectionButton->setStyleSheet("QPushButton { color: white; font-size: 12px; background-color: #388e3c; border: 1px solid white; padding: 5px; border-radius: 3px; }");
     connect(personDetectionButton, &QPushButton::clicked, this, &Capture::togglePersonDetection);
     debugLayout->addWidget(personDetectionButton);
-    
+
     // Unified Detection Status label
     personSegmentationLabel = new QLabel("Detection & Segmentation: OFF", debugWidget);
     personSegmentationLabel->setStyleSheet("QLabel { color: #ff8800; font-size: 12px; }");
     debugLayout->addWidget(personSegmentationLabel);
-    
+
     // Unified Detection Status button
     personSegmentationButton = new QPushButton("Toggle Unified Detection", debugWidget);
     personSegmentationButton->setStyleSheet("QPushButton { color: white; font-size: 12px; background-color: #1976d2; border: 1px solid white; padding: 5px; border-radius: 3px; }");
     connect(personSegmentationButton, &QPushButton::clicked, this, &Capture::togglePersonDetection);
     debugLayout->addWidget(personSegmentationButton);
-    
+
     // handDetectionLabel = new QLabel("Hand Detection: OFF", debugWidget);
     // handDetectionLabel->setStyleSheet("QLabel { color: #00aaff; font-size: 12px; }");
     // debugLayout->addWidget(handDetectionLabel);
-    
+
     // handDetectionButton = new QPushButton("Disable Hand Detection", debugWidget);
     // handDetectionButton->setStyleSheet("QPushButton { color: white; font-size: 12px; background-color: #d32f2f; border: 1px solid white; padding: 5px; border-radius: 3px; }");
     // connect(handDetectionButton, &QPushButton::clicked, this, &Capture::toggleHandDetection);
     // debugLayout->addWidget(handDetectionButton);
-    
+
     // Performance tips label
     QLabel *tipsLabel = new QLabel("Press 'S' to toggle detection\nPress 'G' to toggle segmentation/rectangles\nPress 'D' to hide/show\nPress 'P' for stats", debugWidget);
     tipsLabel->setStyleSheet("QLabel { color: #cccccc; font-size: 10px; font-style: italic; }");
     debugLayout->addWidget(tipsLabel);
-    
+
     // Add debug widget to the main widget instead of videoLabel's layout
     debugWidget->setParent(this);
     debugWidget->move(10, 10); // Position in top-left corner
     debugWidget->resize(280, 350); // Larger size for better visibility
     debugWidget->raise(); // Ensure it's on top
     debugWidget->setVisible(true); // Make sure it's visible
-    
+
     debugWidget->show(); // Show debug widget so user can enable segmentation and hand detection
-    
+
     qDebug() << "Debug display setup complete - FPS, GPU, and CUDA status should be visible";
 }
 
@@ -1088,7 +1088,7 @@ bool Capture::isCaptureReady() const
 void Capture::resetCapturePage()
 {
     qDebug() << "🔄 COMPLETE CAPTURE PAGE RESET";
-    
+
     // Reset all timers and countdown
     if (countdownTimer) {
         countdownTimer->stop();
@@ -1102,17 +1102,17 @@ void Capture::resetCapturePage()
         recordingFrameTimer->stop();
         qDebug() << "⏱️ Recording frame timer stopped";
     }
-    
+
     // Hide countdown label
     if (countdownLabel) {
         countdownLabel->hide();
         qDebug() << "📺 Countdown label hidden";
     }
-    
+
     // Reset capture button
     ui->capture->setEnabled(true);
     qDebug() << "🔘 Capture button reset to enabled";
-    
+
     // Reset hand detection completely
     m_handDetectionEnabled = true;
     m_captureReady = true;
@@ -1120,29 +1120,29 @@ void Capture::resetCapturePage()
         m_handDetector->resetGestureState();
         qDebug() << "🖐️ Hand detection completely reset";
     }
-    
+
     // Reset segmentation state for capture interface
     enableSegmentationInCapture();
     qDebug() << "🎯 Segmentation reset for capture interface";
-    
+
     // Reset all detection state
     m_lastHandDetections.clear();
     m_handDetectionFPS = 0.0;
     m_lastHandDetectionTime = 0.0;
-    
+
     // Reset capture mode
     m_currentCaptureMode = ImageCaptureMode;
-    
+
     // Reset video recording state
     m_recordedFrames.clear();
     m_recordedSeconds = 0;
-    
+
     // Reset dynamic video background to start from beginning
     if (m_useDynamicVideoBackground && m_videoPlaybackActive) {
         resetDynamicVideoToStart();
         qDebug() << "🎞️ Dynamic video reset to start for re-recording";
     }
-    
+
     qDebug() << "✅ Capture page completely reset - all state cleared";
 }
 
@@ -1156,32 +1156,32 @@ void Capture::resizeEvent(QResizeEvent *event)
         overlayImageLabel->resize(size());
         overlayImageLabel->move(0, 0);
     }
-    
+
     // Center the countdown label when window is resized
     if (countdownLabel) {
         int x = (width() - countdownLabel->width()) / 2;
         int y = (height() - countdownLabel->height()) / 2;
         countdownLabel->move(x, y);
     }
-    
+
     // Center the status overlay when window is resized
     if (statusOverlay && statusOverlay->isVisible()) {
         int x = (width() - statusOverlay->width()) / 2;
         int y = (height() - statusOverlay->height()) / 2;
         statusOverlay->move(x, y);
     }
-    
 
-    
 
-    
+
+
+
     // Ensure debug widget is visible and properly positioned
     if (debugWidget) {
         debugWidget->move(10, 10);
         debugWidget->raise();
         debugWidget->setVisible(true);
     }
-    
+
     updateOverlayStyles();
 }
 
@@ -1245,16 +1245,16 @@ void Capture::keyPressEvent(QKeyEvent *event)
                     });
                 }
             }
-            
+
             // Force immediate update
             qDebug() << "🎯 Current display mode:" << m_displayMode << "(0=Normal, 1=Rectangle, 2=Segmentation)";
-            
+
             // Reset utilization when switching to normal mode
             if (m_displayMode == NormalMode) {
                 m_gpuUtilized = false;
                 m_cudaUtilized = false;
             }
-            
+
             // Show prominent status overlay
             if (statusOverlay) {
                 QString statusText;
@@ -1269,25 +1269,25 @@ void Capture::keyPressEvent(QKeyEvent *event)
                         statusText = "BLACK BACKGROUND + EDGE-BASED SILHOUETTES: ENABLED";
                         break;
                 }
-                
+
                 // Add segmentation state to status
                 if (m_segmentationEnabledInCapture) {
                     statusText += " (Capture Interface)";
                 } else {
                     statusText += " (Disabled - Capture Only)";
                 }
-                
+
                 statusOverlay->setText(statusText);
-                
+
                 // Center the overlay
                 statusOverlay->resize(statusOverlay->sizeHint());
                 int x = (width() - statusOverlay->width()) / 2;
                 int y = (height() - statusOverlay->height()) / 2;
                 statusOverlay->move(x, y);
-                
+
                 statusOverlay->show();
                 statusOverlay->raise();
-                
+
                 // Auto-hide after 2 seconds
                 QTimer::singleShot(2000, [this]() {
                     if (statusOverlay) {
@@ -1297,20 +1297,20 @@ void Capture::keyPressEvent(QKeyEvent *event)
             }
             break;
 
-            
+
             // Update button states
             updatePersonDetectionButton();
 
-            
+
             // Force update debug display immediately
             updateDebugDisplay();
-            
+
             // Show debug widget prominently when toggling
             if (debugWidget) {
                 debugWidget->show();
                 debugWidget->raise();
                 debugWidget->setStyleSheet("QWidget { background-color: rgba(0, 0, 0, 0.95); color: white; border-radius: 10px; border: 3px solid #00ff00; padding: 5px; }");
-                
+
                 // Show comprehensive status message
                 if (debugLabel) {
                     QString status;
@@ -1328,32 +1328,32 @@ void Capture::keyPressEvent(QKeyEvent *event)
                     debugLabel->setText(status);
                     debugLabel->setStyleSheet("QLabel { color: #00ff00; font-size: 16px; font-weight: bold; }");
                 }
-                
+
                 // Make FPS label more prominent
                 if (fpsLabel) {
                     fpsLabel->setStyleSheet("QLabel { color: #00ff00; font-size: 14px; font-weight: bold; }");
                 }
-                
+
                 // Make GPU status more prominent
                 if (gpuStatusLabel) {
                     gpuStatusLabel->setStyleSheet("QLabel { color: #00aaff; font-size: 14px; font-weight: bold; }");
                 }
-                
+
                 // Make CUDA status more prominent
                 if (cudaStatusLabel) {
                     cudaStatusLabel->setStyleSheet("QLabel { color: #ff00ff; font-size: 14px; font-weight: bold; }");
                 }
-                
+
                 // Make person detection label more prominent
                 if (personDetectionLabel) {
                     personDetectionLabel->setStyleSheet("QLabel { color: #ffaa00; font-size: 14px; font-weight: bold; }");
                 }
-                
+
                 // Make person segmentation label more prominent
                 if (personSegmentationLabel) {
                     personSegmentationLabel->setStyleSheet("QLabel { color: #ff8800; font-size: 14px; font-weight: bold; }");
                 }
-                
+
                 // Auto-hide the enhanced styling after 5 seconds (longer for better visibility)
                 QTimer::singleShot(5000, [this]() {
                     if (debugWidget) {
@@ -1379,23 +1379,23 @@ void Capture::keyPressEvent(QKeyEvent *event)
                     }
                 });
             }
-            
+
             // Show prominent status overlay
             if (statusOverlay) {
-                QString statusText = ((m_displayMode == RectangleMode || m_displayMode == SegmentationMode) ? 
-                    "PERSON DETECTION: ENABLED" : 
+                QString statusText = ((m_displayMode == RectangleMode || m_displayMode == SegmentationMode) ?
+                    "PERSON DETECTION: ENABLED" :
                     "PERSON DETECTION: DISABLED");
                 statusOverlay->setText(statusText);
-                
+
                 // Center the overlay
                 statusOverlay->resize(statusOverlay->sizeHint());
                 int x = (width() - statusOverlay->width()) / 2;
                 int y = (height() - statusOverlay->height()) / 2;
                 statusOverlay->move(x, y);
-                
+
                 statusOverlay->show();
                 statusOverlay->raise();
-                
+
                 // Auto-hide after 2 seconds
                 QTimer::singleShot(2000, [this]() {
                     if (statusOverlay) {
@@ -1422,7 +1422,7 @@ void Capture::showEvent(QShowEvent *event)
 {
     QWidget::showEvent(event);
     qDebug() << "Capture widget shown - camera should already be running continuously";
-    
+
     // Camera is now managed continuously by brbooth.cpp, no need to start it here
     // Just enable hand detection and segmentation after a short delay
     QTimer::singleShot(100, [this]() {
@@ -1440,15 +1440,15 @@ void Capture::hideEvent(QHideEvent *event)
 {
     QWidget::hideEvent(event);
     qDebug() << "Capture widget hidden - OPTIMIZED camera and hand detection shutdown";
-    
+
     // Disable hand detection when page is hidden (but keep camera running for faster return)
     enableHandDetection(false);
     qDebug() << "🖐️ Hand detection DISABLED";
-    
+
     // Disable segmentation when leaving capture page
     disableSegmentationOutsideCapture();
     qDebug() << "🎯 Segmentation DISABLED outside capture interface";
-    
+
     // Note: Camera is now controlled by the main page change handler in brbooth.cpp
     // This prevents lag when returning to capture page
 }
@@ -1463,22 +1463,22 @@ void Capture::drawHandBoundingBoxes(cv::Mat &/*frame*/, const QList<HandDetectio
             if (m_handDetector->shouldTriggerCapture()) {
                 qDebug() << "🎯 HAND CLOSED DETECTED! Automatically triggering capture...";
                 qDebug() << "🎯 Current display mode:" << m_displayMode << "(0=Normal, 1=Rectangle, 2=Segmentation)";
-                
+
                 // Emit signal to trigger capture in main thread (thread-safe)
                 emit handTriggeredCapture();
             }
-            
+
             // Show gesture status in console only
             bool isOpen = m_handDetector->isHandOpen(detection.landmarks);
             bool isClosed = m_handDetector->isHandClosed(detection.landmarks);
             double closureRatio = m_handDetector->calculateHandClosureRatio(detection.landmarks);
-            
+
             // Update hand state for trigger logic
             m_handDetector->updateHandState(isClosed);
-            
+
             if (isOpen || isClosed) {
                 QString gestureStatus = isOpen ? "OPEN" : "CLOSED";
-                qDebug() << "Hand detected - Gesture:" << gestureStatus 
+                qDebug() << "Hand detected - Gesture:" << gestureStatus
                          << "Confidence:" << static_cast<int>(detection.confidence * 100) << "%"
                          << "Closure ratio:" << closureRatio;
             }
@@ -1496,14 +1496,14 @@ void Capture::updateDebugDisplay()
     if (updateCount % 10 == 0) { // Log every 5 seconds (10 updates * 500ms)
         qDebug() << "Debug display update #" << updateCount << "FPS:" << m_currentFPS << "GPU:" << m_useGPU << "CUDA:" << m_useCUDA;
     }
-    
+
     if (debugLabel) {
         QString peopleDetected = QString::number(m_lastDetections.size());
         QString modeText;
         QString segmentationStatus = m_segmentationEnabledInCapture ? "ENABLED" : "DISABLED";
-        
+
         QString backgroundStatus = m_useBackgroundTemplate ? "TEMPLATE" : "BLACK";
-        
+
         switch (m_displayMode) {
             case NormalMode:
                 modeText = "NORMAL VIEW";
@@ -1523,11 +1523,11 @@ void Capture::updateDebugDisplay()
                            .arg(backgroundStatus);
         debugLabel->setText(debugInfo);
     }
-    
+
     if (fpsLabel) {
         fpsLabel->setText(QString("FPS: %1").arg(m_currentFPS));
     }
-    
+
     if (gpuStatusLabel) {
         QString gpuStatus;
         if (m_gpuUtilized) {
@@ -1538,7 +1538,7 @@ void Capture::updateDebugDisplay()
             gpuStatus = "OFF (CPU)";
         }
         gpuStatusLabel->setText(QString("GPU: %1").arg(gpuStatus));
-        
+
         // Change color based on utilization
         if (m_gpuUtilized) {
             gpuStatusLabel->setStyleSheet("QLabel { color: #00ff00; font-size: 12px; font-weight: bold; }");
@@ -1548,7 +1548,7 @@ void Capture::updateDebugDisplay()
             gpuStatusLabel->setStyleSheet("QLabel { color: #ff6666; font-size: 12px; }");
         }
     }
-    
+
     if (handDetectionLabel) {
         QString handStatus = m_showHandDetection ? "ON (Tracking)" : "OFF";
         QString handTime = QString::number(m_lastHandDetectionTime * 1000, 'f', 1);
@@ -1556,7 +1556,7 @@ void Capture::updateDebugDisplay()
         QString avgTime = m_handDetector ? QString::number(m_handDetector->getAverageProcessingTime(), 'f', 1) : "0.0";
         handDetectionLabel->setText(QString("Hand Detection: %1 (%2ms) [%3] Avg: %4ms").arg(handStatus).arg(handTime).arg(detectorType).arg(avgTime));
     }
-    
+
     if (cudaStatusLabel) {
         QString cudaStatus;
         if (m_cudaUtilized) {
@@ -1567,7 +1567,7 @@ void Capture::updateDebugDisplay()
             cudaStatus = "OFF (CPU)";
         }
         cudaStatusLabel->setText(QString("CUDA: %1").arg(cudaStatus));
-        
+
         // Change color based on utilization
         if (m_cudaUtilized) {
             cudaStatusLabel->setStyleSheet("QLabel { color: #00ff00; font-size: 12px; font-weight: bold; }");
@@ -1577,7 +1577,7 @@ void Capture::updateDebugDisplay()
             cudaStatusLabel->setStyleSheet("QLabel { color: #ff6666; font-size: 12px; }");
         }
     }
-    
+
     if (personDetectionLabel) {
         QString personStatus = ((m_displayMode == RectangleMode || m_displayMode == SegmentationMode) ? "ON" : "OFF");
         QString personTime = QString::number(m_lastPersonDetectionTime * 1000, 'f', 1);
@@ -1585,7 +1585,7 @@ void Capture::updateDebugDisplay()
         QString peopleCount = QString::number(m_lastDetections.size());
         personDetectionLabel->setText(QString("Unified Detection: %1 (%2ms, %3 FPS, %4 people)").arg(personStatus).arg(personTime).arg(personFPS).arg(peopleCount));
     }
-    
+
     if (personSegmentationLabel) {
         QString segStatus = ((m_displayMode == RectangleMode || m_displayMode == SegmentationMode) ? "ON" : "OFF");
         QString segTime = QString::number(m_lastPersonDetectionTime * 1000, 'f', 1);
@@ -1610,23 +1610,23 @@ void Capture::startRecording()
 
     // Use the original camera FPS for recording to maintain natural timing
     m_adjustedRecordingFPS = m_actualCameraFPS;
-    
+
     qDebug() << "🚀 DIRECT CAPTURE RECORDING: Starting with FPS:" << m_adjustedRecordingFPS;
     qDebug() << "  - Scale factor:" << m_personScaleFactor;
     qDebug() << "  - Capturing exact display content";
     qDebug() << "  - Recording duration:" << m_currentVideoTemplate.durationSeconds << "seconds";
     qDebug() << "  - Video template:" << m_currentVideoTemplate.name;
-    
+
     int frameIntervalMs = qMax(1, static_cast<int>(1000.0 / m_adjustedRecordingFPS));
 
     recordTimer->start(1000);
     recordingFrameTimer->start(frameIntervalMs);
     qDebug() << "🚀 DIRECT CAPTURE RECORDING: Started at " + QString::number(m_adjustedRecordingFPS)
                     + " frames/sec (interval: " + QString::number(frameIntervalMs) + "ms)";
-    
+
     // Pre-calculate label size for better performance during recording
     m_cachedLabelSize = ui->videoLabel->size();
-    
+
     // Reset dynamic video to start when recording begins
     if (m_useDynamicVideoBackground && m_videoPlaybackActive) {
         resetDynamicVideoToStart();
@@ -1642,20 +1642,20 @@ void Capture::stopRecording()
     recordTimer->stop();
     recordingFrameTimer->stop();
     m_isRecording = false;
-    
+
     qDebug() << "🚀 DIRECT CAPTURE RECORDING: Stopped. Captured " + QString::number(m_recordedFrames.size())
                     + " frames.";
 
     if (!m_recordedFrames.isEmpty()) {
         qDebug() << "🚀 DIRECT CAPTURE RECORDING: Emitting video with FPS:" << m_adjustedRecordingFPS << "(base:" << m_actualCameraFPS << ")";
-        
+
         // Emit the adjusted FPS to ensure playback matches the recording rate
         emit videoRecorded(m_recordedFrames, m_adjustedRecordingFPS);
     }
-    
+
     // Re-enable capture button for re-recording
     ui->capture->setEnabled(true);
-    
+
     emit showFinalOutputPage();
     qDebug() << "🚀 DIRECT CAPTURE RECORDING: Stopped - capture button re-enabled for re-recording";
 }
@@ -1690,7 +1690,7 @@ void Capture::performImageCapture()
         // Apply person-only scaling for background template/dynamic video mode, frame scaling for other modes
         if (qAbs(m_personScaleFactor - 1.0) > 0.01) {
             // Check if we're in segmentation mode with background template or dynamic video background
-            if (m_displayMode == SegmentationMode && ((m_useBackgroundTemplate && 
+            if (m_displayMode == SegmentationMode && ((m_useBackgroundTemplate &&
                 !m_selectedBackgroundTemplate.isEmpty()) || m_useDynamicVideoBackground)) {
                 // For background template mode or dynamic video mode, don't scale the entire frame
                 // Person scaling is already applied in createSegmentedFrame
@@ -1700,18 +1700,18 @@ void Capture::performImageCapture()
                 QSize originalSize = scaledPixmap.size();
                 int newWidth = qRound(originalSize.width() * m_personScaleFactor);
                 int newHeight = qRound(originalSize.height() * m_personScaleFactor);
-                
+
                 scaledPixmap = scaledPixmap.scaled(
                     newWidth, newHeight,
                     Qt::KeepAspectRatio,
                     Qt::FastTransformation
                 );
-                
-                qDebug() << "🎯 Frame scaled in final output to" << newWidth << "x" << newHeight 
+
+                qDebug() << "🎯 Frame scaled in final output to" << newWidth << "x" << newHeight
                          << "with factor" << m_personScaleFactor;
             }
         }
-        
+
         m_capturedImage = scaledPixmap;
         emit imageCaptured(m_capturedImage);
         qDebug() << "Image captured (includes background template and segmentation).";
@@ -1735,7 +1735,7 @@ QImage Capture::cvMatToQImage(const cv::Mat &mat)
         QImage qImage(mat.data, mat.cols, mat.rows, mat.step, QImage::Format_RGB888);
         return qImage.rgbSwapped(); // Convert BGR to RGB
     }
-    
+
     // Fallback for other formats
     switch (mat.type()) {
         case CV_8UC1: {
@@ -1767,10 +1767,10 @@ void Capture::setVideoTemplate(const VideoTemplate &templateData)
     qDebug() << "🎯 VIDEO TEMPLATE SET:" << templateData.name;
     qDebug() << "  - Duration:" << templateData.durationSeconds << "seconds";
     qDebug() << "  - Recording will automatically stop after" << templateData.durationSeconds << "seconds";
-    
+
     // Reset frame counter to ensure smooth initial processing
     frameCount = 0;
-    
+
     // Ensure we start in normal mode to prevent freezing
     if (m_displayMode != NormalMode) {
         m_displayMode = NormalMode;
@@ -1822,7 +1822,7 @@ void Capture::enableDynamicVideoBackground(const QString &videoPath)
             qDebug() << "  - Frame rate:" << m_videoFrameRate << "FPS";
         }
     }
-    
+
     // Update video template with detected duration
     if (videoDurationSeconds > 0) {
         QString templateName = QFileInfo(m_dynamicVideoPath).baseName();
@@ -1865,7 +1865,7 @@ void Capture::enableDynamicVideoBackground(const QString &videoPath)
         m_dynamicVideoFrame = first.clone();
         m_useDynamicVideoBackground = true;
         qDebug() << "🎞️ Dynamic video background enabled:" << m_dynamicVideoPath;
-        
+
         // Phase 1: Start video playback timer for frame rate synchronization
         if (m_videoPlaybackTimer) {
             m_videoPlaybackTimer->setInterval(m_videoFrameInterval);
@@ -1895,7 +1895,7 @@ void Capture::disableDynamicVideoBackground()
         m_videoPlaybackActive = false;
         qDebug() << "🎞️ Video playback timer stopped";
     }
-    
+
     if (m_dynamicVideoCap.isOpened()) m_dynamicVideoCap.release();
     m_dynamicGpuReader.release();
     m_dynamicVideoFrame.release();
@@ -1914,11 +1914,11 @@ void Capture::onVideoPlaybackTimer()
     if (!m_useDynamicVideoBackground || !m_videoPlaybackActive) {
         return;
     }
-    
+
     // Advance to next video frame at native frame rate
     cv::Mat nextFrame;
     bool frameRead = false;
-    
+
     if (!m_dynamicGpuReader.empty()) {
         cv::cuda::GpuMat gpu;
         if (m_dynamicGpuReader->nextFrame(gpu) && !gpu.empty()) {
@@ -1950,7 +1950,7 @@ void Capture::onVideoPlaybackTimer()
             }
         }
     }
-    
+
     if (frameRead && !nextFrame.empty()) {
         // Store the new frame for use in segmentation
         m_dynamicVideoFrame = nextFrame.clone();
@@ -1966,13 +1966,13 @@ void Capture::resetDynamicVideoToStart()
     if (!m_useDynamicVideoBackground) {
         return;
     }
-    
+
     // Stop the current video playback timer
     if (m_videoPlaybackTimer && m_videoPlaybackActive) {
         m_videoPlaybackTimer->stop();
         m_videoPlaybackActive = false;
     }
-    
+
     // Reset video readers to beginning
     if (!m_dynamicGpuReader.empty()) {
         try {
@@ -1986,11 +1986,11 @@ void Capture::resetDynamicVideoToStart()
         m_dynamicVideoCap.set(cv::CAP_PROP_POS_FRAMES, 0);
         qDebug() << "🎞️ CPU video reader reset to start";
     }
-    
+
     // Read first frame to prime the system
     cv::Mat firstFrame;
     bool frameRead = false;
-    
+
     if (!m_dynamicGpuReader.empty()) {
         cv::cuda::GpuMat gpu;
         if (m_dynamicGpuReader->nextFrame(gpu) && !gpu.empty()) {
@@ -2003,12 +2003,12 @@ void Capture::resetDynamicVideoToStart()
             frameRead = true;
         }
     }
-    
+
     if (frameRead && !firstFrame.empty()) {
         m_dynamicVideoFrame = firstFrame.clone();
         qDebug() << "🎞️ Video reset to first frame for re-recording";
     }
-    
+
     // Restart the video playback timer
     if (m_videoPlaybackTimer) {
         m_videoPlaybackTimer->setInterval(m_videoFrameInterval);
@@ -2023,7 +2023,7 @@ void Capture::initializeGPUOnlyProcessing()
 {
     m_gpuOnlyProcessingEnabled = false;
     m_gpuProcessingAvailable = false;
-    
+
     // Check if CUDA is available and GPU processing is supported
     if (m_useCUDA && cv::cuda::getCudaEnabledDeviceCount() > 0) {
         try {
@@ -2032,13 +2032,13 @@ void Capture::initializeGPUOnlyProcessing()
             if (!testMat.empty()) {
                 m_gpuProcessingAvailable = true;
                 m_gpuOnlyProcessingEnabled = true;
-                
+
                 // Initialize GPU buffers
                 m_gpuVideoFrame.release();
                 m_gpuSegmentedFrame.release();
                 m_gpuPersonMask.release();
                 m_gpuBackgroundFrame.release();
-                
+
                 qDebug() << "🎮 Phase 2A: GPU-only processing pipeline initialized successfully";
                 qDebug() << "🎮 GPU memory available for video processing";
             }
@@ -2048,7 +2048,7 @@ void Capture::initializeGPUOnlyProcessing()
             m_gpuOnlyProcessingEnabled = false;
         }
     }
-    
+
     if (!m_gpuProcessingAvailable) {
         qDebug() << "🎮 Phase 2A: GPU-only processing not available, using CPU fallback";
     }
@@ -2065,29 +2065,29 @@ cv::Mat Capture::processFrameWithGPUOnlyPipeline(const cv::Mat &frame)
     if (frame.empty()) {
         return cv::Mat();
     }
-    
+
     m_personDetectionTimer.start();
-    
+
     try {
         qDebug() << "🎮 Phase 2A: Using GPU-only processing pipeline";
-        
+
         // Upload frame to GPU (single transfer)
         m_gpuVideoFrame.upload(frame);
-        
+
         // Optimized processing for 30 FPS with GPU
         cv::cuda::GpuMat processFrame = m_gpuVideoFrame;
         if (frame.cols > 640) {
             double scale = 640.0 / frame.cols;
             cv::cuda::resize(m_gpuVideoFrame, processFrame, cv::Size(), scale, scale, cv::INTER_LINEAR);
         }
-        
+
         // Download for person detection (still need CPU for HOG)
         cv::Mat cpuProcessFrame;
         processFrame.download(cpuProcessFrame);
-        
+
         // Detect people using enhanced detection (CPU-based HOG)
         std::vector<cv::Rect> found = detectPeople(cpuProcessFrame);
-        
+
         // Scale results back if we resized the frame
         if (processFrame.cols != frame.cols) {
             double scale = (double)frame.cols / processFrame.cols;
@@ -2098,27 +2098,27 @@ cv::Mat Capture::processFrameWithGPUOnlyPipeline(const cv::Mat &frame)
                 rect.height = cvRound(rect.height * scale);
             }
         }
-        
+
         // Get motion mask for filtering (GPU-based)
         cv::Mat motionMask = getMotionMask(frame);
-        
+
         // Filter detections by motion
         std::vector<cv::Rect> motionFiltered = filterByMotion(found, motionMask);
-        
+
         // Store detections for UI display
         m_lastDetections = motionFiltered;
-        
+
         // Create segmented frame with GPU-only processing
         cv::Mat segmentedFrame = createSegmentedFrameGPUOnly(frame, motionFiltered);
-        
+
         // Update timing info
         m_lastPersonDetectionTime = m_personDetectionTimer.elapsed() / 1000.0;
         m_personDetectionFPS = (m_lastPersonDetectionTime > 0) ? 1.0 / m_lastPersonDetectionTime : 0;
-        
+
         qDebug() << "🎮 Phase 2A: GPU-only processing completed successfully";
-        
+
         return segmentedFrame;
-        
+
     } catch (const cv::Exception& e) {
         qWarning() << "GPU-only processing failed, falling back to CPU:" << e.what();
         // Fallback to CPU processing
@@ -2137,19 +2137,19 @@ void Capture::initializePersonDetection()
 {
     qDebug() << "🎮 ===== initializePersonDetection() CALLED =====";
     qDebug() << "Initializing Enhanced Person Detection and Segmentation...";
-    
+
     // Initialize HOG detectors for person detection
     qDebug() << "🎮 ===== CAPTURE INITIALIZATION STARTED =====";
     m_hogDetector.setSVMDetector(cv::HOGDescriptor::getDefaultPeopleDetector());
     m_hogDetectorDaimler.setSVMDetector(cv::HOGDescriptor::getDaimlerPeopleDetector());
-    
+
     // Initialize CUDA HOG detector for GPU acceleration
     qDebug() << "🎮 ===== STARTING CUDA HOG INITIALIZATION =====";
-    
+
     // Check if CUDA is available
     int cudaDevices = cv::cuda::getCudaEnabledDeviceCount();
     qDebug() << "🎮 CUDA devices found:" << cudaDevices;
-    
+
     if (cudaDevices > 0) {
         try {
             qDebug() << "🎮 Creating CUDA HOG detector...";
@@ -2161,7 +2161,7 @@ void Capture::initializePersonDetection()
                 cv::Size(8, 8),     // cell_size
                 9                   // nbins
             );
-            
+
             if (!m_cudaHogDetector.empty()) {
                 qDebug() << "🎮 CUDA HOG detector created successfully";
                 m_cudaHogDetector->setSVMDetector(m_cudaHogDetector->getDefaultPeopleDetector());
@@ -2181,7 +2181,7 @@ void Capture::initializePersonDetection()
     qDebug() << "🎮 ===== FINAL CUDA HOG INITIALIZATION CHECK =====";
     qDebug() << "🎮 CUDA HOG detector pointer:" << m_cudaHogDetector.get();
     qDebug() << "🎮 CUDA HOG detector empty:" << (m_cudaHogDetector && m_cudaHogDetector.empty() ? "yes" : "no");
-    
+
     if (m_cudaHogDetector && !m_cudaHogDetector.empty()) {
         qDebug() << "✅ CUDA HOG detector successfully initialized and ready!";
         m_useCUDA = true; // Ensure CUDA is enabled
@@ -2190,10 +2190,10 @@ void Capture::initializePersonDetection()
         m_cudaHogDetector = nullptr;
     }
     qDebug() << "🎮 ===== CUDA HOG INITIALIZATION COMPLETE =====";
-    
+
     // Initialize background subtractor for motion detection (matching peopledetect_v1.cpp)
     m_bgSubtractor = cv::createBackgroundSubtractorMOG2(500, 16, false);
-    
+
     // 🚀 Initialize GPU Memory Pool for optimized CUDA operations
     if (!m_gpuMemoryPoolInitialized && cv::cuda::getCudaEnabledDeviceCount() > 0) {
         try {
@@ -2206,14 +2206,14 @@ void Capture::initializePersonDetection()
             m_gpuMemoryPoolInitialized = false;
         }
     }
-    
+
     // Check if CUDA is available for NVIDIA GPU acceleration (PRIORITY)
     try {
         if (cv::cuda::getCudaEnabledDeviceCount() > 0) {
             m_useCUDA = true;
             qDebug() << "🎮 CUDA GPU acceleration enabled for NVIDIA GPU (PRIORITY)";
             qDebug() << "CUDA devices found:" << cv::cuda::getCudaEnabledDeviceCount();
-            
+
             // Get CUDA device info
             cv::cuda::DeviceInfo deviceInfo(0);
             if (deviceInfo.isCompatible()) {
@@ -2221,7 +2221,7 @@ void Capture::initializePersonDetection()
                 qDebug() << "Memory:" << deviceInfo.totalMemory() / (1024*1024) << "MB";
                 qDebug() << "Compute Capability:" << deviceInfo.majorVersion() << "." << deviceInfo.minorVersion();
                 qDebug() << "CUDA will be used for color conversion and resizing operations";
-                
+
                 // Pre-allocate CUDA GPU memory pools for better performance
                 qDebug() << "🎮 Pre-allocating CUDA GPU memory pools...";
                 try {
@@ -2230,16 +2230,16 @@ void Capture::initializePersonDetection()
                     cudaFramePool1.create(720, 1280, CV_8UC3);  // Common camera resolution
                     cudaFramePool2.create(480, 640, CV_8UC3);   // Smaller processing size
                     cudaFramePool3.create(360, 640, CV_8UC1);   // Grayscale processing
-                    
+
                     qDebug() << "✅ CUDA GPU memory pools pre-allocated successfully";
                     qDebug() << "  - CUDA Frame pool 1: 1280x720 (RGB)";
                     qDebug() << "  - CUDA Frame pool 2: 640x480 (RGB)";
                     qDebug() << "  - CUDA Frame pool 3: 640x360 (Grayscale)";
-                    
+
                     // Set CUDA device for optimal performance
                     cv::cuda::setDevice(0);
                     qDebug() << "CUDA device 0 set for optimal performance";
-                    
+
                 } catch (const cv::Exception& e) {
                     qWarning() << "⚠️ CUDA GPU memory pool allocation failed:" << e.what();
                 }
@@ -2252,28 +2252,28 @@ void Capture::initializePersonDetection()
         qDebug() << "⚠️ CUDA initialization failed, checking OpenCL";
         m_useCUDA = false;
     }
-    
+
     // Check if OpenCL is available for HOG detection (ALWAYS ENABLE FOR HOG)
     try {
         if (cv::ocl::useOpenCL()) {
             m_useGPU = true;
             qDebug() << "🎮 OpenCL GPU acceleration enabled for HOG detection";
             qDebug() << "OpenCL will be used for HOG detection (GPU acceleration)";
-            
+
             // Force OpenCL usage
             cv::ocl::setUseOpenCL(true);
-            
+
             // Test OpenCL with a simple operation
             cv::UMat testMat;
             testMat.create(100, 100, CV_8UC3);
             if (!testMat.empty()) {
                 qDebug() << "OpenCL memory allocation test passed";
-                
+
                 // Test OpenCL with a simple operation
                 cv::UMat testResult;
                 cv::cvtColor(testMat, testResult, cv::COLOR_BGR2GRAY);
                 qDebug() << "OpenCL color conversion test passed";
-                
+
                 // Pre-allocate GPU memory pools for better performance
                 qDebug() << "🎮 Pre-allocating GPU memory pools...";
                 try {
@@ -2282,7 +2282,7 @@ void Capture::initializePersonDetection()
                     gpuFramePool1.create(720, 1280, CV_8UC3);  // Common camera resolution
                     gpuFramePool2.create(480, 640, CV_8UC3);   // Smaller processing size
                     gpuFramePool3.create(360, 640, CV_8UC1);   // Grayscale processing
-                    
+
                     qDebug() << "✅ GPU memory pools pre-allocated successfully";
                     qDebug() << "  - Frame pool 1: 1280x720 (RGB)";
                     qDebug() << "  - Frame pool 2: 640x480 (RGB)";
@@ -2291,10 +2291,10 @@ void Capture::initializePersonDetection()
                     qWarning() << "⚠️ GPU memory pool allocation failed:" << e.what();
                 }
             }
-            
+
             // OpenCL device info not available in this OpenCV version
             qDebug() << "OpenCL GPU acceleration ready for HOG detection";
-            
+
         } else {
             qDebug() << "⚠️ OpenCL not available for HOG, will use CPU";
             m_useGPU = false;
@@ -2303,7 +2303,7 @@ void Capture::initializePersonDetection()
         qDebug() << "⚠️ OpenCL initialization failed for HOG, will use CPU";
         m_useGPU = false;
     }
-    
+
     // Check if OpenCL is available for AMD GPU acceleration (FALLBACK)
     if (!m_useCUDA) {
         try {
@@ -2320,12 +2320,12 @@ void Capture::initializePersonDetection()
             m_useGPU = false;
         }
     }
-    
+
     // Initialize async processing
     m_personDetectionWatcher = new QFutureWatcher<cv::Mat>(this);
-    connect(m_personDetectionWatcher, &QFutureWatcher<cv::Mat>::finished, 
+    connect(m_personDetectionWatcher, &QFutureWatcher<cv::Mat>::finished,
             this, &Capture::onPersonDetectionFinished);
-    
+
     // Set CUDA device for optimal performance
     if (m_useCUDA) {
         try {
@@ -2334,7 +2334,7 @@ void Capture::initializePersonDetection()
             if (deviceCount > 0) {
                 cv::cuda::setDevice(0);
                 qDebug() << "CUDA device 0 set for optimal performance";
-                
+
                 // Test CUDA memory allocation
                 cv::cuda::GpuMat testMat;
                 testMat.create(100, 100, CV_8UC3);
@@ -2354,7 +2354,7 @@ void Capture::initializePersonDetection()
             m_useCUDA = false;
         }
     }
-    
+
     qDebug() << "Enhanced Person Detection and Segmentation initialized successfully";
     qDebug() << "GPU Priority: CUDA (NVIDIA) > OpenCL (AMD) > CPU (fallback)";
 }
@@ -2366,14 +2366,14 @@ cv::Mat Capture::processFrameWithUnifiedDetection(const cv::Mat &frame)
         qWarning() << "Invalid frame received, returning empty result";
         return cv::Mat::zeros(480, 640, CV_8UC3);
     }
-    
+
     // Phase 2A: Use GPU-only processing if available
     if (isGPUOnlyProcessingAvailable()) {
         return processFrameWithGPUOnlyPipeline(frame);
     }
-    
+
     m_personDetectionTimer.start();
-    
+
     try {
         // Optimized processing for 30 FPS with GPU (matching peopledetect_v1.cpp)
         cv::Mat processFrame = frame;
@@ -2381,10 +2381,10 @@ cv::Mat Capture::processFrameWithUnifiedDetection(const cv::Mat &frame)
             double scale = 640.0 / frame.cols;
             cv::resize(frame, processFrame, cv::Size(), scale, scale, cv::INTER_LINEAR);
         }
-        
+
         // Detect people using enhanced detection
         std::vector<cv::Rect> found = detectPeople(processFrame);
-        
+
         // Scale results back if we resized the frame
         if (processFrame.cols != frame.cols) {
             double scale = (double)frame.cols / processFrame.cols;
@@ -2395,24 +2395,24 @@ cv::Mat Capture::processFrameWithUnifiedDetection(const cv::Mat &frame)
                 rect.height = cvRound(rect.height * scale);
             }
         }
-        
+
         // Get motion mask for filtering
         cv::Mat motionMask = getMotionMask(frame);
-        
+
         // Filter detections by motion
         std::vector<cv::Rect> motionFiltered = filterByMotion(found, motionMask);
-        
+
         // Store detections for UI display
         m_lastDetections = motionFiltered;
-        
+
         // Create segmented frame with motion-filtered detections
         // qDebug() << "🎯 Creating segmented frame with" << motionFiltered.size() << "detections, display mode:" << m_displayMode;
         cv::Mat segmentedFrame = createSegmentedFrame(frame, motionFiltered);
-        
+
         // Update timing info
         m_lastPersonDetectionTime = m_personDetectionTimer.elapsed() / 1000.0;
         m_personDetectionFPS = (m_lastPersonDetectionTime > 0) ? 1.0 / m_lastPersonDetectionTime : 0;
-        
+
         // Log people detection for visibility (reduced frequency for performance)
         if (motionFiltered.size() > 0) {
             // qDebug() << "🎯 PEOPLE DETECTED:" << motionFiltered.size() << "person(s) in frame (motion filtered from" << found.size() << "detections)";
@@ -2422,7 +2422,7 @@ cv::Mat Capture::processFrameWithUnifiedDetection(const cv::Mat &frame)
             // }
         } else {
             qDebug() << "⚠️ NO PEOPLE DETECTED in frame (total detections:" << found.size() << ")";
-            
+
             // For testing: create a fake detection in the center of the frame if no detections found
             if (m_displayMode == SegmentationMode && frame.cols > 0 && frame.rows > 0) {
                 qDebug() << "🎯 TESTING: Creating fake detection in center for segmentation testing";
@@ -2431,9 +2431,9 @@ cv::Mat Capture::processFrameWithUnifiedDetection(const cv::Mat &frame)
                 qDebug() << "🎯 TESTING: Added fake detection at" << fakeDetection.x << fakeDetection.y << fakeDetection.width << "x" << fakeDetection.height;
             }
         }
-        
+
         return segmentedFrame;
-        
+
     } catch (const cv::Exception& e) {
         qWarning() << "OpenCV exception in unified detection:" << e.what();
         return frame.clone();
@@ -2450,17 +2450,17 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
 {
     // Process only first 3 detections for better performance (matching peopledetect_v1.cpp)
     int maxDetections = std::min(3, (int)detections.size());
-    
+
     if (m_displayMode == SegmentationMode) {
         qDebug() << "🎯 SEGMENTATION MODE: Creating background + edge-based silhouettes";
-        
+
         // Create background for edge-based segmentation
         cv::Mat segmentedFrame;
-        
+
         // Use cached background template for performance
         static cv::Mat cachedBackgroundTemplate;
         static QString lastBackgroundPath;
-        
+
         if (m_useDynamicVideoBackground && m_videoPlaybackActive) {
             // Phase 1: Use pre-advanced video frame from timer instead of reading synchronously
             if (!m_dynamicVideoFrame.empty()) {
@@ -2499,12 +2499,12 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
             }
         } else if (m_useBackgroundTemplate && !m_selectedBackgroundTemplate.isEmpty()) {
             // Check if we need to reload the background template
-            bool needReload = cachedBackgroundTemplate.empty() || 
+            bool needReload = cachedBackgroundTemplate.empty() ||
                              lastBackgroundPath != m_selectedBackgroundTemplate;
-            
+
             if (needReload) {
                 qDebug() << "🎯 Loading background template:" << m_selectedBackgroundTemplate;
-                
+
                 // Check if this is image6 (white background special case)
                 if (m_selectedBackgroundTemplate.contains("bg6.png")) {
                     // Create white background instead of loading a file
@@ -2517,10 +2517,11 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
                     QString filePath = m_selectedBackgroundTemplate;
                     if (filePath.startsWith(":/background/")) {
                         // Convert Qt resource path to actual file path
-                        filePath = "C:/Users/User/Documents/qt-brbooth/templates/background/" + 
+
+                        filePath = "D:/Users/Documents/Files/Coolege/Thesis/qt-brbooth/templates/background/" +
                                   filePath.mid(filePath.lastIndexOf('/') + 1);
                     }
-                    
+
                     // Load background image directly using OpenCV for better performance
                     cv::Mat backgroundImage = cv::imread(filePath.toStdString());
                     if (!backgroundImage.empty()) {
@@ -2534,7 +2535,7 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
                     }
                 }
             }
-            
+
             // Use cached background template
             segmentedFrame = cachedBackgroundTemplate.clone();
         } else {
@@ -2542,61 +2543,61 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
             segmentedFrame = cv::Mat::zeros(frame.size(), frame.type());
             qDebug() << "🎯 Using black background (no template selected)";
         }
-        
+
         for (int i = 0; i < maxDetections; i++) {
             const auto& detection = detections[i];
             qDebug() << "🎯 Processing detection" << i << "at" << detection.x << detection.y << detection.width << "x" << detection.height;
-            
+
             // Get enhanced edge-based segmentation mask for this person
             cv::Mat personMask = enhancedSilhouetteSegment(frame, detection);
-            
+
             // Check if mask has any non-zero pixels
             int nonZeroPixels = cv::countNonZero(personMask);
             qDebug() << "🎯 Person mask has" << nonZeroPixels << "non-zero pixels";
-            
+
             // Apply mask to extract person from camera frame
             cv::Mat personRegion;
             frame.copyTo(personRegion, personMask);
-            
+
             // Scale the person region with person-only scaling for background template mode and dynamic video mode
             cv::Mat scaledPersonRegion, scaledPersonMask;
-            
+
             // Apply person-only scaling if we're using background template OR dynamic video background
             if ((m_useBackgroundTemplate && !m_selectedBackgroundTemplate.isEmpty()) || m_useDynamicVideoBackground) {
                 // Calculate scaled size for person based on background size and person scale factor
                 cv::Size backgroundSize = segmentedFrame.size();
                 cv::Size scaledPersonSize;
-                
+
                 if (qAbs(m_personScaleFactor - 1.0) > 0.01) {
                     // Apply person scale factor
                     int scaledWidth = static_cast<int>(backgroundSize.width * m_personScaleFactor + 0.5);
                     int scaledHeight = static_cast<int>(backgroundSize.height * m_personScaleFactor + 0.5);
                     scaledPersonSize = cv::Size(scaledWidth, scaledHeight);
-                    
-                    qDebug() << "🎯 Person scaled to" << scaledWidth << "x" << scaledHeight 
+
+                    qDebug() << "🎯 Person scaled to" << scaledWidth << "x" << scaledHeight
                              << "with factor" << m_personScaleFactor;
                 } else {
                     // No scaling needed, use background size
                     scaledPersonSize = backgroundSize;
                 }
-                
+
                 // Scale person to the calculated size
                 cv::resize(personRegion, scaledPersonRegion, scaledPersonSize, 0, 0, cv::INTER_LINEAR);
                 cv::resize(personMask, scaledPersonMask, scaledPersonSize, 0, 0, cv::INTER_LINEAR);
-                
+
                 // Calculate position to center the scaled person on the background
                 int xOffset = (backgroundSize.width - scaledPersonSize.width) / 2;
                 int yOffset = (backgroundSize.height - scaledPersonSize.height) / 2;
-                
+
                 // Ensure ROI is within background bounds
-                if (xOffset >= 0 && yOffset >= 0 && 
+                if (xOffset >= 0 && yOffset >= 0 &&
                     xOffset + scaledPersonSize.width <= backgroundSize.width &&
                     yOffset + scaledPersonSize.height <= backgroundSize.height) {
-                    
+
                     // Create ROI for compositing using proper cv::Rect constructor
                     cv::Rect backgroundRect(cv::Point(xOffset, yOffset), scaledPersonSize);
                     cv::Rect personRect(cv::Point(0, 0), scaledPersonSize);
-                    
+
                     // Composite scaled person onto background at calculated position
                     cv::Mat backgroundROI = segmentedFrame(backgroundRect);
                     scaledPersonRegion(personRect).copyTo(backgroundROI, scaledPersonMask(personRect));
@@ -2608,31 +2609,31 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
                 // For black background, scale to match frame size (original behavior)
                 cv::resize(personRegion, scaledPersonRegion, segmentedFrame.size(), 0, 0, cv::INTER_LINEAR);
                 cv::resize(personMask, scaledPersonMask, segmentedFrame.size(), 0, 0, cv::INTER_LINEAR);
-                
+
                 // Simple compositing: copy scaled person region directly to background where mask is non-zero
                 scaledPersonRegion.copyTo(segmentedFrame, scaledPersonMask);
             }
         }
-        
+
         qDebug() << "🎯 Segmentation complete, returning segmented frame";
         return segmentedFrame;
     } else if (m_displayMode == RectangleMode) {
         // Show original frame with detection rectangles
         cv::Mat displayFrame = frame.clone();
-        
+
         qDebug() << "Drawing" << maxDetections << "detection rectangles";
-        
+
         for (int i = 0; i < maxDetections; i++) {
             const auto& detection = detections[i];
-            
+
             // Draw detection rectangles with thick green lines
             cv::Rect adjustedRect = detection;
             adjustRect(adjustedRect);
             cv::rectangle(displayFrame, adjustedRect.tl(), adjustedRect.br(), cv::Scalar(0, 255, 0), 3);
-            
+
             qDebug() << "Rectangle" << i << "at" << adjustedRect.x << adjustedRect.y << adjustedRect.width << "x" << adjustedRect.height;
         }
-        
+
         return displayFrame;
     } else {
         // Normal mode - return original frame
@@ -2645,26 +2646,26 @@ cv::Mat Capture::createSegmentedFrameGPUOnly(const cv::Mat &frame, const std::ve
 {
     // Process only first 3 detections for better performance
     int maxDetections = std::min(3, (int)detections.size());
-    
+
     if (m_displayMode == SegmentationMode) {
         qDebug() << "🎮 Phase 2A: GPU-only segmentation frame creation";
-        
+
         // Create background for edge-based segmentation
         cv::Mat segmentedFrame;
-        
+
         // Use cached background template for performance
         static cv::Mat cachedBackgroundTemplate;
         static QString lastBackgroundPath;
-        
+
         if (m_useDynamicVideoBackground && m_videoPlaybackActive) {
             // Phase 2A: GPU-only video background processing
             if (!m_dynamicVideoFrame.empty()) {
                 // Upload video frame to GPU
                 m_gpuBackgroundFrame.upload(m_dynamicVideoFrame);
-                
+
                 // Resize on GPU
                 cv::cuda::resize(m_gpuBackgroundFrame, m_gpuSegmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
-                
+
                 // Download result
                 m_gpuSegmentedFrame.download(segmentedFrame);
                 qDebug() << "🎮 Phase 2A: GPU-only video background processing completed";
@@ -2677,14 +2678,14 @@ cv::Mat Capture::createSegmentedFrameGPUOnly(const cv::Mat &frame, const std::ve
                 cachedBackgroundTemplate = cv::imread(m_selectedBackgroundTemplate.toStdString());
                 lastBackgroundPath = m_selectedBackgroundTemplate;
             }
-            
+
             if (!cachedBackgroundTemplate.empty()) {
                 // Upload template to GPU
                 m_gpuBackgroundFrame.upload(cachedBackgroundTemplate);
-                
+
                 // Resize on GPU
                 cv::cuda::resize(m_gpuBackgroundFrame, m_gpuSegmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
-                
+
                 // Download result
                 m_gpuSegmentedFrame.download(segmentedFrame);
             } else {
@@ -2694,7 +2695,7 @@ cv::Mat Capture::createSegmentedFrameGPUOnly(const cv::Mat &frame, const std::ve
             // Black background
             segmentedFrame = cv::Mat::zeros(frame.size(), frame.type());
         }
-        
+
         // Process detections with GPU-only silhouette segmentation
         for (int i = 0; i < maxDetections; i++) {
             cv::Mat personSegment = enhancedSilhouetteSegmentGPUOnly(m_gpuVideoFrame, detections[i]);
@@ -2703,9 +2704,9 @@ cv::Mat Capture::createSegmentedFrameGPUOnly(const cv::Mat &frame, const std::ve
                 cv::addWeighted(segmentedFrame, 1.0, personSegment, 1.0, 0.0, segmentedFrame);
             }
         }
-        
+
         return segmentedFrame;
-        
+
     } else if (m_displayMode == RectangleMode) {
         // Rectangle mode - draw rectangles on original frame
         cv::Mat result = frame.clone();
@@ -2713,7 +2714,7 @@ cv::Mat Capture::createSegmentedFrameGPUOnly(const cv::Mat &frame, const std::ve
             cv::rectangle(result, detections[i], cv::Scalar(0, 255, 0), 2);
         }
         return result;
-        
+
     } else {
         // Normal mode - return original frame
         return frame.clone();
@@ -2726,17 +2727,17 @@ cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect 
     static int frameCounter = 0;
     static double lastProcessingTime = 0.0;
     frameCounter++;
-    
+
     // More aggressive skipping to prevent freezing
     bool shouldProcess = (frameCounter % 4 == 0); // Process every 4th frame by default
-    
+
     // If processing is taking too long, skip even more frames
     if (lastProcessingTime > 20.0) { // Reduced threshold from 30ms to 20ms
         shouldProcess = (frameCounter % 6 == 0); // Process every 6th frame
     } else if (lastProcessingTime < 10.0) { // Reduced threshold from 15ms to 10ms
         shouldProcess = (frameCounter % 2 == 0); // Process every 2nd frame at most
     }
-    
+
     if (!shouldProcess) {
         // Return cached result for skipped frames
         static cv::Mat lastMask;
@@ -2744,88 +2745,88 @@ cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect 
             return lastMask.clone();
         }
     }
-    
+
     // Start timing for adaptive processing
     auto startTime = std::chrono::high_resolution_clock::now();
-    
+
     // qDebug() << "🎯 Starting enhanced silhouette segmentation for detection at" << detection.x << detection.y << detection.width << "x" << detection.height;
-    
+
     // Person-focused silhouette segmentation with enhanced edge detection
     // Validate and clip detection rectangle to frame bounds
     qDebug() << "🎯 Frame size:" << frame.cols << "x" << frame.rows;
     qDebug() << "🎯 Original detection rectangle:" << detection.x << detection.y << detection.width << "x" << detection.height;
-    
+
     // Create a clipped version of the detection rectangle
     cv::Rect clippedDetection = detection;
-    
+
     // Clip to frame bounds
     clippedDetection.x = std::max(0, clippedDetection.x);
     clippedDetection.y = std::max(0, clippedDetection.y);
     clippedDetection.width = std::min(clippedDetection.width, frame.cols - clippedDetection.x);
     clippedDetection.height = std::min(clippedDetection.height, frame.rows - clippedDetection.y);
-    
+
     qDebug() << "🎯 Clipped detection rectangle:" << clippedDetection.x << clippedDetection.y << clippedDetection.width << "x" << clippedDetection.height;
-    
+
     // Check if the clipped rectangle is still valid
     if (clippedDetection.width <= 0 || clippedDetection.height <= 0) {
         qDebug() << "🎯 Clipped detection rectangle is invalid, returning empty mask";
         return cv::Mat::zeros(frame.size(), CV_8UC1);
     }
-    
+
     // Create expanded rectangle for full body coverage
     cv::Rect expandedRect = clippedDetection;
     expandedRect.x = std::max(0, expandedRect.x - 25); // Larger expansion for full body
     expandedRect.y = std::max(0, expandedRect.y - 25);
     expandedRect.width = std::min(frame.cols - expandedRect.x, expandedRect.width + 50); // Larger expansion
     expandedRect.height = std::min(frame.rows - expandedRect.y, expandedRect.height + 50);
-    
+
     qDebug() << "🎯 Expanded rectangle:" << expandedRect.x << expandedRect.y << expandedRect.width << "x" << expandedRect.height;
-    
+
     // Validate expanded rectangle
     if (expandedRect.width <= 0 || expandedRect.height <= 0) {
         qDebug() << "🎯 Invalid expanded rectangle, returning empty mask";
         return cv::Mat::zeros(frame.size(), CV_8UC1);
     }
-    
+
     // Create ROI for silhouette extraction
     cv::Mat roi = frame(expandedRect);
     cv::Mat roiMask = cv::Mat::zeros(roi.size(), CV_8UC1);
-    
+
     qDebug() << "🎯 ROI created, size:" << roi.cols << "x" << roi.rows;
-    
+
     // GPU-accelerated edge detection for full body segmentation
     cv::Mat edges;
-    
+
     if (m_useCUDA) {
         try {
             // Upload ROI to GPU
             cv::cuda::GpuMat gpu_roi;
             gpu_roi.upload(roi);
-            
+
             // Convert to grayscale on GPU
             cv::cuda::GpuMat gpu_gray;
             cv::cuda::cvtColor(gpu_roi, gpu_gray, cv::COLOR_BGR2GRAY);
-            
+
             // Apply Gaussian blur on GPU using CUDA filters
             cv::cuda::GpuMat gpu_blurred;
             cv::Ptr<cv::cuda::Filter> gaussian_filter = cv::cuda::createGaussianFilter(gpu_gray.type(), gpu_blurred.type(), cv::Size(5, 5), 0);
             gaussian_filter->apply(gpu_gray, gpu_blurred);
-            
+
             // CUDA-accelerated Canny edge detection
             cv::cuda::GpuMat gpu_edges;
             cv::Ptr<cv::cuda::CannyEdgeDetector> canny_detector = cv::cuda::createCannyEdgeDetector(15, 45);
             canny_detector->detect(gpu_blurred, gpu_edges);
-            
+
             // CUDA-accelerated morphological dilation
             cv::cuda::GpuMat gpu_dilated;
             cv::Ptr<cv::cuda::Filter> dilate_filter = cv::cuda::createMorphologyFilter(cv::MORPH_DILATE, gpu_edges.type(), cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5)));
             dilate_filter->apply(gpu_edges, gpu_dilated);
-            
+
             // Download result back to CPU
             gpu_dilated.download(edges);
-            
+
             qDebug() << "🎮 GPU-accelerated edge detection applied";
-            
+
         } catch (const cv::Exception& e) {
             qWarning() << "CUDA edge detection failed, falling back to CPU:" << e.what();
             // Fallback to CPU processing
@@ -2847,80 +2848,80 @@ cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect 
         cv::Mat kernel_edge = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
         cv::dilate(edges, edges, kernel_edge);
     }
-    
+
     // Find contours from edges
     std::vector<std::vector<cv::Point>> edgeContours;
     cv::findContours(edges, edgeContours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
-    
+
     qDebug() << "🎯 Found" << edgeContours.size() << "edge contours";
-    
+
     // Filter contours based on person-like characteristics
     std::vector<std::vector<cv::Point>> validContours;
     cv::Point detectionCenter(expandedRect.width/2, expandedRect.height/2);
-    
+
     // Only process edge contours if they exist
     if (!edgeContours.empty()) {
         qDebug() << "🎯 Filtering" << edgeContours.size() << "contours for person-like characteristics";
-    
+
     for (const auto& contour : edgeContours) {
         double area = cv::contourArea(contour);
-        
+
             // Optimized size constraints for full body detection
             if (area > 10 && area < expandedRect.width * expandedRect.height * 0.98) {
             // Get bounding rectangle
             cv::Rect contourRect = cv::boundingRect(contour);
-            
+
                 // Check if contour is centered in the detection area (very lenient)
             cv::Point contourCenter(contourRect.x + contourRect.width/2, contourRect.y + contourRect.height/2);
             double distance = cv::norm(contourCenter - detectionCenter);
                 double maxDistance = std::min(expandedRect.width, expandedRect.height) * 0.9; // Very lenient distance
-            
+
                             // Optimized aspect ratio check for full body
             double aspectRatio = (double)contourRect.height / contourRect.width;
-            
+
             if (distance < maxDistance && aspectRatio > 0.2) { // Allow very wide aspect ratios for full body
                 validContours.push_back(contour);
             }
         }
     }
-    
+
         qDebug() << "🎯 After filtering:" << validContours.size() << "valid contours";
     } else {
         qDebug() << "🎯 No edge contours found, skipping to background subtraction";
     }
-    
+
     // If no valid edge contours found, use background subtraction approach
     if (validContours.empty()) {
         qDebug() << "🎯 No valid edge contours, trying background subtraction";
         // Use background subtraction for motion-based segmentation
         cv::Mat fgMask;
         m_bgSubtractor->apply(roi, fgMask);
-        
+
         // GPU-accelerated morphological operations for full body
         if (m_useCUDA) {
             try {
                 // Upload mask to GPU
                 cv::cuda::GpuMat gpu_fgMask;
                 gpu_fgMask.upload(fgMask);
-                
+
                 // Create morphological kernels
                 cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(7, 7));
                 cv::Mat kernel_dilate = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
-                
+
                 // GPU-accelerated morphological operations
                 cv::Ptr<cv::cuda::Filter> open_filter = cv::cuda::createMorphologyFilter(cv::MORPH_OPEN, gpu_fgMask.type(), kernel);
                 cv::Ptr<cv::cuda::Filter> close_filter = cv::cuda::createMorphologyFilter(cv::MORPH_CLOSE, gpu_fgMask.type(), kernel);
                 cv::Ptr<cv::cuda::Filter> dilate_filter = cv::cuda::createMorphologyFilter(cv::MORPH_DILATE, gpu_fgMask.type(), kernel_dilate);
-                
+
                 open_filter->apply(gpu_fgMask, gpu_fgMask);
                 close_filter->apply(gpu_fgMask, gpu_fgMask);
                 dilate_filter->apply(gpu_fgMask, gpu_fgMask);
-                
+
                 // Download result back to CPU
                 gpu_fgMask.download(fgMask);
-                
+
                 qDebug() << "🎮 GPU-accelerated morphological operations applied";
-                
+
             } catch (const cv::Exception& e) {
                 qWarning() << "CUDA morphological operations failed, falling back to CPU:" << e.what();
                 // Fallback to CPU processing
@@ -2938,43 +2939,43 @@ cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect 
             cv::Mat kernel_dilate = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
             cv::dilate(fgMask, fgMask, kernel_dilate);
         }
-        
+
         // Find contours from background subtraction
         cv::findContours(fgMask, validContours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
         qDebug() << "🎯 Background subtraction found" << validContours.size() << "contours";
     }
-    
+
     // If still no valid contours, try color-based segmentation
     if (validContours.empty()) {
         qDebug() << "🎯 No contours from background subtraction, trying color-based segmentation";
-        
+
         // GPU-accelerated color space conversion and thresholding
         cv::Mat combinedMask;
-        
+
         if (m_useCUDA) {
             try {
                 // Upload ROI to GPU
                 cv::cuda::GpuMat gpu_roi;
                 gpu_roi.upload(roi);
-                
+
                 // Convert to HSV on GPU
                 cv::cuda::GpuMat gpu_hsv;
                 cv::cuda::cvtColor(gpu_roi, gpu_hsv, cv::COLOR_BGR2HSV);
-                
+
                 // Create masks for skin-like colors and non-background colors on GPU
                 cv::cuda::GpuMat gpu_skinMask, gpu_colorMask;
                 cv::cuda::inRange(gpu_hsv, cv::Scalar(0, 20, 70), cv::Scalar(20, 255, 255), gpu_skinMask);
                 cv::cuda::inRange(gpu_hsv, cv::Scalar(0, 30, 50), cv::Scalar(180, 255, 255), gpu_colorMask);
-                
+
                 // Combine masks on GPU using bitwise_or
                 cv::cuda::GpuMat gpu_combinedMask;
                 cv::cuda::bitwise_or(gpu_skinMask, gpu_colorMask, gpu_combinedMask);
-                
+
                 // Download result back to CPU
                 gpu_combinedMask.download(combinedMask);
-                
+
                 qDebug() << "🎮 GPU-accelerated color segmentation applied";
-                
+
             } catch (const cv::Exception& e) {
                 qWarning() << "CUDA color segmentation failed, falling back to CPU:" << e.what();
                 // Fallback to CPU processing
@@ -2996,29 +2997,29 @@ cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect 
             cv::inRange(hsv, cv::Scalar(0, 30, 50), cv::Scalar(180, 255, 255), colorMask);
             cv::bitwise_or(skinMask, colorMask, combinedMask);
         }
-        
+
         // GPU-accelerated morphological operations for color segmentation
         if (m_useCUDA) {
             try {
                 // Upload mask to GPU
                 cv::cuda::GpuMat gpu_combinedMask;
                 gpu_combinedMask.upload(combinedMask);
-                
+
                 // Create morphological kernel
                 cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
-                
+
                 // GPU-accelerated morphological operations
                 cv::Ptr<cv::cuda::Filter> open_filter = cv::cuda::createMorphologyFilter(cv::MORPH_OPEN, gpu_combinedMask.type(), kernel);
                 cv::Ptr<cv::cuda::Filter> close_filter = cv::cuda::createMorphologyFilter(cv::MORPH_CLOSE, gpu_combinedMask.type(), kernel);
-                
+
                 open_filter->apply(gpu_combinedMask, gpu_combinedMask);
                 close_filter->apply(gpu_combinedMask, gpu_combinedMask);
-                
+
                 // Download result back to CPU
                 gpu_combinedMask.download(combinedMask);
-                
+
                 qDebug() << "🎮 GPU-accelerated color morphological operations applied";
-                
+
             } catch (const cv::Exception& e) {
                 qWarning() << "CUDA color morphological operations failed, falling back to CPU:" << e.what();
                 // Fallback to CPU processing
@@ -3032,34 +3033,34 @@ cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect 
             cv::morphologyEx(combinedMask, combinedMask, cv::MORPH_OPEN, kernel);
             cv::morphologyEx(combinedMask, combinedMask, cv::MORPH_CLOSE, kernel);
         }
-        
+
         // Find contours from color segmentation
         cv::findContours(combinedMask, validContours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
         qDebug() << "🎯 Color-based segmentation found" << validContours.size() << "contours";
     }
-    
+
     // Create mask from valid contours
     if (!validContours.empty()) {
         qDebug() << "🎯 Creating mask from" << validContours.size() << "valid contours";
         // Sort contours by area
-        std::sort(validContours.begin(), validContours.end(), 
+        std::sort(validContours.begin(), validContours.end(),
                  [](const std::vector<cv::Point>& a, const std::vector<cv::Point>& b) {
                      return cv::contourArea(a) > cv::contourArea(b);
                  });
-        
+
         // Enhanced contour usage for full body coverage
         int maxContours = std::min(4, (int)validContours.size()); // Use up to 4 largest contours for full body
         for (int i = 0; i < maxContours; i++) {
             cv::drawContours(roiMask, validContours, i, cv::Scalar(255), -1);
         }
-        
+
         // Fill holes in the silhouette
         cv::Mat filledMask = roiMask.clone();
         cv::floodFill(filledMask, cv::Point(0, 0), cv::Scalar(128));
         cv::floodFill(filledMask, cv::Point(filledMask.cols-1, 0), cv::Scalar(128));
         cv::floodFill(filledMask, cv::Point(0, filledMask.rows-1), cv::Scalar(128));
         cv::floodFill(filledMask, cv::Point(filledMask.cols-1, filledMask.rows-1), cv::Scalar(128));
-        
+
         // Create final mask
         for (int y = 0; y < filledMask.rows; y++) {
             for (int x = 0; x < filledMask.cols; x++) {
@@ -3070,30 +3071,30 @@ cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect 
                 }
             }
         }
-        
+
         // GPU-accelerated final morphological cleanup for full body
         if (m_useCUDA) {
             try {
                 // Upload mask to GPU
                 cv::cuda::GpuMat gpu_roiMask;
                 gpu_roiMask.upload(roiMask);
-                
+
                 // Create morphological kernels
                 cv::Mat kernel_clean = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(7, 7));
                 cv::Mat kernel_dilate = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
-                
+
                 // GPU-accelerated morphological operations
                 cv::Ptr<cv::cuda::Filter> close_filter = cv::cuda::createMorphologyFilter(cv::MORPH_CLOSE, gpu_roiMask.type(), kernel_clean);
                 cv::Ptr<cv::cuda::Filter> dilate_filter = cv::cuda::createMorphologyFilter(cv::MORPH_DILATE, gpu_roiMask.type(), kernel_dilate);
-                
+
                 close_filter->apply(gpu_roiMask, gpu_roiMask);
                 dilate_filter->apply(gpu_roiMask, gpu_roiMask);
-                
+
                 // Download result back to CPU
                 gpu_roiMask.download(roiMask);
-                
+
                 qDebug() << "🎮 GPU-accelerated final morphological cleanup applied";
-                
+
             } catch (const cv::Exception& e) {
                 qWarning() << "CUDA final morphological cleanup failed, falling back to CPU:" << e.what();
                 // Fallback to CPU processing
@@ -3112,23 +3113,23 @@ cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect 
     } else {
         qDebug() << "🎯 No valid contours found, creating empty mask";
     }
-    
+
     // Create final mask for the entire frame
     cv::Mat finalMask = cv::Mat::zeros(frame.size(), CV_8UC1);
     roiMask.copyTo(finalMask(expandedRect));
-    
+
     int finalNonZeroPixels = cv::countNonZero(finalMask);
     qDebug() << "🎯 Enhanced silhouette segmentation complete, final mask has" << finalNonZeroPixels << "non-zero pixels";
-    
+
     // Cache the result for frame skipping
     static cv::Mat lastMask;
     lastMask = finalMask.clone();
-    
+
     // End timing and update adaptive processing
     auto endTime = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::microseconds>(endTime - startTime);
     lastProcessingTime = duration.count() / 1000.0; // Convert to milliseconds
-    
+
     return finalMask;
 }
 
@@ -3138,149 +3139,149 @@ cv::Mat Capture::enhancedSilhouetteSegmentGPUOnly(const cv::cuda::GpuMat &gpuFra
     if (gpuFrame.empty()) {
         return cv::Mat();
     }
-    
+
     qDebug() << "🎮 Phase 2A: GPU-only silhouette segmentation";
-    
+
     // Validate and clip detection rectangle to frame bounds
     cv::Rect clippedDetection = detection;
     clippedDetection.x = std::max(0, clippedDetection.x);
     clippedDetection.y = std::max(0, clippedDetection.y);
     clippedDetection.width = std::min(clippedDetection.width, gpuFrame.cols - clippedDetection.x);
     clippedDetection.height = std::min(clippedDetection.height, gpuFrame.rows - clippedDetection.y);
-    
+
     if (clippedDetection.width <= 0 || clippedDetection.height <= 0) {
         return cv::Mat::zeros(gpuFrame.size(), CV_8UC1);
     }
-    
+
     // Create expanded rectangle for full body coverage
     cv::Rect expandedRect = clippedDetection;
     expandedRect.x = std::max(0, expandedRect.x - 25);
     expandedRect.y = std::max(0, expandedRect.y - 25);
     expandedRect.width = std::min(gpuFrame.cols - expandedRect.x, expandedRect.width + 50);
     expandedRect.height = std::min(gpuFrame.rows - expandedRect.y, expandedRect.height + 50);
-    
+
     if (expandedRect.width <= 0 || expandedRect.height <= 0) {
         return cv::Mat::zeros(gpuFrame.size(), CV_8UC1);
     }
-    
+
     // 🚀 GPU MEMORY POOL OPTIMIZED PIPELINE - REUSABLE BUFFERS + ASYNC STREAMS
-    
+
     // Check if GPU Memory Pool is available
     if (!m_gpuMemoryPoolInitialized || !m_gpuMemoryPool.isInitialized()) {
         qWarning() << "🚀 GPU Memory Pool not available, falling back to standard GPU processing";
         // Fallback to standard GPU processing (existing code)
     cv::cuda::GpuMat gpuRoi = gpuFrame(expandedRect);
         cv::cuda::GpuMat gpuRoiMask(gpuRoi.size(), CV_8UC1, cv::Scalar(0));
-    
+
         // Use standard GPU processing without memory pool
     cv::cuda::GpuMat gpuGray, gpuEdges;
     cv::cuda::cvtColor(gpuRoi, gpuGray, cv::COLOR_BGR2GRAY);
-        
+
         cv::Ptr<cv::cuda::CannyEdgeDetector> canny_detector = cv::cuda::createCannyEdgeDetector(50, 150);
         canny_detector->detect(gpuGray, gpuEdges);
-        
+
         cv::Mat kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3));
         cv::Ptr<cv::cuda::Filter> close_filter = cv::cuda::createMorphologyFilter(cv::MORPH_CLOSE, gpuEdges.type(), kernel);
         cv::Ptr<cv::cuda::Filter> open_filter = cv::cuda::createMorphologyFilter(cv::MORPH_OPEN, gpuEdges.type(), kernel);
         cv::Ptr<cv::cuda::Filter> dilate_filter = cv::cuda::createMorphologyFilter(cv::MORPH_DILATE, gpuEdges.type(), kernel);
-        
+
         close_filter->apply(gpuEdges, gpuRoiMask);
         open_filter->apply(gpuRoiMask, gpuRoiMask);
         dilate_filter->apply(gpuRoiMask, gpuRoiMask);
-        
+
         cv::cuda::GpuMat gpuConnectedMask;
         cv::cuda::threshold(gpuRoiMask, gpuConnectedMask, 127, 255, cv::THRESH_BINARY);
         close_filter->apply(gpuConnectedMask, gpuConnectedMask);
-        
+
         cv::Mat kernel_final = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
         cv::Ptr<cv::cuda::Filter> final_filter = cv::cuda::createMorphologyFilter(cv::MORPH_CLOSE, gpuConnectedMask.type(), kernel_final);
         final_filter->apply(gpuConnectedMask, gpuConnectedMask);
-        
+
         cv::Mat finalMask;
         gpuConnectedMask.download(finalMask);
-        
+
         cv::cuda::GpuMat gpuFullMask(gpuFrame.size(), CV_8UC1, cv::Scalar(0));
     cv::cuda::GpuMat gpuFinalMask;
     gpuFinalMask.upload(finalMask);
         gpuFinalMask.copyTo(gpuFullMask(expandedRect));
-        
+
         cv::Mat fullMask;
         gpuFullMask.download(fullMask);
-        
+
         qDebug() << "🚀 Phase 2A: Standard GPU processing completed (memory pool not available)";
         return fullMask;
     }
-    
+
     // Extract ROI on GPU using memory pool
     cv::cuda::GpuMat gpuRoi = gpuFrame(expandedRect);
     cv::cuda::GpuMat& gpuRoiMask = m_gpuMemoryPool.getNextSegmentationBuffer();
     gpuRoiMask.create(gpuRoi.size(), CV_8UC1);
     gpuRoiMask.setTo(cv::Scalar(0));
-    
+
     // Get CUDA streams for parallel processing
     cv::cuda::Stream& detectionStream = m_gpuMemoryPool.getDetectionStream();
     cv::cuda::Stream& segmentationStream = m_gpuMemoryPool.getSegmentationStream();
-    
+
     // Step 1: GPU Color Conversion (async)
     cv::cuda::GpuMat& gpuGray = m_gpuMemoryPool.getNextTempBuffer();
     cv::cuda::GpuMat& gpuEdges = m_gpuMemoryPool.getNextDetectionBuffer();
     cv::cuda::cvtColor(gpuRoi, gpuGray, cv::COLOR_BGR2GRAY, 0, detectionStream);
-    
+
     // Step 2: GPU Canny Edge Detection (async) - using pre-created detector
     cv::Ptr<cv::cuda::CannyEdgeDetector>& canny_detector = m_gpuMemoryPool.getCannyDetector();
     canny_detector->detect(gpuGray, gpuEdges, detectionStream);
-    
+
     // Step 3: GPU Morphological Operations (async) - using pre-created filters
     cv::Ptr<cv::cuda::Filter>& close_filter = m_gpuMemoryPool.getMorphCloseFilter();
     cv::Ptr<cv::cuda::Filter>& open_filter = m_gpuMemoryPool.getMorphOpenFilter();
     cv::Ptr<cv::cuda::Filter>& dilate_filter = m_gpuMemoryPool.getMorphDilateFilter();
-    
+
     // Apply GPU morphological pipeline (async)
     close_filter->apply(gpuEdges, gpuRoiMask, detectionStream);      // Close gaps
     open_filter->apply(gpuRoiMask, gpuRoiMask, detectionStream);     // Remove noise
     dilate_filter->apply(gpuRoiMask, gpuRoiMask, detectionStream);   // Expand regions
-    
+
     // Step 4: GPU-accelerated area-based filtering (async)
     cv::cuda::GpuMat& gpuConnectedMask = m_gpuMemoryPool.getNextSegmentationBuffer();
-    
+
     // Create a mask for large connected regions (person-like areas) - async
     cv::cuda::threshold(gpuRoiMask, gpuConnectedMask, 127, 255, cv::THRESH_BINARY, segmentationStream);
-    
+
     // Apply additional GPU morphological cleanup (async)
     close_filter->apply(gpuConnectedMask, gpuConnectedMask, segmentationStream);
-    
+
     // Step 5: Final GPU morphological cleanup (async)
     cv::Mat kernel_final = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
     cv::Ptr<cv::cuda::Filter> final_filter = cv::cuda::createMorphologyFilter(cv::MORPH_CLOSE, gpuConnectedMask.type(), kernel_final);
     final_filter->apply(gpuConnectedMask, gpuConnectedMask, segmentationStream);
-    
+
     // 🚀 SYNCHRONIZE STREAMS BEFORE DOWNLOAD
     detectionStream.waitForCompletion();
     segmentationStream.waitForCompletion();
-    
+
     // Step 6: Single download at the end (minimize GPU-CPU transfers)
     cv::Mat finalMask;
     gpuConnectedMask.download(finalMask);
-    
+
     // 🚀 GPU-OPTIMIZED: Create full-size mask directly on GPU
     cv::cuda::GpuMat& gpuFullMask = m_gpuMemoryPool.getNextFrameBuffer();
     gpuFullMask.create(gpuFrame.size(), CV_8UC1);
     gpuFullMask.setTo(cv::Scalar(0));
-    
+
     // Copy the processed ROI back to the full-size mask on GPU (async)
     cv::cuda::GpuMat gpuFinalMask;
     gpuFinalMask.upload(finalMask, m_gpuMemoryPool.getCompositionStream());
     gpuFinalMask.copyTo(gpuFullMask(expandedRect), m_gpuMemoryPool.getCompositionStream());
-    
+
     // Synchronize composition stream and download
     m_gpuMemoryPool.getCompositionStream().waitForCompletion();
-    
+
     // Single download at the very end
     cv::Mat fullMask;
     gpuFullMask.download(fullMask);
-    
+
     qDebug() << "🚀 Phase 2A: GPU MEMORY POOL + ASYNC STREAMS silhouette segmentation completed";
-    
+
     return fullMask;
 }
 
@@ -3291,17 +3292,17 @@ void Capture::validateGPUResults(const cv::Mat &gpuResult, const cv::Mat &cpuRes
         qWarning() << "🎮 Phase 2A: GPU/CPU result validation failed - empty results";
         return;
     }
-    
+
     if (gpuResult.size() != cpuResult.size() || gpuResult.type() != cpuResult.type()) {
         qWarning() << "🎮 Phase 2A: GPU/CPU result validation failed - size/type mismatch";
         return;
     }
-    
+
     // Compare results (allow small differences due to floating-point precision)
     cv::Mat diff;
     cv::absdiff(gpuResult, cpuResult, diff);
     double maxDiff = cv::norm(diff, cv::NORM_INF);
-    
+
     if (maxDiff > 5.0) { // Allow small differences
         qWarning() << "🎮 Phase 2A: GPU/CPU result validation failed - max difference:" << maxDiff;
     } else {
@@ -3325,20 +3326,20 @@ void Capture::adjustRect(cv::Rect &r) const
 std::vector<cv::Rect> Capture::detectPeople(const cv::Mat &frame)
 {
     std::vector<cv::Rect> found;
-    
 
-    
+
+
     if (m_useCUDA) {
         // CUDA GPU-accelerated processing for NVIDIA GPU (PRIORITY)
         m_gpuUtilized = false;
         m_cudaUtilized = true;
-        
+
         try {
             // Validate frame before CUDA operations
             if (frame.empty() || frame.cols <= 0 || frame.rows <= 0) {
                 throw cv::Exception(0, "Invalid frame for CUDA processing", "", "", 0);
             }
-            
+
             // Validate input frame dimensions before GPU operations
             if (frame.rows <= 0 || frame.cols <= 0) {
                 qWarning() << "🎮 Invalid frame dimensions for CUDA processing:" << frame.rows << "x" << frame.cols;
@@ -3346,11 +3347,11 @@ std::vector<cv::Rect> Capture::detectPeople(const cv::Mat &frame)
                 m_cudaUtilized = false;
                 return found;
             }
-            
+
             // Upload to CUDA GPU
             cv::cuda::GpuMat gpu_frame;
             gpu_frame.upload(frame);
-            
+
             // Validate uploaded GPU frame
             if (gpu_frame.empty() || gpu_frame.rows <= 0 || gpu_frame.cols <= 0) {
                 qWarning() << "🎮 Invalid GPU frame dimensions after upload:" << gpu_frame.rows << "x" << gpu_frame.cols;
@@ -3358,11 +3359,11 @@ std::vector<cv::Rect> Capture::detectPeople(const cv::Mat &frame)
                 m_cudaUtilized = false;
                 return found;
             }
-            
+
             // Convert to grayscale on GPU
             cv::cuda::GpuMat gpu_gray;
             cv::cuda::cvtColor(gpu_frame, gpu_gray, cv::COLOR_BGR2GRAY);
-            
+
             // Validate grayscale GPU frame
             if (gpu_gray.empty() || gpu_gray.rows <= 0 || gpu_gray.cols <= 0) {
                 qWarning() << "🎮 Invalid grayscale GPU frame dimensions:" << gpu_gray.rows << "x" << gpu_gray.cols;
@@ -3370,15 +3371,15 @@ std::vector<cv::Rect> Capture::detectPeople(const cv::Mat &frame)
                 m_cudaUtilized = false;
                 return found;
             }
-            
+
             // Calculate resize dimensions for optimal detection accuracy (matching peopledetect_v1.cpp)
             int new_width = cvRound(gpu_gray.cols * 0.5); // 0.5x scale for better performance
             int new_height = cvRound(gpu_gray.rows * 0.5); // 0.5x scale for better performance
-            
+
             // Ensure minimum dimensions for HOG detection (HOG needs at least 64x128)
             new_width = std::max(new_width, 128); // Minimum for HOG detection
             new_height = std::max(new_height, 256); // Minimum for HOG detection
-            
+
             // Validate resize dimensions
             if (new_width <= 0 || new_height <= 0) {
                 qWarning() << "🎮 Invalid resize dimensions:" << new_width << "x" << new_height;
@@ -3386,13 +3387,13 @@ std::vector<cv::Rect> Capture::detectPeople(const cv::Mat &frame)
                 m_cudaUtilized = false;
                 return found;
             }
-            
+
             qDebug() << "🎮 Resizing GPU matrix to:" << new_width << "x" << new_height;
-            
+
             // Resize for optimal GPU performance (ensure minimum size for HOG)
             cv::cuda::GpuMat gpu_resized;
             cv::cuda::resize(gpu_gray, gpu_resized, cv::Size(new_width, new_height), 0, 0, cv::INTER_LINEAR);
-            
+
             // Validate resized GPU matrix
             if (gpu_resized.empty() || gpu_resized.rows <= 0 || gpu_resized.cols <= 0) {
                 qWarning() << "🎮 Invalid resized GPU matrix dimensions:" << gpu_resized.rows << "x" << gpu_resized.cols;
@@ -3400,17 +3401,17 @@ std::vector<cv::Rect> Capture::detectPeople(const cv::Mat &frame)
                 m_cudaUtilized = false;
                 return found;
             }
-            
+
             qDebug() << "🎮 Resized GPU matrix validated - size:" << gpu_resized.rows << "x" << gpu_resized.cols;
-            
+
             // CUDA HOG detection
             if (m_cudaHogDetector && !m_cudaHogDetector.empty() && m_useCUDA) {
                 try {
                     std::vector<cv::Rect> found_cuda;
-                    
+
                     // Simple CUDA HOG detection (working state)
                     m_cudaHogDetector->detectMultiScale(gpu_resized, found_cuda);
-                    
+
                     if (!found_cuda.empty()) {
                         found = found_cuda;
                         m_cudaUtilized = true;
@@ -3419,16 +3420,16 @@ std::vector<cv::Rect> Capture::detectPeople(const cv::Mat &frame)
                         qDebug() << "🎮 CUDA HOG completed but no people detected";
                         found.clear();
                     }
-                    
+
                 } catch (const cv::Exception& e) {
                     qDebug() << "🎮 CUDA HOG error:" << e.what() << "falling back to CPU";
                     m_cudaUtilized = false;
-                    
+
                     // Fallback to CPU HOG detection (matching peopledetect_v1.cpp)
                     cv::Mat resized;
                     cv::resize(frame, resized, cv::Size(), 0.5, 0.5, cv::INTER_LINEAR);
                     m_hogDetector.detectMultiScale(resized, found, 0.0, cv::Size(8,8), cv::Size(), 1.05, 2, false);
-                    
+
                     // Scale results back up to original size
                     double scale_factor = 1.0 / 0.5; // 1/0.5 = 2.0
                     for (auto& rect : found) {
@@ -3450,7 +3451,7 @@ std::vector<cv::Rect> Capture::detectPeople(const cv::Mat &frame)
                 found.clear();
                 m_cudaUtilized = false;
             }
-            
+
             // Scale results back up to original size (CUDA HOG works on resized image)
             double scale_factor = 1.0 / 0.5; // 1/0.5 = 2.0 (matching peopledetect_v1.cpp)
             for (auto& rect : found) {
@@ -3459,18 +3460,18 @@ std::vector<cv::Rect> Capture::detectPeople(const cv::Mat &frame)
                 rect.width = cvRound(rect.width * scale_factor);
                 rect.height = cvRound(rect.height * scale_factor);
             }
-            
+
             qDebug() << "🎮 CUDA GPU: Color conversion + resize + HOG detection (GPU acceleration with CPU coordination)";
-            
+
         } catch (const cv::Exception& e) {
             qWarning() << "🎮 CUDA processing error:" << e.what() << "falling back to CPU";
             m_cudaUtilized = false; // Switch to CPU
-            
+
             // Fallback to CPU HOG detection (matching peopledetect_v1.cpp)
             cv::Mat resized;
             cv::resize(frame, resized, cv::Size(), 0.5, 0.5, cv::INTER_LINEAR);
             m_hogDetector.detectMultiScale(resized, found, 0.0, cv::Size(8,8), cv::Size(), 1.05, 2, false);
-            
+
             // Scale results back up to original size
             double scale_factor = 1.0 / 0.5; // 1/0.5 = 2.0
             for (auto& rect : found) {
@@ -3482,12 +3483,12 @@ std::vector<cv::Rect> Capture::detectPeople(const cv::Mat &frame)
         } catch (...) {
             qWarning() << "🎮 Unknown CUDA error, falling back to CPU";
             m_cudaUtilized = false; // Switch to CPU
-            
+
             // Fallback to CPU HOG detection (matching peopledetect_v1.cpp)
             cv::Mat resized;
             cv::resize(frame, resized, cv::Size(), 0.5, 0.5, cv::INTER_LINEAR);
             m_hogDetector.detectMultiScale(resized, found, 0.0, cv::Size(8,8), cv::Size(), 1.05, 2, false);
-            
+
             // Scale results back up to original size
             double scale_factor = 1.0 / 0.5; // 1/0.5 = 2.0
             for (auto& rect : found) {
@@ -3497,37 +3498,37 @@ std::vector<cv::Rect> Capture::detectPeople(const cv::Mat &frame)
                 rect.height = cvRound(rect.height * scale_factor);
             }
         }
-        
+
     } else if (m_useGPU) {
         // OpenCL GPU-accelerated processing for AMD GPU (FALLBACK)
         m_gpuUtilized = true;
         m_cudaUtilized = false;
-        
+
         try {
             // Upload to GPU using UMat
             cv::UMat gpu_frame;
             frame.copyTo(gpu_frame);
-            
+
             // Convert to grayscale on GPU
             cv::UMat gpu_gray;
             cv::cvtColor(gpu_frame, gpu_gray, cv::COLOR_BGR2GRAY);
-            
+
             // Resize for optimal GPU performance (matching peopledetect_v1.cpp)
             cv::UMat gpu_resized;
             cv::resize(gpu_gray, gpu_resized, cv::Size(), 0.5, 0.5, cv::INTER_LINEAR);
-            
+
             // OpenCL-accelerated HOG detection (much faster than CPU)
             // Use UMat for GPU-accelerated detection
             std::vector<cv::Rect> found_umat;
             std::vector<double> weights;
-            
+
             // Run HOG detection on GPU using UMat
             // Optimized parameters for better performance and accuracy
             m_hogDetector.detectMultiScale(gpu_resized, found_umat, weights, 0.0, cv::Size(8,8), cv::Size(), 1.05, 2, false);
-            
+
             // Copy results back to CPU
             found = found_umat;
-            
+
             // Scale results back up to original size
             for (auto& rect : found) {
                 rect.x *= 2; // 1/0.5 = 2
@@ -3535,18 +3536,18 @@ std::vector<cv::Rect> Capture::detectPeople(const cv::Mat &frame)
                 rect.width *= 2;
                 rect.height *= 2;
             }
-            
+
             qDebug() << "🎮 OpenCL GPU: Color conversion + resize + HOG detection (FULL GPU ACCELERATION)";
-            
+
         } catch (const cv::Exception& e) {
             qWarning() << "OpenCL processing failed:" << e.what() << "Falling back to CPU";
             m_gpuUtilized = false;
-            
+
             // Fallback to CPU processing (matching peopledetect_v1.cpp)
             cv::Mat resized;
             cv::resize(frame, resized, cv::Size(), 0.5, 0.5, cv::INTER_LINEAR);
             m_hogDetector.detectMultiScale(resized, found, 0.0, cv::Size(8,8), cv::Size(), 1.05, 2, false);
-            
+
             // Scale results back up to original size
             double scale_factor = 1.0 / 0.5; // 1/0.5 = 2.0
             for (auto& rect : found) {
@@ -3556,18 +3557,18 @@ std::vector<cv::Rect> Capture::detectPeople(const cv::Mat &frame)
                 rect.height = cvRound(rect.height * scale_factor);
             }
         }
-        
+
     } else {
             // CPU fallback (matching peopledetect_v1.cpp)
     m_gpuUtilized = false;
     m_cudaUtilized = false;
-    
+
     cv::Mat resized;
     cv::resize(frame, resized, cv::Size(), 0.5, 0.5, cv::INTER_LINEAR);
-        
+
         // Run detection with balanced speed/accuracy for 30 FPS
         m_hogDetector.detectMultiScale(resized, found, 0.0, cv::Size(8,8), cv::Size(), 1.05, 2, false);
-        
+
         // Scale results back up to original size
         double scale_factor = 1.0 / 0.5; // 1/0.5 = 2.0
         for (auto& rect : found) {
@@ -3576,10 +3577,10 @@ std::vector<cv::Rect> Capture::detectPeople(const cv::Mat &frame)
             rect.width = cvRound(rect.width * scale_factor);
             rect.height = cvRound(rect.height * scale_factor);
         }
-        
+
         qDebug() << "💻 CPU processing utilized (last resort)";
     }
-    
+
     return found;
 }
 
@@ -3591,7 +3592,7 @@ void Capture::onPersonDetectionFinished()
             if (!result.empty()) {
                 QMutexLocker locker(&m_personDetectionMutex);
                 m_lastSegmentedFrame = result.clone();
-                
+
                 // Update GPU utilization status
                 if (m_useCUDA) {
                     m_cudaUtilized = true;
@@ -3600,7 +3601,7 @@ void Capture::onPersonDetectionFinished()
                     m_gpuUtilized = true;
                     m_cudaUtilized = false;
                 }
-                
+
                 qDebug() << "✅ Person detection processing completed - segmented frame updated, size:" << result.cols << "x" << result.rows;
             } else {
                 qDebug() << "⚠️ Person detection processing completed but result is empty";
@@ -3657,7 +3658,7 @@ void Capture::togglePersonDetection()
                 setSegmentationMode(0); // NormalMode
                 break;
         }
-        
+
         qDebug() << "Person detection toggled to mode:" << m_displayMode;
     } else {
         qDebug() << "🎯 Person detection toggle ignored - segmentation not enabled in capture interface";
@@ -3669,7 +3670,7 @@ void Capture::updatePersonDetectionButton()
     if (personDetectionButton) {
         QString buttonText;
         QString buttonStyle;
-        
+
         if (m_segmentationEnabledInCapture) {
             // Show current mode when segmentation is enabled
             switch (m_displayMode) {
@@ -3691,7 +3692,7 @@ void Capture::updatePersonDetectionButton()
             buttonText = "Segmentation: DISABLED (Capture Only)";
             buttonStyle = "QPushButton { color: #cccccc; font-size: 12px; background-color: #666666; border: 1px solid #999999; padding: 5px; }";
         }
-        
+
         personDetectionButton->setText(buttonText);
         personDetectionButton->setStyleSheet(buttonStyle);
     }
@@ -3715,32 +3716,32 @@ bool Capture::isCUDAAvailable() const
 cv::Mat Capture::getMotionMask(const cv::Mat &frame)
 {
     cv::Mat fgMask;
-    
+
     if (m_useCUDA) {
         // CUDA-accelerated background subtraction using cv::cuda::BackgroundSubtractorMOG2
         try {
             // Upload to GPU
             cv::cuda::GpuMat gpu_frame;
             gpu_frame.upload(frame);
-            
+
             // Create CUDA background subtractor if not already created
             static cv::Ptr<cv::cuda::BackgroundSubtractorMOG2> cuda_bg_subtractor;
             if (cuda_bg_subtractor.empty()) {
                 cuda_bg_subtractor = cv::cuda::createBackgroundSubtractorMOG2(500, 16, false);
             }
-            
+
             // CUDA-accelerated background subtraction
             cv::cuda::GpuMat gpu_fgmask;
             cuda_bg_subtractor->apply(gpu_frame, gpu_fgmask, -1);
-            
+
             // Download result to CPU
             gpu_fgmask.download(fgMask);
-            
+
             // Apply morphological operations on CPU (OpenCV CUDA limitation)
             cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
             cv::morphologyEx(fgMask, fgMask, cv::MORPH_OPEN, kernel);
             cv::morphologyEx(fgMask, fgMask, cv::MORPH_CLOSE, kernel);
-            
+
         } catch (...) {
             // Fallback to CPU if CUDA fails
             m_bgSubtractor->apply(frame, fgMask);
@@ -3755,7 +3756,7 @@ cv::Mat Capture::getMotionMask(const cv::Mat &frame)
         cv::morphologyEx(fgMask, fgMask, cv::MORPH_OPEN, kernel);
         cv::morphologyEx(fgMask, fgMask, cv::MORPH_CLOSE, kernel);
     }
-    
+
     return fgMask;
 }
 
@@ -3764,33 +3765,33 @@ std::vector<cv::Rect> Capture::filterByMotion(const std::vector<cv::Rect> &detec
     // Skip motion filtering for better FPS (motion filtering can be slow)
     // Return all detections for maximum FPS and accuracy
     return detections;
-    
+
     /*
     // Uncomment the code below if you want motion filtering
     std::vector<cv::Rect> filtered;
-    
+
     for (const auto& rect : detections) {
         // Validate rectangle bounds to prevent crashes
-        if (rect.x < 0 || rect.y < 0 || 
+        if (rect.x < 0 || rect.y < 0 ||
             rect.width <= 0 || rect.height <= 0 ||
             rect.x + rect.width > motionMask.cols ||
             rect.y + rect.height > motionMask.rows) {
             continue; // Skip invalid rectangles
         }
-        
+
         // Create ROI for this detection
         cv::Mat roi = motionMask(rect);
-        
+
         // Calculate percentage of motion pixels in the detection area
         int motionPixels = cv::countNonZero(roi);
         double motionRatio = (double)motionPixels / (roi.rows * roi.cols);
-        
+
         // Keep detection if there's significant motion (more than 10%) - matching peopledetect_v1.cpp
         if (motionRatio > 0.1) {
             filtered.push_back(rect);
         }
     }
-    
+
     return filtered;
     */
 }
@@ -3801,61 +3802,61 @@ void Capture::processFrameWithHandDetection(const cv::Mat &frame)
     if (!m_handDetector || !m_handDetector->isInitialized()) {
         return;
     }
-    
+
     m_handDetectionTimer.start();
-    
+
     // Process hand detection using the hand_detector.h/.cpp system
     QList<HandDetection> detections = m_handDetector->detect(frame);
-    
+
     // Store results with mutex protection
     {
         QMutexLocker locker(&m_handDetectionMutex);
         m_lastHandDetections = detections;
         m_lastHandDetectionTime = m_handDetectionTimer.elapsed() / 1000.0;
     }
-    
+
     // Process hand detection results for trigger logic (only if enabled)
     if (!m_handDetectionEnabled) {
         return; // Skip processing if hand detection is disabled
     }
-    
+
     for (const auto& detection : detections) {
         if (detection.confidence >= m_handDetector->getConfidenceThreshold()) {
             // Check if capture should be triggered - automatically start countdown when hand closed
             if (m_handDetector->shouldTriggerCapture()) {
                 qDebug() << "🎯 HAND CLOSED DETECTED! Automatically triggering capture...";
                 qDebug() << "🎯 Current display mode:" << m_displayMode << "(0=Normal, 1=Rectangle, 2=Segmentation)";
-                
+
                 // Emit signal to trigger capture in main thread (thread-safe)
                 emit handTriggeredCapture();
             }
-            
+
             // Show gesture status in console only
             bool isOpen = m_handDetector->isHandOpen(detection.landmarks);
             bool isClosed = m_handDetector->isHandClosed(detection.landmarks);
             double closureRatio = m_handDetector->calculateHandClosureRatio(detection.landmarks);
-            
+
             // Update hand state for trigger logic
             m_handDetector->updateHandState(isClosed);
-            
+
             if (isOpen || isClosed) {
                 QString gestureStatus = isOpen ? "OPEN" : "CLOSED";
-                qDebug() << "Hand detected - Gesture:" << gestureStatus 
+                qDebug() << "Hand detected - Gesture:" << gestureStatus
                          << "Confidence:" << static_cast<int>(detection.confidence * 100) << "%"
                          << "Closure ratio:" << closureRatio;
             }
         }
     }
-    
+
     // Update FPS calculation
     static int handDetectionFrameCount = 0;
     static QElapsedTimer handDetectionFPSTimer;
-    
+
     if (handDetectionFrameCount == 0) {
         handDetectionFPSTimer.start();
     }
     handDetectionFrameCount++;
-    
+
     if (handDetectionFrameCount >= 30) { // Update every 30 frames
         double duration = handDetectionFPSTimer.elapsed() / 1000.0;
         m_handDetectionFPS = duration > 0 ? handDetectionFrameCount / duration : 0;
@@ -3869,7 +3870,7 @@ void Capture::initializeHandDetection()
     if (!m_handDetector) {
         m_handDetector = new HandDetector();
     }
-    
+
     if (m_handDetector && !m_handDetector->isInitialized()) {
         bool success = m_handDetector->initialize();
         if (success) {
@@ -3911,7 +3912,7 @@ void Capture::enableHandDetection(bool enable)
 {
     m_handDetectionEnabled = enable;
     qDebug() << "🖐️ Hand detection" << (enable ? "ENABLED" : "DISABLED");
-    
+
     if (enable) {
         // Enable hand detection
         if (m_handDetector && !m_handDetector->isInitialized()) {
@@ -3946,20 +3947,20 @@ void Capture::enableProcessingModes()
 void Capture::disableProcessingModes()
 {
     qDebug() << "Disabling heavy processing modes for non-capture pages";
-    
+
     // Disable hand detection
     m_handDetectionEnabled = false;
-    
+
     // Disable segmentation outside capture interface
     disableSegmentationOutsideCapture();
-    
+
     // Clear any pending detections
     m_lastHandDetections.clear();
-    
+
     // Reset processing timers
     m_personDetectionTimer.restart();
     m_handDetectionTimer.restart();
-    
+
     qDebug() << "Heavy processing modes disabled - camera continues running";
 }
 
@@ -3969,12 +3970,12 @@ void Capture::showLoadingCameraLabel()
     if (loadingCameraLabel) {
         // Set basic size and position for visibility
         loadingCameraLabel->setFixedSize(500, 120); // Increased height from 100 to 120
-        
+
         // Center the label with the capture button (which is positioned more to the right)
         int x = (width() - 500) / 2 + 350; // Move right to align with capture button
         int y = (height() - 120) / 2; // Adjusted for new height
         loadingCameraLabel->move(x, y);
-        
+
         loadingCameraLabel->show();
         loadingCameraLabel->raise(); // Bring to front
         qDebug() << "📹 Loading camera label shown at position:" << x << "," << y;
@@ -3996,10 +3997,10 @@ void Capture::handleFirstFrame()
 {
     // This method runs in the main thread (thread-safe)
     qDebug() << "🎯 handleFirstFrame() called in thread:" << QThread::currentThread();
-    
+
     // Hide the loading camera label when first frame is received
     hideLoadingCameraLabel();
-    
+
     // 🚀 Initialize GPU Memory Pool when first frame is received
     if (!m_gpuMemoryPoolInitialized && cv::cuda::getCudaEnabledDeviceCount() > 0) {
         try {
@@ -4012,7 +4013,7 @@ void Capture::handleFirstFrame()
             m_gpuMemoryPoolInitialized = false;
         }
     }
-    
+
     // Mark camera as initialized for the first time
     if (!m_cameraFirstInitialized) {
         m_cameraFirstInitialized = true;
@@ -4027,7 +4028,7 @@ void Capture::enableSegmentationInCapture()
 {
     qDebug() << "🎯 Enabling segmentation for capture interface";
     m_segmentationEnabledInCapture = true;
-    
+
     // Restore the last segmentation mode if it was different from normal
     if (m_lastSegmentationMode != NormalMode) {
         m_displayMode = m_lastSegmentationMode;
@@ -4037,11 +4038,11 @@ void Capture::enableSegmentationInCapture()
         m_displayMode = NormalMode;
         qDebug() << "🎯 Using default normal mode for capture interface";
     }
-    
+
     // Clear any previous segmentation results to force new processing
     m_lastSegmentedFrame = cv::Mat();
     m_lastDetections.clear();
-    
+
     // Update UI to reflect the current state
     updatePersonDetectionButton();
     updateDebugDisplay();
@@ -4050,36 +4051,36 @@ void Capture::enableSegmentationInCapture()
 void Capture::disableSegmentationOutsideCapture()
 {
     qDebug() << "🎯 Disabling segmentation outside capture interface";
-    
+
     // Store the current segmentation mode before disabling
     if (m_displayMode != NormalMode) {
         m_lastSegmentationMode = m_displayMode;
         qDebug() << "🎯 Stored segmentation mode:" << m_lastSegmentationMode << "for later restoration";
     }
-    
+
     // Disable segmentation by switching to normal mode
     m_displayMode = NormalMode;
     m_segmentationEnabledInCapture = false;
-    
+
     // Clear any cached segmentation data
     m_lastSegmentedFrame = cv::Mat();
     m_lastDetections.clear();
-    
+
     // Reset GPU utilization flags
     m_gpuUtilized = false;
     m_cudaUtilized = false;
-    
+
     // Update UI
     updatePersonDetectionButton();
     updateDebugDisplay();
-    
+
     qDebug() << "🎯 Segmentation disabled - switched to normal mode";
 }
 
 void Capture::restoreSegmentationState()
 {
     qDebug() << "🎯 Restoring segmentation state for capture interface";
-    
+
     if (m_segmentationEnabledInCapture) {
         // If segmentation was enabled in capture, restore the last mode
         if (m_lastSegmentationMode != NormalMode) {
@@ -4094,7 +4095,7 @@ void Capture::restoreSegmentationState()
         m_displayMode = NormalMode;
         qDebug() << "🎯 Segmentation not enabled in capture - staying in normal mode";
     }
-    
+
     updatePersonDetectionButton();
     updateDebugDisplay();
 }
@@ -4107,27 +4108,27 @@ bool Capture::isSegmentationEnabledInCapture() const
 void Capture::setSegmentationMode(int mode)
 {
     qDebug() << "🎯 Setting segmentation mode to:" << mode;
-    
+
     // Only allow mode changes if segmentation is enabled in capture
     if (m_segmentationEnabledInCapture) {
         // Convert int to DisplayMode enum
         DisplayMode displayMode = static_cast<DisplayMode>(mode);
         m_displayMode = displayMode;
-        
+
         // Store the mode for later restoration (if it's not normal mode)
         if (displayMode != NormalMode) {
             m_lastSegmentationMode = displayMode;
         }
-        
+
         // Reset utilization when switching to normal mode
         if (displayMode == NormalMode) {
             m_gpuUtilized = false;
             m_cudaUtilized = false;
         }
-        
+
         this->updatePersonDetectionButton();
         this->updateDebugDisplay();
-        
+
         qDebug() << "🎯 Segmentation mode set to:" << displayMode;
     } else {
         qDebug() << "🎯 Cannot set segmentation mode - segmentation not enabled in capture interface";
@@ -4198,60 +4199,60 @@ void GPUMemoryPool::initialize(int width, int height)
         qDebug() << "🚀 GPU Memory Pool: Already initialized with correct dimensions";
         return;
     }
-    
+
     qDebug() << "🚀 GPU Memory Pool: Initializing with dimensions" << width << "x" << height;
-    
+
     try {
         // Release existing resources
         release();
-        
+
         // Initialize frame buffers (triple buffering)
         for (int i = 0; i < 3; ++i) {
             gpuFrameBuffers[i] = cv::cuda::GpuMat(height, width, CV_8UC3);
             qDebug() << "🚀 GPU Memory Pool: Frame buffer" << i << "allocated";
         }
-        
+
         // Initialize segmentation buffers (double buffering)
         for (int i = 0; i < 2; ++i) {
             gpuSegmentationBuffers[i] = cv::cuda::GpuMat(height, width, CV_8UC1);
             qDebug() << "🚀 GPU Memory Pool: Segmentation buffer" << i << "allocated";
         }
-        
+
         // Initialize detection buffers (double buffering)
         for (int i = 0; i < 2; ++i) {
             gpuDetectionBuffers[i] = cv::cuda::GpuMat(height, width, CV_8UC1);
             qDebug() << "🚀 GPU Memory Pool: Detection buffer" << i << "allocated";
         }
-        
+
         // Initialize temporary buffers (double buffering)
         for (int i = 0; i < 2; ++i) {
             gpuTempBuffers[i] = cv::cuda::GpuMat(height, width, CV_8UC1);
             qDebug() << "🚀 GPU Memory Pool: Temp buffer" << i << "allocated";
         }
-        
+
         // Create reusable CUDA filters (create once, use many times)
         cv::Mat kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3));
         morphCloseFilter = cv::cuda::createMorphologyFilter(cv::MORPH_CLOSE, CV_8UC1, kernel);
         morphOpenFilter = cv::cuda::createMorphologyFilter(cv::MORPH_OPEN, CV_8UC1, kernel);
         morphDilateFilter = cv::cuda::createMorphologyFilter(cv::MORPH_DILATE, CV_8UC1, kernel);
         cannyDetector = cv::cuda::createCannyEdgeDetector(50, 150);
-        
+
         qDebug() << "🚀 GPU Memory Pool: CUDA filters created successfully";
-        
+
         // Initialize CUDA streams for parallel processing
         detectionStream = cv::cuda::Stream();
         segmentationStream = cv::cuda::Stream();
         compositionStream = cv::cuda::Stream();
-        
+
         qDebug() << "🚀 GPU Memory Pool: CUDA streams initialized";
-        
+
         // Update state
         poolWidth = width;
         poolHeight = height;
         initialized = true;
-        
+
         qDebug() << "🚀 GPU Memory Pool: Initialization completed successfully";
-        
+
     } catch (const cv::Exception& e) {
         qWarning() << "🚀 GPU Memory Pool: Initialization failed:" << e.what();
         release();
@@ -4265,7 +4266,7 @@ cv::cuda::GpuMat& GPUMemoryPool::getNextFrameBuffer()
         static cv::cuda::GpuMat emptyBuffer;
         return emptyBuffer;
     }
-    
+
     cv::cuda::GpuMat& buffer = gpuFrameBuffers[currentFrameBuffer];
     currentFrameBuffer = (currentFrameBuffer + 1) % 3; // Triple buffering
     return buffer;
@@ -4278,7 +4279,7 @@ cv::cuda::GpuMat& GPUMemoryPool::getNextSegmentationBuffer()
         static cv::cuda::GpuMat emptyBuffer;
         return emptyBuffer;
     }
-    
+
     cv::cuda::GpuMat& buffer = gpuSegmentationBuffers[currentSegBuffer];
     currentSegBuffer = (currentSegBuffer + 1) % 2; // Double buffering
     return buffer;
@@ -4291,7 +4292,7 @@ cv::cuda::GpuMat& GPUMemoryPool::getNextDetectionBuffer()
         static cv::cuda::GpuMat emptyBuffer;
         return emptyBuffer;
     }
-    
+
     cv::cuda::GpuMat& buffer = gpuDetectionBuffers[currentDetBuffer];
     currentDetBuffer = (currentDetBuffer + 1) % 2; // Double buffering
     return buffer;
@@ -4304,7 +4305,7 @@ cv::cuda::GpuMat& GPUMemoryPool::getNextTempBuffer()
         static cv::cuda::GpuMat emptyBuffer;
         return emptyBuffer;
     }
-    
+
     cv::cuda::GpuMat& buffer = gpuTempBuffers[currentTempBuffer];
     currentTempBuffer = (currentTempBuffer + 1) % 2; // Double buffering
     return buffer;
@@ -4315,26 +4316,26 @@ void GPUMemoryPool::release()
     if (!initialized) {
         return;
     }
-    
+
     qDebug() << "🚀 GPU Memory Pool: Releasing resources";
-    
+
     // Release GPU buffers
     for (int i = 0; i < 3; ++i) {
         gpuFrameBuffers[i].release();
     }
-    
+
     for (int i = 0; i < 2; ++i) {
         gpuSegmentationBuffers[i].release();
         gpuDetectionBuffers[i].release();
         gpuTempBuffers[i].release();
     }
-    
+
     // Release CUDA filters
     morphCloseFilter.release();
     morphOpenFilter.release();
     morphDilateFilter.release();
     cannyDetector.release();
-    
+
     // Reset state
     initialized = false;
     poolWidth = 0;
@@ -4343,7 +4344,7 @@ void GPUMemoryPool::release()
     currentSegBuffer = 0;
     currentDetBuffer = 0;
     currentTempBuffer = 0;
-    
+
     qDebug() << "🚀 GPU Memory Pool: Resources released";
 }
 
@@ -4352,9 +4353,9 @@ void GPUMemoryPool::resetBuffers()
     if (!initialized) {
         return;
     }
-    
+
     qDebug() << "🚀 GPU Memory Pool: Resetting buffer indices";
-    
+
     currentFrameBuffer = 0;
     currentSegBuffer = 0;
     currentDetBuffer = 0;
@@ -4366,14 +4367,14 @@ void GPUMemoryPool::resetBuffers()
 void Capture::initializeRecordingSystem()
 {
     qDebug() << "🚀 ASYNC RECORDING: Initializing recording system...";
-    
+
     try {
         // Create recording thread
         if (!m_recordingThread) {
             m_recordingThread = new QThread(this);
             m_recordingThread->setObjectName("RecordingThread");
         }
-        
+
         // Create recording frame timer
         if (!m_recordingFrameTimer) {
             m_recordingFrameTimer = new QTimer();
@@ -4381,25 +4382,25 @@ void Capture::initializeRecordingSystem()
             m_recordingFrameTimer->moveToThread(m_recordingThread);
             connect(m_recordingFrameTimer, &QTimer::timeout, this, &Capture::processRecordingFrame, Qt::QueuedConnection);
         }
-        
+
         // Initialize CUDA recording stream
         m_recordingStream = cv::cuda::Stream();
-        
+
         // Initialize GPU recording buffer
         if (cv::cuda::getCudaEnabledDeviceCount() > 0) {
             m_recordingGpuBuffer = cv::cuda::GpuMat(720, 1280, CV_8UC3);
             qDebug() << "🚀 ASYNC RECORDING: GPU recording buffer initialized";
         }
-        
+
         // Start recording thread
         m_recordingThread->start();
         m_recordingThreadActive = true;
-        
+
         // Start processing timer
         m_recordingFrameTimer->start(16); // 60 FPS processing rate
-        
+
         qDebug() << "🚀 ASYNC RECORDING: Recording system initialized successfully";
-        
+
     } catch (const std::exception& e) {
         qWarning() << "🚀 ASYNC RECORDING: Initialization failed:" << e.what();
         cleanupRecordingSystem();
@@ -4409,28 +4410,28 @@ void Capture::initializeRecordingSystem()
 void Capture::cleanupRecordingSystem()
 {
     qDebug() << "🚀 ASYNC RECORDING: Cleaning up recording system...";
-    
+
     // Stop processing timer
     if (m_recordingFrameTimer) {
         m_recordingFrameTimer->stop();
     }
-    
+
     // Stop and cleanup recording thread
     if (m_recordingThread && m_recordingThreadActive) {
         m_recordingThread->quit();
         m_recordingThread->wait(1000); // Wait up to 1 second
         m_recordingThreadActive = false;
     }
-    
+
     // Clear frame queue
     {
         QMutexLocker locker(&m_recordingMutex);
         m_recordingFrameQueue.clear();
     }
-    
+
     // Release GPU resources
     m_recordingGpuBuffer.release();
-    
+
     qDebug() << "🚀 ASYNC RECORDING: Recording system cleaned up";
 }
 
@@ -4439,11 +4440,11 @@ void Capture::queueFrameForRecording(const cv::Mat &frame)
     if (!m_recordingThreadActive) {
         return;
     }
-    
+
     // Queue frame for asynchronous processing
     {
         QMutexLocker locker(&m_recordingMutex);
-        
+
         // Limit queue size to prevent memory issues
         if (m_recordingFrameQueue.size() < 10) {
             m_recordingFrameQueue.enqueue(frame.clone());
@@ -4464,22 +4465,22 @@ void Capture::processRecordingFrame()
 QPixmap Capture::processFrameForRecordingGPU(const cv::Mat &frame)
 {
     QPixmap result;
-    
+
     try {
         // 🚀 GPU-ACCELERATED FRAME PROCESSING
-        
+
         // Upload frame to GPU
         cv::cuda::GpuMat gpuFrame;
         gpuFrame.upload(frame, m_recordingStream);
-        
+
         // Get target size
         QSize labelSize = m_cachedLabelSize.isValid() ? m_cachedLabelSize : QSize(1280, 720);
-        
+
         // GPU-accelerated scaling if needed
         cv::cuda::GpuMat gpuScaled;
         if (qAbs(m_personScaleFactor - 1.0) > 0.01) {
             // Check if we're in segmentation mode with background template or dynamic video background
-            if (m_displayMode == SegmentationMode && ((m_useBackgroundTemplate && 
+            if (m_displayMode == SegmentationMode && ((m_useBackgroundTemplate &&
                 !m_selectedBackgroundTemplate.isEmpty()) || m_useDynamicVideoBackground)) {
                 // For background template mode, just fit to label
                 cv::cuda::resize(gpuFrame, gpuScaled, cv::Size(labelSize.width(), labelSize.height()), 0, 0, cv::INTER_LINEAR, m_recordingStream);
@@ -4493,34 +4494,34 @@ QPixmap Capture::processFrameForRecordingGPU(const cv::Mat &frame)
             // No scaling needed, just fit to label
             cv::cuda::resize(gpuFrame, gpuScaled, cv::Size(labelSize.width(), labelSize.height()), 0, 0, cv::INTER_LINEAR, m_recordingStream);
         }
-        
+
         // Download processed frame
         cv::Mat processedFrame;
         gpuScaled.download(processedFrame, m_recordingStream);
-        
+
         // Wait for GPU operations to complete
         m_recordingStream.waitForCompletion();
-        
+
         // Convert to QPixmap
         QImage qImage = cvMatToQImage(processedFrame);
         result = QPixmap::fromImage(qImage);
-        
+
         qDebug() << "🚀 ASYNC RECORDING: GPU frame processing completed";
-        
+
     } catch (const cv::Exception& e) {
         qWarning() << "🚀 ASYNC RECORDING: GPU processing failed:" << e.what();
-        
+
         // Fallback to CPU processing
         QImage qImage = cvMatToQImage(frame);
         result = QPixmap::fromImage(qImage);
-        
+
         // Apply scaling on CPU as fallback
         if (qAbs(m_personScaleFactor - 1.0) > 0.01) {
             QSize labelSize = m_cachedLabelSize.isValid() ? m_cachedLabelSize : QSize(1280, 720);
             result = result.scaled(labelSize, Qt::KeepAspectRatioByExpanding, Qt::FastTransformation);
         }
     }
-    
+
     return result;
 }
 
