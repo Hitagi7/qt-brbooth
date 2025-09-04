@@ -43,6 +43,9 @@
    </item>
    <item>
     <layout class="QHBoxLayout" name="navButtonsLayout">
+     <property name="spacing">
+      <number>6</number>
+     </property>
      <property name="sizeConstraint">
       <enum>QLayout::SizeConstraint::SetDefaultConstraint</enum>
      </property>
@@ -78,28 +81,38 @@
        <property name="text">
         <string/>
        </property>
+       <property name="icon">
+        <iconset>
+         <normaloff>:/icons/Icons/send.svg</normaloff>:/icons/Icons/send.svg</iconset>
+       </property>
+       <property name="iconSize">
+        <size>
+         <width>80</width>
+         <height>80</height>
+        </size>
+       </property>
        <property name="checkable">
         <bool>false</bool>
        </property>
       </widget>
      </item>
+           <item>
+       <spacer name="horizontalSpacer_left">
+        <property name="orientation">
+         <enum>Qt::Orientation::Horizontal</enum>
+        </property>
+        <property name="sizeType">
+         <enum>QSizePolicy::Policy::Minimum</enum>
+        </property>
+        <property name="sizeHint" stdset="0">
+         <size>
+          <width>40</width>
+          <height>20</height>
+         </size>
+        </property>
+       </spacer>
+      </item>
      <item>
-      <spacer name="horizontalSpacer_between">
-       <property name="orientation">
-        <enum>Qt::Orientation::Horizontal</enum>
-       </property>
-       <property name="sizeType">
-        <enum>QSizePolicy::Policy::Fixed</enum>
-       </property>
-       <property name="sizeHint" stdset="0">
-        <size>
-         <width>50</width>
-         <height>20</height>
-        </size>
-       </property>
-      </spacer>
-     </item>
-     <item alignment="Qt::AlignmentFlag::AlignHCenter|Qt::AlignmentFlag::AlignVCenter">
       <widget class="QFrame" name="fglabel">
        <property name="sizePolicy">
         <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
@@ -122,7 +135,7 @@
        <property name="styleSheet">
         <string notr="true">#fglabel {
     background-color: #0BC200;
-    border-radius: 9px;
+        border-radius: 9px;
     border-bottom: 2px solid #020202;
 }</string>
        </property>
@@ -183,11 +196,11 @@
         <enum>Qt::Orientation::Horizontal</enum>
        </property>
        <property name="sizeType">
-        <enum>QSizePolicy::Policy::Expanding</enum>
+        <enum>QSizePolicy::Policy::Minimum</enum>
        </property>
        <property name="sizeHint" stdset="0">
         <size>
-         <width>40</width>
+         <width>350</width>
          <height>20</height>
         </size>
        </property>

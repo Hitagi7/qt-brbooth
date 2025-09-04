@@ -4525,7 +4525,92 @@ QPixmap Capture::processFrameForRecordingGPU(const cv::Mat &frame)
     return result;
 }
 
+// Resource Management Methods
+void Capture::cleanupResources()
+{
+    qDebug() << "🧹 Capture::cleanupResources - Cleaning up resources when leaving capture page";
+    
+    // Stop all timers
+    if (m_videoPlaybackTimer && m_videoPlaybackTimer->isActive()) {
+        m_videoPlaybackTimer->stop();
+        qDebug() << "🧹 Stopped video playback timer";
+    }
+    
+    if (recordTimer && recordTimer->isActive()) {
+        recordTimer->stop();
+        qDebug() << "🧹 Stopped record timer";
+    }
+    
+    if (recordingFrameTimer && recordingFrameTimer->isActive()) {
+        recordingFrameTimer->stop();
+        qDebug() << "🧹 Stopped recording frame timer";
+    }
+    
+    if (debugUpdateTimer && debugUpdateTimer->isActive()) {
+        debugUpdateTimer->stop();
+        qDebug() << "🧹 Stopped debug update timer";
+    }
+    
+    // Stop recording if active
+    if (m_isRecording) {
+        stopRecording();
+        qDebug() << "🧹 Stopped active recording";
+    }
+    
+    // Disable all processing modes
+    disableProcessingModes();
+    disableSegmentationOutsideCapture();
+    
+    // Release video resources
+    disableDynamicVideoBackground();
+    
+    // Release GPU memory
+    if (m_gpuMemoryPoolInitialized) {
+        m_gpuMemoryPool.release();
+        m_gpuMemoryPoolInitialized = false;
+        qDebug() << "🧹 Released GPU memory pool";
+    }
+    
+    // Clear frame buffers
+    m_currentFrame.release();
+    m_lastSegmentedFrame.release();
+    m_dynamicVideoFrame.release();
+    m_dynamicGpuFrame.release();
+    m_gpuVideoFrame.release();
+    m_gpuSegmentedFrame.release();
+    m_gpuPersonMask.release();
+    m_gpuBackgroundFrame.release();
+    m_recordingGpuBuffer.release();
+    
+    // Clear detection results
+    m_lastDetections.clear();
+    m_lastHandDetections.clear();
+    
+    qDebug() << "🧹 Capture::cleanupResources - Resource cleanup completed";
+}
 
-
-
-
+void Capture::initializeResources()
+{
+    qDebug() << "🚀 Capture::initializeResources - Initializing resources when entering capture page";
+    
+    // Initialize GPU memory pool if available
+    if (isGPUOnlyProcessingAvailable() && !m_gpuMemoryPoolInitialized) {
+        m_gpuMemoryPool.initialize(1280, 720); // Default resolution
+        m_gpuMemoryPoolInitialized = true;
+        qDebug() << "🚀 Initialized GPU memory pool";
+    }
+    
+    // Initialize person detection
+    initializePersonDetection();
+    
+    // Initialize hand detection
+    initializeHandDetection();
+    
+    // Start debug update timer
+    if (debugUpdateTimer) {
+        debugUpdateTimer->start(1000); // Update every second
+        qDebug() << "🚀 Started debug update timer";
+    }
+    
+    qDebug() << "🚀 Capture::initializeResources - Resource initialization completed";
+}

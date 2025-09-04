@@ -209,9 +209,8 @@ BRBooth::BRBooth(QWidget *parent)
     cameraThread->start();
     qDebug() << "BRBooth: Camera thread started.";
 
-    // Start camera immediately for continuous operation
-    emit startCameraWorker();
-    qDebug() << "BRBooth: Camera started immediately for continuous operation.";
+    // Camera will be started only when needed (on capture page)
+    qDebug() << "BRBooth: Camera will be started when reaching capture page.";
     // =============================================================================
 
     // Get pointers to UI-defined pages (added in Qt Designer's stacked widget)
@@ -268,8 +267,8 @@ BRBooth::BRBooth(QWidget *parent)
         connect(dynamicPage, &Dynamic::videoSelectedAndConfirmed, this, [this](const QString &videoPath) {
             m_transitioningToCapture = true; // Mark that we're transitioning to capture
 
-            // Camera is already running continuously, no need to start it
-            qDebug() << "📹 Camera already running continuously, proceeding to capture...";
+            // Camera will be started when reaching capture page
+            qDebug() << "📹 Camera will be started when reaching capture page...";
 
             // Set capture mode and video template asynchronously to prevent blocking
             QTimer::singleShot(0, [this, videoPath]() {
@@ -299,8 +298,8 @@ BRBooth::BRBooth(QWidget *parent)
         connect(backgroundPage, &Background::imageSelectedTwice, this, [this]() {
             m_transitioningToCapture = true; // Mark that we're transitioning to capture
 
-            // Camera is already running continuously, no need to start it
-            qDebug() << "📹 Camera already running continuously, proceeding to capture...";
+            // Camera will be started when reaching capture page
+            qDebug() << "📹 Camera will be started when reaching capture page...";
 
             // Pass the selected background template to capture page
             if (capturePage && backgroundPage) {
@@ -366,9 +365,9 @@ BRBooth::BRBooth(QWidget *parent)
     connect(ui->stackedWidget, &QStackedWidget::currentChanged, this, [this](int index) {
         qDebug() << "DEBUG: Stacked widget current index changed to:" << index;
 
-        // CONTINUOUS CAMERA MANAGEMENT: Keep camera running throughout the program
+        // OPTIMIZED CAMERA MANAGEMENT: Only start camera when needed
         if (index == capturePageIndex) {
-            // Ensure camera is running for capture page
+            // Start camera only when reaching capture page
             if (cameraWorker && !cameraWorker->isCameraOpen()) {
                 qDebug() << "📹 Starting camera for Capture page...";
                 emit startCameraWorker();
@@ -376,34 +375,32 @@ BRBooth::BRBooth(QWidget *parent)
                 qDebug() << "📹 Camera already running for Capture page";
             }
 
-            // Enable processing modes for capture page
+            // Initialize resources and enable processing modes for capture page
             QTimer::singleShot(100, [this]() {
                 if (capturePage) {
+                    capturePage->initializeResources();
                     capturePage->enableHandDetectionForCapture();
                     capturePage->enableSegmentationInCapture();
-                    qDebug() << "📹 Processing modes and segmentation enabled for Capture page";
+                    qDebug() << "📹 Resources initialized and processing modes enabled for Capture page";
                 }
             });
         } else {
-            // For all other pages, keep camera running but disable heavy processing
-            if (cameraWorker && !cameraWorker->isCameraOpen()) {
-                qDebug() << "📹 Starting camera for other page (index:" << index << ")...";
-                emit startCameraWorker();
-            } else {
-                qDebug() << "📹 Camera running continuously for page (index:" << index << ")";
+            // Stop camera and disable processing for all other pages
+            if (cameraWorker && cameraWorker->isCameraOpen()) {
+                qDebug() << "📹 Stopping camera for non-capture page (index:" << index << ")...";
+                emit stopCameraWorker();
             }
 
-            // Disable heavy processing for non-capture pages
+            // Clean up resources and disable processing for non-capture pages
             QTimer::singleShot(50, [this]() {
                 if (capturePage) {
-                    capturePage->disableProcessingModes();
-                    capturePage->disableSegmentationOutsideCapture();
-                    qDebug() << "📹 Processing modes and segmentation disabled for non-capture page";
+                    capturePage->cleanupResources();
+                    qDebug() << "📹 Resources cleaned up and processing disabled for non-capture page";
                 }
             });
         }
 
-        // Manage GIFs based on page changes
+        // OPTIMIZED GIF MANAGEMENT: Only run GIFs on their respective pages
         if (index == landingPageIndex) {
             startLandingPageGif();
         } else {
@@ -412,10 +409,9 @@ BRBooth::BRBooth(QWidget *parent)
 
         if (index == dynamicPageIndex) {
             dynamicPage->resetPage(); // Dynamic page reset will also hide overlay and restart GIFs
-        } else if (dynamicPage && index != capturePageIndex && !m_transitioningToCapture) {
-            // Only stop GIFs when leaving dynamic page AND not going to capture page AND not transitioning to capture
-            // This prevents delay/freezing when transitioning to capture
-            dynamicPage->stopAllGifs(); // Stop GIFs when leaving dynamic page
+        } else if (dynamicPage) {
+            // Stop all GIFs when leaving dynamic page
+            dynamicPage->stopAllGifs();
         }
 
         if (index == foregroundPageIndex && !m_transitioningToCapture) {
@@ -431,19 +427,14 @@ BRBooth::BRBooth(QWidget *parent)
             capturePage->enableHandDetectionForCapture(); // Enable hand detection for capture page
             capturePage->enableSegmentationInCapture(); // Enable segmentation for capture page
 
-            // Clean up GIFs from previous page after capture page is shown (non-blocking)
-            if (dynamicPage && lastVisitedPageIndex == dynamicPageIndex) {
-                QTimer::singleShot(100, [this]() {
-                    dynamicPage->stopAllGifs(); // Stop GIFs asynchronously after capture page is ready
-                });
-            }
-
             // Clean up previous page state after capture page is ready (non-blocking)
             QTimer::singleShot(50, [this]() {
                 if (lastVisitedPageIndex == backgroundPageIndex) {
                     backgroundPage->resetPage();
                 } else if (lastVisitedPageIndex == foregroundPageIndex) {
                     foregroundPage->resetPage();
+                } else if (lastVisitedPageIndex == dynamicPageIndex) {
+                    dynamicPage->stopAllGifs(); // Stop GIFs from dynamic page
                 }
             });
         }
@@ -557,11 +548,11 @@ bool BRBooth::eventFilter(QObject *obj, QEvent *event)
 {
     if (obj == this) {
         if (event->type() == QEvent::WindowActivate) {
-            qDebug() << "Window activated - camera continues running";
-            // Camera runs continuously, no need to restart
+            qDebug() << "Window activated - camera will start when needed";
+            // Camera will be started when reaching capture page
         } else if (event->type() == QEvent::WindowDeactivate) {
-            qDebug() << "Window deactivated - camera continues running in background";
-            // Camera continues running even when window is deactivated
+            qDebug() << "Window deactivated - camera will be stopped if running";
+            // Camera will be stopped when leaving capture page
         }
     }
     return QMainWindow::eventFilter(obj, event);
@@ -596,7 +587,7 @@ void BRBooth::showCapturePage()
         qDebug() << "DEBUG: showCapturePage() called from final output page. Keeping lastVisitedPageIndex:" << lastVisitedPageIndex;
     }
 
-    // Camera is now started by page change handler for all relevant pages
+    // Camera will be started by page change handler when reaching capture page
 
     // Pass the current foreground template to the final interface
     if (foregroundPage && finalOutputPage) {

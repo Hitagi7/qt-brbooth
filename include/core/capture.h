@@ -158,6 +158,10 @@ public:
     bool isSegmentationEnabledInCapture() const; // Check if segmentation is enabled for capture
     void setSegmentationMode(int mode); // Set specific segmentation mode (0=Normal, 1=Rectangle, 2=Segmentation)
     
+    // Resource Management Methods
+    void cleanupResources(); // Clean up all resources when leaving capture page
+    void initializeResources(); // Initialize resources when entering capture page
+    
     // Loading camera label management
     void showLoadingCameraLabel();
     void hideLoadingCameraLabel();
