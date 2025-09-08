@@ -27,6 +27,7 @@ public:
     ~Final();
 
     void setImage(const QPixmap &image);
+    void setImageWithComparison(const QPixmap &image, const QPixmap &originalImage);
     void setVideo(const QList<QPixmap> &frames, double fps = 30.0);
     void setForegroundOverlay(const QString &foregroundPath);
 
@@ -54,6 +55,8 @@ private:
     QStackedLayout *m_stackedLayout = nullptr; // Member for the stacked layout
 
     QPixmap m_lastLoadedImage; // To store the original image for resizing
+    QPixmap m_originalImage;   // To store the original image without lighting correction
+    bool m_hasComparisonImages; // Whether we have both versions for comparison
 
     QLabel *overlayImageLabel; // For pixel art game UI elements
 

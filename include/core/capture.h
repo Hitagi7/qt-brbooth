@@ -36,6 +36,7 @@
 #include "ui/foreground.h"        // Foreground class
 #include "core/common_types.h"    // Common data structures
 #include "algorithms/hand_detection/hand_detector.h"
+#include "algorithms/lighting_correction/lighting_corrector.h"
 
 // 🚀 GPU Memory Pool for optimized CUDA operations
 class GPUMemoryPool {
@@ -195,6 +196,7 @@ protected:
 signals:
     void backtoPreviousPage();
     void imageCaptured(const QPixmap &image);
+    void imageCapturedWithComparison(const QPixmap &correctedImage, const QPixmap &originalImage);
     void videoRecorded(const QList<QPixmap> &frames, double fps);
     void showFinalOutputPage();
     void personDetectedInFrame();
@@ -393,6 +395,8 @@ private:
     QFutureWatcher<cv::Mat> *m_personDetectionWatcher;
     std::vector<cv::Rect> m_lastDetections;
 
+    cv::Mat m_selectedTemplate;
+
     // 🚀 GPU Memory Pool for optimized CUDA operations
     GPUMemoryPool m_gpuMemoryPool;
     bool m_gpuMemoryPoolInitialized;
@@ -440,6 +444,31 @@ private:
     void cleanupRecordingSystem();
     void queueFrameForRecording(const cv::Mat &frame);
     QPixmap processFrameForRecordingGPU(const cv::Mat &frame);
+    
+    // Lighting Correction Methods
+    void initializeLightingCorrection();
+    void setLightingCorrectionEnabled(bool enabled);
+    bool isLightingCorrectionEnabled() const;
+    bool isGPULightingAvailable() const;
+    void setReferenceTemplate(const QString &templatePath);
+    cv::Mat applyPersonLightingCorrection(const cv::Mat &inputImage, const cv::Mat &personMask);
+    cv::Mat createPersonMaskFromSegmentedFrame(const cv::Mat &segmentedFrame);
+    cv::Mat applyPersonColorMatching(const cv::Mat &segmentedFrame);
+    cv::Mat applyLightingToRawPersonRegion(const cv::Mat &personRegion, const cv::Mat &personMask);
+    cv::Mat applyPostProcessingLighting();
+    
+    // Lighting Correction Member
+    LightingCorrector *m_lightingCorrector;
+    
+    // Lighting Comparison Storage
+    cv::Mat m_originalCapturedImage;      // Original image without lighting correction
+    cv::Mat m_lightingCorrectedImage;     // Image with lighting correction applied
+    bool m_hasLightingComparison;         // Whether we have both versions for comparison
+    
+    // Raw Person Data for Post-Processing
+    cv::Mat m_lastRawPersonRegion;
+    cv::Mat m_lastRawPersonMask;
+    cv::Mat m_lastTemplateBackground;
     
     // Utility functions
     QImage cvMatToQImage(const cv::Mat &mat);

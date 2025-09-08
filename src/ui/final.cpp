@@ -285,6 +285,26 @@ void Final::setImage(const QPixmap &image)
     refreshDisplay(); // Display the image immediately with proper scaling
 }
 
+void Final::setImageWithComparison(const QPixmap &image, const QPixmap &originalImage)
+{
+    // Stop video playback if active
+    if (videoPlaybackTimer->isActive()) {
+        videoPlaybackTimer->stop();
+    }
+
+    m_videoFrames.clear(); // Clear any existing video frames
+    m_currentFrameIndex = 0;
+    m_lastLoadedImage = image; // Store the lighting-corrected image for display
+    m_originalImage = originalImage; // Store the original image without lighting correction
+    m_hasComparisonImages = true; // We have both versions
+
+    qDebug() << "Final interface received comparison images - corrected:" << image.size() << "original:" << originalImage.size();
+
+    ui->videoLabel->setText(""); // Clear any previous text
+
+    refreshDisplay(); // Display the image immediately with proper scaling
+}
+
 void Final::setVideo(const QList<QPixmap> &frames, double fps)
 {
     // Stop any current playback
@@ -433,19 +453,42 @@ void Final::on_save_clicked()
         }
 
         QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss");
-        QString fileName = downloadsPath + "/image_" + timestamp + ".png";
-
         QDir dir;
         if (!dir.exists(downloadsPath)) {
             dir.mkpath(downloadsPath); // Create the directory if it doesn't exist
         }
 
-        if (imageToSave.save(fileName)) {
-            QMessageBox::information(this,
-                                     "Save Image",
-                                     QString("Image saved successfully to:\n%1").arg(fileName));
+        if (m_hasComparisonImages) {
+            // Save both versions for comparison
+            QString correctedFileName = downloadsPath + "/image_lighting_corrected_" + timestamp + ".png";
+            QString originalFileName = downloadsPath + "/image_original_" + timestamp + ".png";
+            
+            bool correctedSaved = imageToSave.save(correctedFileName);
+            bool originalSaved = m_originalImage.save(originalFileName);
+            
+            if (correctedSaved && originalSaved) {
+                QMessageBox::information(this,
+                                         "Save Images",
+                                         QString("Both images saved successfully:\n\n"
+                                                "Lighting Corrected: %1\n"
+                                                "Original: %2").arg(correctedFileName, originalFileName));
+            } else {
+                QString errorMsg = "Failed to save: ";
+                if (!correctedSaved) errorMsg += "lighting corrected image ";
+                if (!originalSaved) errorMsg += "original image ";
+                QMessageBox::critical(this, "Save Images", errorMsg);
+            }
         } else {
-            QMessageBox::critical(this, "Save Image", "Failed to save image.");
+            // Save single image
+            QString fileName = downloadsPath + "/image_" + timestamp + ".png";
+            
+            if (imageToSave.save(fileName)) {
+                QMessageBox::information(this,
+                                         "Save Image",
+                                         QString("Image saved successfully to:\n%1").arg(fileName));
+            } else {
+                QMessageBox::critical(this, "Save Image", "Failed to save image.");
+            }
         }
     }
     emit backToLandingPage();

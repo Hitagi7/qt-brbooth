@@ -387,6 +387,7 @@ BRBooth::BRBooth(QWidget *parent)
             }
         });
         connect(capturePage, &Capture::imageCaptured, finalOutputPage, &Final::setImage);
+        connect(capturePage, &Capture::imageCapturedWithComparison, finalOutputPage, &Final::setImageWithComparison);
         connect(capturePage, &Capture::videoRecorded, finalOutputPage, &Final::setVideo);
         connect(capturePage, &Capture::foregroundPathChanged, finalOutputPage, &Final::setForegroundOverlay);
         
