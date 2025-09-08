@@ -394,6 +394,7 @@ BRBooth::BRBooth(QWidget *parent)
         // Also send captured content to Loading for preview
         connect(capturePage, &Capture::imageCaptured, loadingPage, &Loading::setImage);
         connect(capturePage, &Capture::videoRecorded, loadingPage, &Loading::setVideo);
+        connect(capturePage, &Capture::videoProcessingProgress, loadingPage, &Loading::setProgress);
     }
 
     if (finalOutputPage) {

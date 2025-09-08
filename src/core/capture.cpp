@@ -820,6 +820,30 @@ void Capture::captureRecordingFrame()
     // Add the current display directly to recorded frames (no additional processing needed)
     m_recordedFrames.append(currentDisplayPixmap);
     qDebug() << "🚀 DIRECT CAPTURE: Display frame captured directly, total frames:" << m_recordedFrames.size();
+
+    // Also store per-frame raw person and background data for post lighting processing in dynamic output
+    if ((m_displayMode == SegmentationMode || m_displayMode == RectangleMode)) {
+        if (!m_lastRawPersonRegion.empty() && !m_lastRawPersonMask.empty()) {
+            m_recordedRawPersonRegions.append(m_lastRawPersonRegion.clone());
+            m_recordedRawPersonMasks.append(m_lastRawPersonMask.clone());
+        } else {
+            m_recordedRawPersonRegions.append(cv::Mat());
+            m_recordedRawPersonMasks.append(cv::Mat());
+        }
+        // Background reference: use current dynamic frame if enabled, else selected template if available
+        if (m_useDynamicVideoBackground && !m_dynamicVideoFrame.empty()) {
+            m_recordedBackgroundFrames.append(m_dynamicVideoFrame.clone());
+        } else if (!m_selectedTemplate.empty()) {
+            m_recordedBackgroundFrames.append(m_selectedTemplate.clone());
+        } else {
+            m_recordedBackgroundFrames.append(cv::Mat());
+        }
+    } else {
+        // Keep lists aligned
+        m_recordedRawPersonRegions.append(cv::Mat());
+        m_recordedRawPersonMasks.append(cv::Mat());
+        m_recordedBackgroundFrames.append(cv::Mat());
+    }
 }
 
 void Capture::on_back_clicked()
@@ -1681,10 +1705,11 @@ void Capture::stopRecording()
                     + " frames.";
 
     if (!m_recordedFrames.isEmpty()) {
+        // Post-process recorded frames with person lighting if segmentation/dynamic was used
+        qDebug() << "🌟 Post-processing recorded video with lighting correction (per-frame)";
+        QList<QPixmap> processedFrames = processRecordedVideoWithLighting(m_recordedFrames, m_adjustedRecordingFPS);
         qDebug() << "🚀 DIRECT CAPTURE RECORDING: Emitting video with FPS:" << m_adjustedRecordingFPS << "(base:" << m_actualCameraFPS << ")";
-
-        // Emit the adjusted FPS to ensure playback matches the recording rate
-        emit videoRecorded(m_recordedFrames, m_adjustedRecordingFPS);
+        emit videoRecorded(processedFrames, m_adjustedRecordingFPS);
     }
 
     // Re-enable capture button for re-recording
@@ -5062,6 +5087,62 @@ cv::Mat Capture::createPersonMaskFromSegmentedFrame(const cv::Mat &segmentedFram
         qWarning() << "🌟 Failed to create person mask:" << e.what();
         return cv::Mat::zeros(segmentedFrame.size(), CV_8UC1);
     }
+}
+
+QList<QPixmap> Capture::processRecordedVideoWithLighting(const QList<QPixmap> &inputFrames, double fps)
+{
+    QList<QPixmap> outputFrames;
+    outputFrames.reserve(inputFrames.size());
+
+    const int total = inputFrames.size();
+    for (int i = 0; i < total; ++i) {
+        // Update progress to loading UI
+        int pct = (total > 0) ? ((i * 100) / total) : 100;
+        emit videoProcessingProgress(pct);
+
+        // Fetch aligned raw data if available
+        cv::Mat personRegion, personMask, background;
+        if (i < m_recordedRawPersonRegions.size()) personRegion = m_recordedRawPersonRegions.at(i);
+        if (i < m_recordedRawPersonMasks.size()) personMask = m_recordedRawPersonMasks.at(i);
+        if (i < m_recordedBackgroundFrames.size()) background = m_recordedBackgroundFrames.at(i);
+
+        // Convert current composed frame for fallback/compositing
+        QImage frameImage = inputFrames.at(i).toImage().convertToFormat(QImage::Format_BGR888);
+        cv::Mat composedFrame(frameImage.height(), frameImage.width(), CV_8UC3,
+                              const_cast<uchar*>(frameImage.bits()), frameImage.bytesPerLine());
+        cv::Mat composedCopy = composedFrame.clone();
+
+        cv::Mat finalFrame;
+        if (!personRegion.empty() && !personMask.empty() && m_lightingCorrector && m_lightingCorrector->isEnabled()) {
+            // Apply lighting to person-only region
+            cv::Mat litPerson = applyLightingToRawPersonRegion(personRegion, personMask);
+            // Resize to composed size
+            cv::Mat scaledPerson, scaledMask;
+            cv::resize(litPerson, scaledPerson, composedCopy.size());
+            cv::resize(personMask, scaledMask, composedCopy.size());
+            finalFrame = composedCopy.clone();
+            scaledPerson.copyTo(finalFrame, scaledMask);
+        } else if (m_lightingCorrector && m_lightingCorrector->isEnabled()) {
+            // Fallback: apply global lighting
+            finalFrame = m_lightingCorrector->applyGlobalLightingCorrection(composedCopy);
+        } else {
+            finalFrame = composedCopy;
+        }
+
+        // Convert back to QPixmap
+        QImage outImage = cvMatToQImage(finalFrame);
+        outputFrames.append(QPixmap::fromImage(outImage));
+    }
+
+    // Ensure 100% at end
+    emit videoProcessingProgress(100);
+
+    // Clear per-frame buffers for next recording
+    m_recordedRawPersonRegions.clear();
+    m_recordedRawPersonMasks.clear();
+    m_recordedBackgroundFrames.clear();
+
+    return outputFrames;
 }
 
 QString Capture::resolveTemplatePath(const QString &templatePath)

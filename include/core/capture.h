@@ -198,6 +198,7 @@ signals:
     void imageCaptured(const QPixmap &image);
     void imageCapturedWithComparison(const QPixmap &correctedImage, const QPixmap &originalImage);
     void videoRecorded(const QList<QPixmap> &frames, double fps);
+    void videoProcessingProgress(int percent);
     void showFinalOutputPage();
     void personDetectedInFrame();
     void foregroundPathChanged(const QString &foregroundPath);
@@ -456,6 +457,7 @@ private:
     cv::Mat applyPersonColorMatching(const cv::Mat &segmentedFrame);
     cv::Mat applyLightingToRawPersonRegion(const cv::Mat &personRegion, const cv::Mat &personMask);
     cv::Mat applyPostProcessingLighting();
+    QList<QPixmap> processRecordedVideoWithLighting(const QList<QPixmap> &inputFrames, double fps);
     
     // Lighting Correction Member
     LightingCorrector *m_lightingCorrector;
@@ -469,6 +471,10 @@ private:
     cv::Mat m_lastRawPersonRegion;
     cv::Mat m_lastRawPersonMask;
     cv::Mat m_lastTemplateBackground;
+    // Per-frame raw data for dynamic recording post-process
+    QList<cv::Mat> m_recordedRawPersonRegions;
+    QList<cv::Mat> m_recordedRawPersonMasks;
+    QList<cv::Mat> m_recordedBackgroundFrames;
     
     // Utility functions
     QImage cvMatToQImage(const cv::Mat &mat);
