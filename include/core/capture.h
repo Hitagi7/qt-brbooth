@@ -473,6 +473,7 @@ private:
     // Utility functions
     QImage cvMatToQImage(const cv::Mat &mat);
     cv::Mat qImageToCvMat(const QImage &image);
+    QString resolveTemplatePath(const QString &templatePath);
 };
 
 #endif // CAPTURE_H

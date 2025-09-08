@@ -24,6 +24,7 @@
 #include <QStackedLayout>
 #include <QThread>
 #include <QFileInfo>
+#include <QSet>
 #include <opencv2/opencv.hpp>
 #include <opencv2/objdetect.hpp>
 #include <opencv2/video.hpp>
@@ -2710,10 +2711,24 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
             
             // Store template background if using background template
             if (m_useBackgroundTemplate && !m_selectedBackgroundTemplate.isEmpty()) {
-                cv::Mat templateBg = cv::imread(m_selectedBackgroundTemplate.toStdString());
-                if (!templateBg.empty()) {
-                    cv::resize(templateBg, m_lastTemplateBackground, frame.size());
+                // Use cached template background if available, otherwise load it
+                if (m_lastTemplateBackground.empty() || lastBackgroundPath != m_selectedBackgroundTemplate) {
+                    QString resolvedPath = resolveTemplatePath(m_selectedBackgroundTemplate);
+                    if (!resolvedPath.isEmpty()) {
+                        cv::Mat templateBg = cv::imread(resolvedPath.toStdString());
+                        if (!templateBg.empty()) {
+                            cv::resize(templateBg, m_lastTemplateBackground, frame.size());
+                        qDebug() << "🎯 Template background cached for post-processing from:" << resolvedPath;
+                        } else {
+                            qWarning() << "🎯 Failed to load template background from resolved path:" << resolvedPath;
+                            m_lastTemplateBackground = cv::Mat(); // Clear cache
+                        }
+                    } else {
+                        qWarning() << "🎯 Could not resolve template background path:" << m_selectedBackgroundTemplate;
+                        m_lastTemplateBackground = cv::Mat(); // Clear cache
+                    }
                 }
+                // m_lastTemplateBackground is now ready to use (either from cache or freshly loaded)
             }
 
             // Scale the person region with person-only scaling for background template mode and dynamic video mode
@@ -2832,7 +2847,24 @@ cv::Mat Capture::createSegmentedFrameGPUOnly(const cv::Mat &frame, const std::ve
         } else if (m_useBackgroundTemplate && !m_selectedBackgroundTemplate.isEmpty()) {
             // GPU-only background template processing
             if (lastBackgroundPath != m_selectedBackgroundTemplate) {
-                cachedBackgroundTemplate = cv::imread(m_selectedBackgroundTemplate.toStdString());
+                QString resolvedPath = resolveTemplatePath(m_selectedBackgroundTemplate);
+                if (!resolvedPath.isEmpty()) {
+                    cachedBackgroundTemplate = cv::imread(resolvedPath.toStdString());
+                    if (cachedBackgroundTemplate.empty()) {
+                        qWarning() << "🎯 Failed to load background template from resolved path:" << resolvedPath;
+                        cachedBackgroundTemplate = cv::Mat::zeros(frame.size(), frame.type());
+                    } else {
+                        // Only show success message once per template change
+                        static QString lastLoggedTemplate;
+                        if (lastLoggedTemplate != m_selectedBackgroundTemplate) {
+                            qDebug() << "🎯 GPU: Background template loaded from resolved path:" << resolvedPath;
+                            lastLoggedTemplate = m_selectedBackgroundTemplate;
+                        }
+                    }
+                } else {
+                    qWarning() << "🎯 GPU: Could not resolve background template path:" << m_selectedBackgroundTemplate;
+                    cachedBackgroundTemplate = cv::Mat::zeros(frame.size(), frame.type());
+                }
                 lastBackgroundPath = m_selectedBackgroundTemplate;
             }
 
@@ -4840,10 +4872,15 @@ bool Capture::isGPULightingAvailable() const
 void Capture::setReferenceTemplate(const QString &templatePath)
 {
     if (m_lightingCorrector) {
-        if (m_lightingCorrector->setReferenceTemplate(templatePath)) {
-            qDebug() << "🌟 Reference template set for lighting correction:" << templatePath;
+        QString resolvedPath = resolveTemplatePath(templatePath);
+        if (!resolvedPath.isEmpty()) {
+            if (m_lightingCorrector->setReferenceTemplate(resolvedPath)) {
+                qDebug() << "🌟 Reference template set for lighting correction:" << resolvedPath;
+            } else {
+                qWarning() << "🌟 Failed to set reference template from resolved path:" << resolvedPath;
+            }
         } else {
-            qWarning() << "🌟 Failed to set reference template:" << templatePath;
+            qWarning() << "🌟 Could not resolve reference template path:" << templatePath;
         }
     }
 }
@@ -5025,4 +5062,43 @@ cv::Mat Capture::createPersonMaskFromSegmentedFrame(const cv::Mat &segmentedFram
         qWarning() << "🌟 Failed to create person mask:" << e.what();
         return cv::Mat::zeros(segmentedFrame.size(), CV_8UC1);
     }
+}
+
+QString Capture::resolveTemplatePath(const QString &templatePath)
+{
+    if (templatePath.isEmpty()) {
+        return QString();
+    }
+    
+    // Try multiple candidate paths to resolve the template path
+    QStringList candidates;
+    candidates << templatePath
+               << QDir::currentPath() + "/" + templatePath
+               << QCoreApplication::applicationDirPath() + "/" + templatePath
+               << QCoreApplication::applicationDirPath() + "/../" + templatePath
+               << QCoreApplication::applicationDirPath() + "/../../" + templatePath
+               << "../" + templatePath
+               << "../../" + templatePath
+               << "../../../" + templatePath;
+
+    // Find the first existing path
+    for (const QString &candidate : candidates) {
+        if (QFile::exists(candidate)) {
+            // Only show debug message for new paths to avoid spam
+            static QSet<QString> resolvedPaths;
+            if (!resolvedPaths.contains(templatePath)) {
+                qDebug() << "🎯 Template path resolved:" << templatePath << "-> " << candidate;
+                resolvedPaths.insert(templatePath);
+            }
+            return candidate;
+        }
+    }
+    
+    qWarning() << "🎯 Template path could not be resolved:" << templatePath;
+    qWarning() << "🎯 Tried paths:";
+    for (const QString &candidate : candidates) {
+        qWarning() << "    -" << candidate;
+    }
+    
+    return QString(); // Return empty string if no path found
 }
