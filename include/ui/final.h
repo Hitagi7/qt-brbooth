@@ -41,6 +41,7 @@ private slots:
 
 protected:
     void resizeEvent(QResizeEvent *event) override; // Override for handling widget resizing
+    void showEvent(QShowEvent *event) override; // Override to reset video to beginning when page is shown
 
 private:
     Ui::Final *ui;

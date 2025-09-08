@@ -155,16 +155,16 @@ Final::~Final()
 
 void Final::refreshDisplay()
 {
-    // If video frames are loaded, display the current frame
+    // If video frames are loaded, only ensure timer is running (first frame handled in setVideo)
     if (!m_videoFrames.isEmpty()) {
-        // playNextFrame() will handle getting the current frame and scaling it.
-        // We ensure the timer is running for continuous playback.
+        // We don't call playNextFrame() here anymore since setVideo() handles the first frame
+        // and the timer handles subsequent frames
         if (!videoPlaybackTimer->isActive()) {
             // Use the stored video FPS for correct playback speed
             int playbackIntervalMs = qMax(1, static_cast<int>(1000.0 / m_videoFPS));
             videoPlaybackTimer->start(playbackIntervalMs);
+            qDebug() << "🎬 Video timer restarted in refreshDisplay()";
         }
-        playNextFrame(); // Display the current frame (and advance for next call)
     }
     // If no video frames, but a single image is loaded
     else if (!m_lastLoadedImage.isNull()) {
@@ -225,6 +225,48 @@ void Final::resizeEvent(QResizeEvent *event)
     refreshDisplay();
 }
 
+void Final::showEvent(QShowEvent *event)
+{
+    QWidget::showEvent(event); // Call the base class implementation
+    
+    // Reset video playback to the beginning when the final page is shown
+    if (!m_videoFrames.isEmpty()) {
+        qDebug() << "🎬 Final page shown - resetting video to beginning";
+        
+        // Stop current playback
+        if (videoPlaybackTimer->isActive()) {
+            videoPlaybackTimer->stop();
+        }
+        
+        // Reset to frame 0
+        m_currentFrameIndex = 0;
+        
+        // Display the first frame immediately
+        QPixmap firstFrame = m_videoFrames.at(0);
+        QSize labelSize = ui->videoLabel->size();
+        QSize frameSize = firstFrame.size();
+        
+        // Only scale down if the frame is larger than the label
+        if (frameSize.width() > labelSize.width() || frameSize.height() > labelSize.height()) {
+            QPixmap scaledFrame = firstFrame.scaled(
+                labelSize,
+                Qt::KeepAspectRatio,
+                Qt::FastTransformation
+            );
+            ui->videoLabel->setPixmap(scaledFrame);
+        } else {
+            ui->videoLabel->setPixmap(firstFrame);
+        }
+        ui->videoLabel->setAlignment(Qt::AlignCenter);
+        
+        // Restart the timer for continuous playback from the beginning
+        int playbackIntervalMs = qMax(1, static_cast<int>(1000.0 / m_videoFPS));
+        videoPlaybackTimer->start(playbackIntervalMs);
+        
+        qDebug() << "🎬 Video reset to frame 0 and playback restarted";
+    }
+}
+
 void Final::setImage(const QPixmap &image)
 {
     // Stop video playback if active
@@ -251,18 +293,36 @@ void Final::setVideo(const QList<QPixmap> &frames, double fps)
     }
 
     m_videoFrames = frames; // Store the list of video frames
-    m_currentFrameIndex = 0;
+    m_currentFrameIndex = 0; // Start from the beginning
     m_videoFPS = fps; // Store the FPS for debugging and potential future use
     m_lastLoadedImage = QPixmap(); // Clear last image if switching to video
 
     if (!m_videoFrames.isEmpty()) {
         qDebug() << "Playing back video with " << m_videoFrames.size() << " frames at " << fps << " FPS.";
         
+        // Display the first frame immediately without advancing the index
+        QPixmap firstFrame = m_videoFrames.at(0);
+        QSize labelSize = ui->videoLabel->size();
+        QSize frameSize = firstFrame.size();
+        
+        // Only scale down if the frame is larger than the label
+        if (frameSize.width() > labelSize.width() || frameSize.height() > labelSize.height()) {
+            QPixmap scaledFrame = firstFrame.scaled(
+                labelSize,
+                Qt::KeepAspectRatio,
+                Qt::FastTransformation
+            );
+            ui->videoLabel->setPixmap(scaledFrame);
+        } else {
+            ui->videoLabel->setPixmap(firstFrame);
+        }
+        ui->videoLabel->setAlignment(Qt::AlignCenter);
+        
         // Calculate the correct playback interval based on the actual camera FPS
         int playbackIntervalMs = qMax(1, static_cast<int>(1000.0 / fps));
         videoPlaybackTimer->start(playbackIntervalMs);
         
-        refreshDisplay(); // Display the first frame immediately with proper scaling
+        qDebug() << "🎬 Video starts from frame 0, timer started with interval:" << playbackIntervalMs << "ms";
     } else {
         qWarning() << "No video frames provided for playback!";
         ui->videoLabel->clear(); // Clear display if no frames
@@ -311,9 +371,13 @@ void Final::playNextFrame()
         return;
     }
 
+    // Advance to the next frame first (this is called by timer for subsequent frames)
+    m_currentFrameIndex++;
+    
     // Loop video playback
     if (m_currentFrameIndex >= m_videoFrames.size()) {
         m_currentFrameIndex = 0;
+        qDebug() << "🔄 Video looped back to frame 0";
     }
 
     // Get the current frame - it's already scaled from the capture interface
@@ -334,8 +398,6 @@ void Final::playNextFrame()
         ui->videoLabel->setPixmap(currentFrame);
     }
     ui->videoLabel->setAlignment(Qt::AlignCenter);
-
-    m_currentFrameIndex++; // Advance to the next frame for the next timer timeout
 }
 
 // --- STANDARD SLOTS AND HELPER FUNCTIONS (unchanged from your original) ---

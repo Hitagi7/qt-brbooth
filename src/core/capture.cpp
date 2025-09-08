@@ -1433,6 +1433,12 @@ void Capture::showEvent(QShowEvent *event)
         enableSegmentationInCapture();
         qDebug() << "🖐️ Hand detection ENABLED - close your hand to trigger capture automatically";
         qDebug() << "🎯 Segmentation ENABLED for capture interface";
+
+        // Restore dynamic video background if a path was previously set
+        if (!m_dynamicVideoPath.isEmpty() && !m_useDynamicVideoBackground) {
+            qDebug() << "🎞️ Restoring dynamic video background:" << m_dynamicVideoPath;
+            enableDynamicVideoBackground(m_dynamicVideoPath);
+        }
     });
 }
 
@@ -1885,6 +1891,13 @@ void Capture::enableDynamicVideoBackground(const QString &videoPath)
     if (overlayImageLabel) {
         overlayImageLabel->hide();
     }
+    
+    // Clear foreground path to prevent it from being passed to final output
+    // This ensures foreground templates don't appear in final output when using dynamic templates
+    if (foreground) {
+        foreground->setSelectedForeground("");
+        qDebug() << "🎞️ Dynamic template enabled - foreground template cleared to prevent visibility in final output";
+    }
 }
 
 void Capture::disableDynamicVideoBackground()
@@ -1899,13 +1912,25 @@ void Capture::disableDynamicVideoBackground()
     if (m_dynamicVideoCap.isOpened()) m_dynamicVideoCap.release();
     m_dynamicGpuReader.release();
     m_dynamicVideoFrame.release();
-    m_dynamicVideoPath.clear();
+    // NOTE: Do NOT clear m_dynamicVideoPath here to preserve selection for restoration
+    // m_dynamicVideoPath.clear(); 
     m_useDynamicVideoBackground = false;
+    
+    // Note: We don't restore the foreground template here automatically
+    // as the user may have changed their selection while dynamic was active
+    // The foreground template will be restored when the user navigates back to foreground selection
 }
 
 bool Capture::isDynamicVideoBackgroundEnabled() const
 {
     return m_useDynamicVideoBackground;
+}
+
+void Capture::clearDynamicVideoPath()
+{
+    // Clear the stored dynamic video path to prevent auto-restoration
+    m_dynamicVideoPath.clear();
+    qDebug() << "🧹 Cleared dynamic video path for mode switching";
 }
 
 // Phase 1: Video Playback Timer Slot - Advances video frames at native frame rate
@@ -2513,25 +2538,42 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
                     lastBackgroundPath = m_selectedBackgroundTemplate;
                     qDebug() << "🎯 White background created for image6, size:" << frame.cols << "x" << frame.rows;
                 } else {
-                    // Convert Qt resource path to file system path for direct OpenCV loading
-                    QString filePath = m_selectedBackgroundTemplate;
-                    if (filePath.startsWith(":/background/")) {
-                        // Convert Qt resource path to actual file path
+                    // Resolve to an existing filesystem path similar to dynamic asset loading
+                    QString requestedPath = m_selectedBackgroundTemplate; // e.g., templates/background/bg1.png
 
-                        filePath = "D:/Users/Documents/Files/Coolege/Thesis/qt-brbooth/templates/background/" +
-                                  filePath.mid(filePath.lastIndexOf('/') + 1);
+                    QStringList candidates;
+                    candidates << requestedPath
+                               << QDir::currentPath() + "/" + requestedPath
+                               << QCoreApplication::applicationDirPath() + "/" + requestedPath
+                               << QCoreApplication::applicationDirPath() + "/../" + requestedPath
+                               << QCoreApplication::applicationDirPath() + "/../../" + requestedPath
+                               << "../" + requestedPath
+                               << "../../" + requestedPath
+                               << "../../../" + requestedPath;
+
+                    QString resolvedPath;
+                    for (const QString &p : candidates) {
+                        if (QFile::exists(p)) { resolvedPath = p; break; }
                     }
 
-                    // Load background image directly using OpenCV for better performance
-                    cv::Mat backgroundImage = cv::imread(filePath.toStdString());
-                    if (!backgroundImage.empty()) {
-                        // Resize background to match frame size (like original black background logic)
-                        cv::resize(backgroundImage, cachedBackgroundTemplate, frame.size(), 0, 0, cv::INTER_LINEAR);
-                        lastBackgroundPath = m_selectedBackgroundTemplate;
-                        qDebug() << "🎯 Background template cached and resized to" << frame.cols << "x" << frame.rows;
-                    } else {
-                        qWarning() << "🎯 Failed to load background template from:" << filePath << "- using black background";
+                    if (resolvedPath.isEmpty()) {
+                        qWarning() << "🎯 Background template not found in expected locations for request:" << requestedPath
+                                   << "- falling back to black background";
                         cachedBackgroundTemplate = cv::Mat::zeros(frame.size(), frame.type());
+                    } else {
+                        // Load background image directly using OpenCV for performance
+                        cv::Mat backgroundImage = cv::imread(resolvedPath.toStdString());
+                        if (!backgroundImage.empty()) {
+                            // Resize background to match frame size
+                            cv::resize(backgroundImage, cachedBackgroundTemplate, frame.size(), 0, 0, cv::INTER_LINEAR);
+                            lastBackgroundPath = m_selectedBackgroundTemplate;
+                            qDebug() << "🎯 Background template loaded from" << resolvedPath
+                                     << "and cached at" << frame.cols << "x" << frame.rows;
+                        } else {
+                            qWarning() << "🎯 Failed to decode background template from:" << resolvedPath
+                                       << "- using black background";
+                            cachedBackgroundTemplate = cv::Mat::zeros(frame.size(), frame.type());
+                        }
                     }
                 }
             }

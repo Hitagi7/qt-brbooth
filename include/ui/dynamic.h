@@ -32,6 +32,7 @@ public:
     void resetPage();
     void onDynamicPageShown(); // Slot to call when this page becomes visible
     void stopAllGifs(); // Public method to stop all GIFs
+    void restoreSelection(); // Restore the previously selected video template
 
 signals:
     void backtoLandingPage();
@@ -63,6 +64,7 @@ private:
     bool debounceActive;
     QPushButton* currentSelectedVideoWidget; // Stores the button that was last clicked (for highlighting)
     QString m_selectedVideoPath; // Absolute path for the selected video, emitted on confirm
+    QString m_lastSelectedVideoPath; // Store the last selected video path for persistence
 
     // Helper functions
     void updateGifLabelsGeometry();

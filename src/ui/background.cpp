@@ -119,17 +119,17 @@ void Background::processImageButtonClick(QPushButton *button)
     QString path;
 
     if (name == "image1")
-        path = ":/background/templates/background/bg1.png";
+        path = "templates/background/bg1.png";
     else if (name == "image2")
-        path = ":/background/templates/background/bg2.png";
+        path = "templates/background/bg2.png";
     else if (name == "image3")
-        path = ":/background/templates/background/bg3.png";
+        path = "templates/background/bg3.png";
     else if (name == "image4")
-        path = ":/background/templates/background/bg4.png";
+        path = "templates/background/bg4.png";
     else if (name == "image5")
-        path = ":/background/templates/background/bg5.png";
+        path = "templates/background/bg5.png";
     else if (name == "image6")
-        path = ":/background/templates/background/bg6.png";
+        path = "templates/background/bg6.png";
 
     if (!path.isEmpty()) {
         setSelectedBackground(path);

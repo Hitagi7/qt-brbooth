@@ -72,6 +72,7 @@ Dynamic::Dynamic(QWidget* parent)
 
     debounceActive = false;
     currentSelectedVideoWidget = nullptr;
+    m_lastSelectedVideoPath = ""; // Initialize last selected path
 
     // Debugging resource paths and supported formats
 #ifdef CV_VERSION
@@ -423,6 +424,9 @@ void Dynamic::onDynamicPageShown()
 
     // Ensure GIF labels are correctly sized for current button sizes
     updateGifLabelsGeometry();
+    
+    // Restore previous selection if any
+    restoreSelection();
 
     // Loop through buttons to ensure all GIFs are running and visible
     QList<QPushButton*> buttons;
@@ -488,6 +492,8 @@ void Dynamic::resetPage()
     if (ui->videoButton5) applyHighlightStyle(ui->videoButton5, false);
 
     currentSelectedVideoWidget = nullptr; // Clear current selection
+    // NOTE: Do NOT clear m_lastSelectedVideoPath here to preserve selection across navigation
+    // m_lastSelectedVideoPath should only be cleared when user explicitly changes selection or leaves dynamic mode
     qDebug() << "Dynamic::resetPage - Finished.";
 }
 
@@ -630,6 +636,23 @@ void Dynamic::processVideoClick(QObject *buttonObj)
     QString actualVideoPath = clickedButton->property("actualVideoPath").toString();
     qDebug() << "Dynamic::processVideoClick - Actual video path:" << actualVideoPath;
 
+    // Store the selected video path for persistence across navigation
+    if (!actualVideoPath.isEmpty()) {
+        // Convert to absolute path for consistent storage
+        QString absolutePath = actualVideoPath;
+        if (QFileInfo(actualVideoPath).isRelative()) {
+            QString appDir = QCoreApplication::applicationDirPath();
+            QString buildDir = QDir(appDir).absoluteFilePath("..");
+            if (actualVideoPath.startsWith("videos/", Qt::CaseInsensitive)) {
+                absolutePath = QDir(buildDir).absoluteFilePath(actualVideoPath);
+            } else {
+                absolutePath = QDir(appDir).absoluteFilePath(actualVideoPath);
+            }
+        }
+        m_lastSelectedVideoPath = absolutePath;
+        qDebug() << "Dynamic::processVideoClick - Updated m_lastSelectedVideoPath to:" << m_lastSelectedVideoPath;
+    }
+
     if (!actualVideoPath.isEmpty()) {
         // Stop and hide all GIFs before showing the fullscreen video (asynchronously)
         QTimer::singleShot(0, [this, actualVideoPath]() {
@@ -697,6 +720,7 @@ void Dynamic::showOverlayVideo(const QString& videoPath)
         }
     }
     m_selectedVideoPath = absolutePath;
+    m_lastSelectedVideoPath = absolutePath; // Store for persistence
     fullscreenPlayer->setSource(QUrl::fromLocalFile(absolutePath));
     
     // Show the stack widget (which contains both video and back button)
@@ -850,6 +874,49 @@ void Dynamic::stopAllGifs()
         
         qDebug() << "Dynamic::stopAllGifs - All GIFs stopped asynchronously.";
     });
+}
+
+void Dynamic::restoreSelection()
+{
+    qDebug() << "Dynamic::restoreSelection - Restoring previous selection:" << m_lastSelectedVideoPath;
+    
+    if (m_lastSelectedVideoPath.isEmpty()) {
+        qDebug() << "Dynamic::restoreSelection - No previous selection to restore";
+        return;
+    }
+    
+    // Find the button that corresponds to the last selected video path
+    QList<QPushButton*> buttons;
+    buttons << ui->videoButton1 << ui->videoButton2 << ui->videoButton3 << ui->videoButton4 << ui->videoButton5;
+    
+    for (QPushButton* button : buttons) {
+        if (button) {
+            QString buttonVideoPath = button->property("actualVideoPath").toString();
+            if (!buttonVideoPath.isEmpty()) {
+                // Convert to absolute path for comparison
+                QString absoluteButtonPath = buttonVideoPath;
+                if (QFileInfo(buttonVideoPath).isRelative()) {
+                    QString appDir = QCoreApplication::applicationDirPath();
+                    QString buildDir = QDir(appDir).absoluteFilePath("..");
+                    if (buttonVideoPath.startsWith("videos/", Qt::CaseInsensitive)) {
+                        absoluteButtonPath = QDir(buildDir).absoluteFilePath(buttonVideoPath);
+                    } else {
+                        absoluteButtonPath = QDir(appDir).absoluteFilePath(buttonVideoPath);
+                    }
+                }
+                
+                if (absoluteButtonPath == m_lastSelectedVideoPath) {
+                    // Found the matching button, restore its selection
+                    applyHighlightStyle(button, true);
+                    currentSelectedVideoWidget = button;
+                    qDebug() << "Dynamic::restoreSelection - Restored selection for button:" << button->objectName();
+                    return;
+                }
+            }
+        }
+    }
+    
+    qDebug() << "Dynamic::restoreSelection - Could not find matching button for path:" << m_lastSelectedVideoPath;
 }
 
 

@@ -43,6 +43,7 @@ SOURCES += \
     src/core/brbooth.cpp \
     src/core/camera.cpp \
     src/core/capture.cpp \
+    src/ui/loading.cpp \
     src/ui/background.cpp \
     src/ui/foreground.cpp \
     src/ui/dynamic.cpp \
@@ -59,6 +60,7 @@ HEADERS += \
     include/core/capture.h \
     include/core/videotemplate.h \
     include/core/common_types.h \
+    include/ui/loading.h \
     include/ui/background.h \
     include/ui/foreground.h \
     include/ui/dynamic.h \
@@ -75,6 +77,7 @@ FORMS += \
     ui/capture.ui \
     ui/dynamic.ui \
     ui/final.ui \
+    ui/loading.ui \
     ui/foreground.ui
 
 # Default rules for deployment.

@@ -128,6 +128,7 @@ public:
     void disableDynamicVideoBackground();
     bool isDynamicVideoBackgroundEnabled() const;
     void resetDynamicVideoToStart(); // Reset video to beginning for re-recording
+    void clearDynamicVideoPath(); // Clear dynamic video path for mode switching
     
     // Background Template Control Methods
     void setSelectedBackgroundTemplate(const QString &path);

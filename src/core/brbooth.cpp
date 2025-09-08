@@ -5,6 +5,7 @@
 #include "core/capture.h"
 #include "ui/dynamic.h"
 #include "ui/final.h"
+#include "ui/loading.h"
 #include "ui/foreground.h"
 #include "ui_brbooth.h"
 #include <QThread>
@@ -236,6 +237,11 @@ BRBooth::BRBooth(QWidget *parent)
     ui->stackedWidget->addWidget(finalOutputPage);
     finalOutputPageIndex = ui->stackedWidget->indexOf(finalOutputPage);
 
+    // Loading page (between capture and final)
+    loadingPage = new Loading(this);
+    ui->stackedWidget->addWidget(loadingPage);
+    loadingPageIndex = ui->stackedWidget->indexOf(loadingPage);
+
     // Set initial page
     showLandingPage();
 
@@ -323,6 +329,10 @@ BRBooth::BRBooth(QWidget *parent)
                 qDebug() << "🎯 Background template updated in capture:" << backgroundPath;
                 qDebug() << "🎯 Capture page background template set to:" << capturePage->getSelectedBackgroundTemplate();
             }
+            // Update loading text color based on background template
+            if (loadingPage) {
+                loadingPage->setLoadingTextColor(backgroundPath);
+            }
         });
     }
 
@@ -345,10 +355,44 @@ BRBooth::BRBooth(QWidget *parent)
                 showLandingPage(); // Fallback if lastVisitedPageIndex is unexpected
             }
         });
-        connect(capturePage, &Capture::showFinalOutputPage, this, &BRBooth::showFinalOutputPage);
+        // When capture completes, show Loading page first with preview
+        connect(capturePage, &Capture::showFinalOutputPage, this, [this]() {
+            if (loadingPage) {
+                loadingPage->setMessage("Loading Output...");
+                loadingPage->resetProgress();
+                // Prefer showing captured content as preview
+                // If a video was recorded, Capture emits videoRecorded before this signal
+                // Otherwise, imageCaptured is emitted
+                // Final already receives those; we can mirror to Loading by peeking at Final
+                // (alternatively: connect Capture->Loading directly if needed)
+            }
+            // Navigate to loading screen
+            ui->stackedWidget->setCurrentIndex(loadingPageIndex);
+
+            // Simulate processing: update progress bar and then show final
+            // For now, we just use a short timer. Replace with real progress later.
+            int totalDurationMs = 1500; // 1.5 seconds stub
+            int stepMs = 100;
+            int steps = totalDurationMs / stepMs;
+            for (int i = 1; i <= steps; ++i) {
+                QTimer::singleShot(i * stepMs, [this, i, steps]() {
+                    if (loadingPage) {
+                        int pct = (i * 100) / steps;
+                        loadingPage->setProgress(pct);
+                    }
+                    if (i == steps) {
+                        showFinalOutputPage();
+                    }
+                });
+            }
+        });
         connect(capturePage, &Capture::imageCaptured, finalOutputPage, &Final::setImage);
         connect(capturePage, &Capture::videoRecorded, finalOutputPage, &Final::setVideo);
         connect(capturePage, &Capture::foregroundPathChanged, finalOutputPage, &Final::setForegroundOverlay);
+        
+        // Also send captured content to Loading for preview
+        connect(capturePage, &Capture::imageCaptured, loadingPage, &Loading::setImage);
+        connect(capturePage, &Capture::videoRecorded, loadingPage, &Loading::setVideo);
     }
 
     if (finalOutputPage) {
@@ -589,12 +633,29 @@ void BRBooth::showCapturePage()
 
     // Camera will be started by page change handler when reaching capture page
 
-    // Pass the current foreground template to the final interface
-    if (foregroundPage && finalOutputPage) {
+    // Configure capture mode based on which page we're coming from
+    if (foregroundPage && finalOutputPage && lastVisitedPageIndex == backgroundPageIndex) {
+        // Coming from STATIC mode (background page) - set up static templates
         QString currentForegroundPath = foregroundPage->getSelectedForeground();
         if (!currentForegroundPath.isEmpty()) {
             finalOutputPage->setForegroundOverlay(currentForegroundPath);
+            qDebug() << "🎯 Static template mode: Setting foreground overlay:" << currentForegroundPath;
         }
+        
+        // CRITICAL: Clear any existing dynamic video background when switching to static mode
+        if (capturePage) {
+            capturePage->disableDynamicVideoBackground();
+            // Also clear the stored path to prevent auto-restoration
+            capturePage->clearDynamicVideoPath();
+            qDebug() << "🎯 Static template mode: Cleared dynamic video background";
+        }
+    } else if (lastVisitedPageIndex == dynamicPageIndex) {
+        // Coming from DYNAMIC mode - clear static templates
+        finalOutputPage->setForegroundOverlay("");
+        qDebug() << "🎯 Dynamic template mode: Clearing foreground overlay";
+        
+        // Dynamic video background will be restored by showEvent() if a path was stored
+        qDebug() << "🎯 Dynamic template mode: Video background will be restored by showEvent()";
     }
 
     ui->stackedWidget->setCurrentIndex(capturePageIndex);

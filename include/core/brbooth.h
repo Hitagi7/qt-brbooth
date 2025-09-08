@@ -14,6 +14,7 @@ class Background;
 class Capture;
 class Dynamic;
 class Final;
+class Loading;
 class Camera; // Forward declare Camera worker class
 
 QT_BEGIN_NAMESPACE
@@ -72,6 +73,7 @@ private:
     Dynamic *dynamicPage;
     Capture *capturePage;
     Final *finalOutputPage;
+    Loading *loadingPage;
 
     // Indices for the stacked widget pages
     int landingPageIndex;
@@ -79,6 +81,7 @@ private:
     int dynamicPageIndex;
     int backgroundPageIndex;
     int capturePageIndex;
+    int loadingPageIndex;
     int finalOutputPageIndex;
 
     // To keep track of the page visited before going to Capture or Final, for "back" navigation
