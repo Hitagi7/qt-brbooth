@@ -4920,6 +4920,9 @@ cv::Mat Capture::applyPersonLightingCorrection(const cv::Mat &inputImage, const 
 }
 
 
+// Forward declaration to ensure availability before use
+static cv::Mat guidedFilterGrayAlpha(const cv::Mat &guideBGR, const cv::Mat &hardMask, int radius, float eps);
+
 cv::Mat Capture::applyPostProcessingLighting()
 {
     qDebug() << "🎯 POST-PROCESSING: Apply lighting to raw person data and re-composite";
@@ -4930,20 +4933,101 @@ cv::Mat Capture::applyPostProcessingLighting()
         return m_lastSegmentedFrame.clone();
     }
     
-    // Start with the original segmented frame (which has the template background)
-    cv::Mat result = m_lastSegmentedFrame.clone();
+    // Start from a clean background template/dynamic video frame (no person composited yet)
+    cv::Mat result;
+    cv::Mat cleanBackground;
+    if (!m_lastTemplateBackground.empty()) {
+        cleanBackground = m_lastTemplateBackground.clone();
+    } else if (m_useBackgroundTemplate && !m_selectedBackgroundTemplate.isEmpty()) {
+        QString resolvedPath = resolveTemplatePath(m_selectedBackgroundTemplate);
+        cv::Mat bg = cv::imread(resolvedPath.toStdString());
+        if (!bg.empty()) {
+            cv::resize(bg, cleanBackground, m_lastSegmentedFrame.size());
+        }
+    }
+    if (cleanBackground.empty()) {
+        // Fallback to a blank frame matching the output size if no cached template available
+        cleanBackground = cv::Mat::zeros(m_lastSegmentedFrame.size(), m_lastSegmentedFrame.type());
+    }
+    result = cleanBackground.clone();
     
-    // Apply lighting to the raw person region
+    // Apply lighting to the raw person region (post-processing as in original)
     cv::Mat lightingCorrectedPerson = applyLightingToRawPersonRegion(m_lastRawPersonRegion, m_lastRawPersonMask);
     
-    // Scale the lighting-corrected person to match the segmented frame size
+    // Scale the lighting-corrected person to match the segmented frame size for blending
     cv::Mat scaledPerson, scaledMask;
     cv::resize(lightingCorrectedPerson, scaledPerson, result.size());
     cv::resize(m_lastRawPersonMask, scaledMask, result.size());
     
-    // Composite the lighting-corrected person onto the result
-    // This ensures the background template is never modified
-    scaledPerson.copyTo(result, scaledMask);
+    // Soft-edge alpha blend only around the person (robust feather, background untouched)
+    try {
+        // Ensure binary mask 0/255
+        cv::Mat binMask;
+        if (scaledMask.type() != CV_8UC1) {
+            cv::cvtColor(scaledMask, binMask, cv::COLOR_BGR2GRAY);
+        } else {
+            binMask = scaledMask.clone();
+        }
+        cv::threshold(binMask, binMask, 127, 255, cv::THRESH_BINARY);
+
+        // First: shrink mask slightly to avoid fringe, then hard-copy interior
+        cv::Mat interiorMask;
+        cv::erode(binMask, interiorMask, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(2*2+1, 2*2+1))); // ~2px shrink
+        scaledPerson.copyTo(result, interiorMask);
+
+        // Use clean template/dynamic background for edge blending
+        cv::Mat backgroundFrame = cleanBackground;
+
+        // Guided image filtering to refine a soft alpha only on a thin edge ring
+        // Guidance is the current output (result) which already has person hard-copied
+        const int gfRadius = 15; // window size
+        const float gfEps = 1e-3f; // regularization
+        cv::Mat alphaFloat = guidedFilterGrayAlpha(result, binMask, gfRadius, gfEps);
+        // Build thin inner/outer rings around the boundary for localized updates only
+        cv::Mat inner, outer, ringInner, ringOuter;
+        cv::erode(binMask, inner, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(2*1+1, 2*1+1))); // shrink by ~1px for inner ring
+        cv::dilate(binMask, outer, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(2*4+1, 2*4+1))); // expand by ~4px for outer ring
+        cv::subtract(binMask, inner, ringInner);   // just inside the boundary
+        cv::subtract(outer, binMask, ringOuter);   // just outside the boundary
+        // Clamp strictly
+        alphaFloat.setTo(1.0f, interiorMask > 0);  // full person interior remains 1
+        alphaFloat.setTo(0.0f, outer == 0); // outside remains 0
+        // Strongly bias ring blend toward template to eliminate colored outlines
+        alphaFloat = alphaFloat * 0.3f;
+
+        // Optional de-spill strictly on edge ring (disabled to avoid hue shifts)
+        // To enable, reduce saturation multiplicatively only on the ring to prevent tinting.
+        //{
+        //    cv::Mat ring; cv::subtract(outer, inner, ring);
+        //    if (cv::countNonZero(ring) > 0) {
+        //        cv::Mat hsv; cv::cvtColor(scaledPerson, hsv, cv::COLOR_BGR2HSV);
+        //        std::vector<cv::Mat> ch; cv::split(hsv, ch);
+        //        cv::Mat satScaled; cv::multiply(ch[1], 0.6, satScaled, 1.0, ch[1].type());
+        //        satScaled.copyTo(ch[1], ring);
+        //        cv::merge(ch, hsv);
+        //        cv::cvtColor(hsv, scaledPerson, cv::COLOR_HSV2BGR);
+        //    }
+        //}
+
+        // Composite only where outer>0 to avoid touching background (use original colors)
+        cv::Mat personF, bgF; scaledPerson.convertTo(personF, CV_32F); backgroundFrame.convertTo(bgF, CV_32F);
+        std::vector<cv::Mat> a3 = {alphaFloat, alphaFloat, alphaFloat};
+        cv::Mat alpha3; cv::merge(a3, alpha3);
+        // Inner ring: solve for decontaminated foreground using matting equation, then composite
+        // F_clean = (I - (1 - alpha) * B) / max(alpha, eps)
+        cv::Mat alphaSafe;
+        cv::max(alpha3, 0.05f, alphaSafe); // avoid division by very small alpha
+        cv::Mat Fclean = (personF - bgF.mul(1.0f - alpha3)).mul(1.0f / alphaSafe);
+        cv::Mat compF = Fclean.mul(alpha3) + bgF.mul(1.0f - alpha3);
+        cv::Mat out8u; compF.convertTo(out8u, CV_8U);
+        out8u.copyTo(result, ringInner);
+
+        // Outer ring: copy template directly to eliminate any colored outline
+        backgroundFrame.copyTo(result, ringOuter);
+    } catch (const cv::Exception &e) {
+        qWarning() << "🎯 Soft-edge blend failed:" << e.what();
+        scaledPerson.copyTo(result, scaledMask);
+    }
     
     // Save debug images
     cv::imwrite("debug_post_original_segmented.png", m_lastSegmentedFrame);
@@ -5062,6 +5146,57 @@ cv::Mat Capture::createPersonMaskFromSegmentedFrame(const cv::Mat &segmentedFram
         qWarning() << "🌟 Failed to create person mask:" << e.what();
         return cv::Mat::zeros(segmentedFrame.size(), CV_8UC1);
     }
+}
+
+// Scaffold: Guided filter-based feather alpha builder (stub)
+// Currently returns normalized hard mask; swap in a true guided filter later if needed
+static cv::Mat buildGuidedFeatherAlphaStub(const cv::Mat &guideBGR, const cv::Mat &hardMask)
+{
+    Q_UNUSED(guideBGR);
+    cv::Mat alphaFloat;
+    if (hardMask.empty()) return alphaFloat;
+    hardMask.convertTo(alphaFloat, CV_32F, 1.0f / 255.0f);
+    return alphaFloat;
+}
+
+// Guided filter (gray guidance) for refining a soft alpha from a hard mask without color shifts
+static cv::Mat guidedFilterGrayAlpha(const cv::Mat &guideBGR, const cv::Mat &hardMask, int radius, float eps)
+{
+    CV_Assert(!guideBGR.empty());
+    CV_Assert(!hardMask.empty());
+
+    cv::Mat I8, I, p;
+    if (guideBGR.channels() == 3) {
+        cv::cvtColor(guideBGR, I8, cv::COLOR_BGR2GRAY);
+    } else {
+        I8 = guideBGR;
+    }
+    I8.convertTo(I, CV_32F, 1.0f / 255.0f);
+    if (hardMask.type() != CV_32F) {
+        hardMask.convertTo(p, CV_32F, 1.0f / 255.0f);
+    } else {
+        p = hardMask;
+    }
+
+    cv::Mat mean_I, mean_p, corr_I, corr_Ip;
+    cv::boxFilter(I, mean_I, CV_32F, cv::Size(radius, radius));
+    cv::boxFilter(p, mean_p, CV_32F, cv::Size(radius, radius));
+    cv::boxFilter(I.mul(I), corr_I, CV_32F, cv::Size(radius, radius));
+    cv::boxFilter(I.mul(p), corr_Ip, CV_32F, cv::Size(radius, radius));
+
+    cv::Mat var_I = corr_I - mean_I.mul(mean_I);
+    cv::Mat cov_Ip = corr_Ip - mean_I.mul(mean_p);
+
+    cv::Mat a = cov_Ip / (var_I + eps);
+    cv::Mat b = mean_p - a.mul(mean_I);
+
+    cv::Mat mean_a, mean_b;
+    cv::boxFilter(a, mean_a, CV_32F, cv::Size(radius, radius));
+    cv::boxFilter(b, mean_b, CV_32F, cv::Size(radius, radius));
+
+    cv::Mat q = mean_a.mul(I) + mean_b;
+    cv::Mat alpha; cv::min(cv::max(q, 0.0f), 1.0f, alpha);
+    return alpha;
 }
 
 QString Capture::resolveTemplatePath(const QString &templatePath)
