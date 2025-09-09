@@ -197,6 +197,7 @@ signals:
     void backtoPreviousPage();
     void imageCaptured(const QPixmap &image);
     void imageCapturedWithComparison(const QPixmap &correctedImage, const QPixmap &originalImage);
+    void imageCapturedForLoading(const QPixmap &originalImage); // Original image for loading page preview
     void videoRecorded(const QList<QPixmap> &frames, double fps);
     void videoRecordedWithComparison(const QList<QPixmap> &correctedFrames, const QList<QPixmap> &originalFrames, double fps);
     void videoRecordedForLoading(const QList<QPixmap> &originalFrames, double fps); // Original frames for loading page preview

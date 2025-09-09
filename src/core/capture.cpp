@@ -1926,9 +1926,9 @@ void Capture::performImageCapture()
 
         m_capturedImage = scaledPixmap;
         
-        // Emit appropriate signal based on whether we have comparison images
+        // 🌟 LOADING UI INTEGRATION: Show loading page with original frame background
         if (m_hasLightingComparison && !m_originalCapturedImage.empty()) {
-            // Convert original image to QPixmap for comparison
+            // Convert original image to QPixmap for preview and comparison
             QImage originalQImage = cvMatToQImage(m_originalCapturedImage);
             QPixmap originalPixmap = QPixmap::fromImage(originalQImage);
             
@@ -1956,11 +1956,89 @@ void Capture::performImageCapture()
                 }
             }
             
-            emit imageCapturedWithComparison(m_capturedImage, scaledOriginalPixmap);
-            qDebug() << "🎯 Emitted comparison images - corrected and original versions";
+            // 🌟 FIRST: Send original image to loading page for background preview
+            qDebug() << "🌟 STATIC: Sending original image to loading page for background";
+            emit imageCapturedForLoading(scaledOriginalPixmap);
+            
+            // 🌟 THEN: Show loading UI with original image background
+            qDebug() << "🌟 STATIC: Showing loading UI with original image background";
+            emit showLoadingPage();
+            
+            // 🌟 START: Progress simulation for static processing
+            emit videoProcessingProgress(0);
+            
+            // 🌟 PROGRESS: Simulate processing stages with realistic timing
+            QTimer::singleShot(200, [this]() {
+                emit videoProcessingProgress(25);
+                qDebug() << "🌟 STATIC: Processing progress 25%";
+            });
+            
+            QTimer::singleShot(600, [this]() {
+                emit videoProcessingProgress(50);
+                qDebug() << "🌟 STATIC: Processing progress 50%";
+            });
+            
+            QTimer::singleShot(1000, [this]() {
+                emit videoProcessingProgress(75);
+                qDebug() << "🌟 STATIC: Processing progress 75%";
+            });
+            
+            QTimer::singleShot(1400, [this]() {
+                emit videoProcessingProgress(90);
+                qDebug() << "🌟 STATIC: Processing progress 90%";
+            });
+            
+            // 🌟 FINALLY: Send processed image to final output page (after processing simulation)
+            QTimer::singleShot(1800, [this, scaledOriginalPixmap]() {
+                emit videoProcessingProgress(100);
+                qDebug() << "🌟 STATIC: Processing complete - sending to final output";
+                emit imageCapturedWithComparison(m_capturedImage, scaledOriginalPixmap);
+                emit showFinalOutputPage();
+            });
+            
+            qDebug() << "🎯 Emitted static image with loading UI flow - corrected and original versions";
         } else {
-        emit imageCaptured(m_capturedImage);
-            qDebug() << "🎯 Emitted single image (no lighting comparison)";
+            // No comparison available - send to loading page first, then final page
+            qDebug() << "🌟 STATIC: Sending single image to loading page";
+            emit imageCapturedForLoading(m_capturedImage);
+            
+            qDebug() << "� STATIC: Showing loading UI";
+            emit showLoadingPage();
+            
+            // Send to final output page with progress simulation
+            // 🌟 START: Progress simulation for static processing
+            emit videoProcessingProgress(0);
+            
+            // 🌟 PROGRESS: Simulate processing stages with realistic timing
+            QTimer::singleShot(200, [this]() {
+                emit videoProcessingProgress(25);
+                qDebug() << "🌟 STATIC: Processing progress 25%";
+            });
+            
+            QTimer::singleShot(600, [this]() {
+                emit videoProcessingProgress(50);
+                qDebug() << "🌟 STATIC: Processing progress 50%";
+            });
+            
+            QTimer::singleShot(1000, [this]() {
+                emit videoProcessingProgress(75);
+                qDebug() << "🌟 STATIC: Processing progress 75%";
+            });
+            
+            QTimer::singleShot(1400, [this]() {
+                emit videoProcessingProgress(90);
+                qDebug() << "🌟 STATIC: Processing progress 90%";
+            });
+            
+            // Send to final output page after processing simulation
+            QTimer::singleShot(1800, [this]() {
+                emit videoProcessingProgress(100);
+                qDebug() << "🌟 STATIC: Processing complete - sending single image to final output";
+                emit imageCaptured(m_capturedImage);
+                emit showFinalOutputPage();
+            });
+            
+            qDebug() << "🎯 Emitted single image with loading UI flow";
         }
         
         qDebug() << "Image captured (includes background template and segmentation).";
@@ -1969,7 +2047,6 @@ void Capture::performImageCapture()
         qWarning() << "Failed to capture image: original camera image is empty.";
         QMessageBox::warning(this, "Capture Failed", "No camera feed available to capture an image.");
     }
-    emit showFinalOutputPage();
 }
 
 QImage Capture::cvMatToQImage(const cv::Mat &mat)
