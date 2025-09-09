@@ -129,6 +129,35 @@ void Loading::setVideo(const QList<QPixmap> &frames, double fps)
 	}
 }
 
+void Loading::setVideoWithComparison(const QList<QPixmap> &frames, const QList<QPixmap> &originalFrames, double fps)
+{
+	if (!m_previewLabel) ensureLayeredLayout();
+	m_videoFrames = frames; // Store processed frames for reference
+	m_currentFrameIndex = 0;
+	m_videoFPS = fps > 0 ? fps : 30.0;
+	
+	qDebug() << "🌟 Loading: Set video with comparison - Processed:" << frames.size() 
+	         << "Original:" << originalFrames.size() << "frames";
+	qDebug() << "🌟 Loading: Using ORIGINAL frame as background (before lighting correction)";
+	
+	// 🌟 Use ORIGINAL frame as background (before lighting correction is applied)
+	if (!originalFrames.isEmpty()) {
+		m_previewLabel->setPixmap(originalFrames.first());
+		m_previewLabel->show();
+		qDebug() << "🌟 Loading: Set background to original frame (pre-lighting correction)";
+	} else if (!m_videoFrames.isEmpty()) {
+		// Fallback to processed frame if no original available
+		m_previewLabel->setPixmap(m_videoFrames.first());
+		m_previewLabel->show();
+		qDebug() << "🌟 Loading: Fallback to processed frame (no original available)";
+	}
+	
+	// Stop any existing video timer
+	if (m_videoTimer) {
+		m_videoTimer->stop();
+	}
+}
+
 void Loading::clearPreview()
 {
 	if (m_videoTimer) m_videoTimer->stop();

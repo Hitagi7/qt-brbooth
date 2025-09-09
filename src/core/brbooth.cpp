@@ -355,45 +355,32 @@ BRBooth::BRBooth(QWidget *parent)
                 showLandingPage(); // Fallback if lastVisitedPageIndex is unexpected
             }
         });
-        // When capture completes, show Loading page first with preview
-        connect(capturePage, &Capture::showFinalOutputPage, this, [this]() {
+        
+        // Connect the new showLoadingPage signal to immediately show loading UI
+        connect(capturePage, &Capture::showLoadingPage, this, [this]() {
+            qDebug() << "🌟 Switching to loading page for post-processing";
             if (loadingPage) {
-                loadingPage->setMessage("Loading Output...");
+                loadingPage->setMessage("Processing Video...");
                 loadingPage->resetProgress();
-                // Prefer showing captured content as preview
-                // If a video was recorded, Capture emits videoRecorded before this signal
-                // Otherwise, imageCaptured is emitted
-                // Final already receives those; we can mirror to Loading by peeking at Final
-                // (alternatively: connect Capture->Loading directly if needed)
             }
-            // Navigate to loading screen
             ui->stackedWidget->setCurrentIndex(loadingPageIndex);
-
-            // Simulate processing: update progress bar and then show final
-            // For now, we just use a short timer. Replace with real progress later.
-            int totalDurationMs = 1500; // 1.5 seconds stub
-            int stepMs = 100;
-            int steps = totalDurationMs / stepMs;
-            for (int i = 1; i <= steps; ++i) {
-                QTimer::singleShot(i * stepMs, [this, i, steps]() {
-                    if (loadingPage) {
-                        int pct = (i * 100) / steps;
-                        loadingPage->setProgress(pct);
-                    }
-                    if (i == steps) {
-                        showFinalOutputPage();
-                    }
-                });
-            }
+        });
+        
+        // When capture completes, show final output page directly
+        connect(capturePage, &Capture::showFinalOutputPage, this, [this]() {
+            qDebug() << "🌟 Post-processing complete - showing final output page";
+            ui->stackedWidget->setCurrentIndex(finalOutputPageIndex);
         });
         connect(capturePage, &Capture::imageCaptured, finalOutputPage, &Final::setImage);
         connect(capturePage, &Capture::imageCapturedWithComparison, finalOutputPage, &Final::setImageWithComparison);
         connect(capturePage, &Capture::videoRecorded, finalOutputPage, &Final::setVideo);
+        connect(capturePage, &Capture::videoRecordedWithComparison, finalOutputPage, &Final::setVideoWithComparison);
         connect(capturePage, &Capture::foregroundPathChanged, finalOutputPage, &Final::setForegroundOverlay);
         
         // Also send captured content to Loading for preview
         connect(capturePage, &Capture::imageCaptured, loadingPage, &Loading::setImage);
         connect(capturePage, &Capture::videoRecorded, loadingPage, &Loading::setVideo);
+        connect(capturePage, &Capture::videoRecordedForLoading, loadingPage, &Loading::setVideo); // Original frames for loading background
         connect(capturePage, &Capture::videoProcessingProgress, loadingPage, &Loading::setProgress);
     }
 

@@ -29,6 +29,7 @@ public:
     // Preview content shown behind the progress bar
     void setImage(const QPixmap &image);
     void setVideo(const QList<QPixmap> &frames, double fps);
+    void setVideoWithComparison(const QList<QPixmap> &frames, const QList<QPixmap> &originalFrames, double fps);
     void clearPreview();
     
     // Change loading text color based on background template

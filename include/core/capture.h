@@ -198,7 +198,10 @@ signals:
     void imageCaptured(const QPixmap &image);
     void imageCapturedWithComparison(const QPixmap &correctedImage, const QPixmap &originalImage);
     void videoRecorded(const QList<QPixmap> &frames, double fps);
+    void videoRecordedWithComparison(const QList<QPixmap> &correctedFrames, const QList<QPixmap> &originalFrames, double fps);
+    void videoRecordedForLoading(const QList<QPixmap> &originalFrames, double fps); // Original frames for loading page preview
     void videoProcessingProgress(int percent);
+    void showLoadingPage(); // Show loading UI during post-processing
     void showFinalOutputPage();
     void personDetectedInFrame();
     void foregroundPathChanged(const QString &foregroundPath);
@@ -265,6 +268,7 @@ private:
     VideoTemplate m_currentVideoTemplate;
     int m_recordedSeconds;
     QList<QPixmap> m_recordedFrames;
+    QList<QPixmap> m_originalRecordedFrames; // Frames before lighting correction for comparison
     QPixmap m_capturedImage;
 
     // Hybrid stacked layout components
@@ -420,6 +424,9 @@ private:
     cv::Mat createSegmentedFrame(const cv::Mat &frame, const std::vector<cv::Rect> &detections);
     cv::Mat enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect &detection);
     
+    // 🚀 Lightweight Processing for Recording Performance
+    cv::Mat createLightweightSegmentedFrame(const cv::Mat &frame);
+    
     // Phase 2A: GPU-Only Processing Methods
     void initializeGPUOnlyProcessing();
     bool isGPUOnlyProcessingAvailable() const;
@@ -459,13 +466,24 @@ private:
     cv::Mat applyPostProcessingLighting();
     QList<QPixmap> processRecordedVideoWithLighting(const QList<QPixmap> &inputFrames, double fps);
     
+    // 🚀 Optimized Async Lighting Processing (POST-PROCESSING ONLY)
+    void initializeAsyncLightingSystem();
+    void cleanupAsyncLightingSystem();
+    // REMOVED: Real-time lighting methods - lighting only applied in post-processing
+    
     // Lighting Correction Member
     LightingCorrector *m_lightingCorrector;
+    
+    // 🚀 Simplified Lighting Processing (POST-PROCESSING ONLY)
+    QThread *m_lightingProcessingThread;      // Keep for future use if needed
+    QFutureWatcher<QList<QPixmap>> *m_lightingWatcher; // Keep for future use if needed
+    QMutex m_lightingMutex;                   // Thread safety for lighting operations
     
     // Lighting Comparison Storage
     cv::Mat m_originalCapturedImage;      // Original image without lighting correction
     cv::Mat m_lightingCorrectedImage;     // Image with lighting correction applied
     bool m_hasLightingComparison;         // Whether we have both versions for comparison
+    bool m_hasVideoLightingComparison;    // Whether we have both video versions for comparison
     
     // Raw Person Data for Post-Processing
     cv::Mat m_lastRawPersonRegion;

@@ -38,6 +38,8 @@
 #include <QtConcurrent/QtConcurrent>
 #include <QMutexLocker>
 #include <chrono>
+#include <QFutureWatcher>
+#include "algorithms/lighting_correction/lighting_corrector.h"
 
 Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, QThread *existingCameraThread)
     : QWidget(parent)
@@ -140,10 +142,14 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     , m_cachedPixmap(640, 480)
     // Lighting Correction Member
     , m_lightingCorrector(nullptr)
+    // 🚀 Simplified Lighting Processing (POST-PROCESSING ONLY)
+    , m_lightingProcessingThread(nullptr)
+    , m_lightingWatcher(nullptr)
     // Lighting Comparison Storage
     , m_originalCapturedImage()
     , m_lightingCorrectedImage()
     , m_hasLightingComparison(false)
+    , m_hasVideoLightingComparison(false)
 
 {
     ui->setupUi(this);
@@ -172,6 +178,9 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     
     // Initialize lighting correction system
     initializeLightingCorrection();
+    
+    // 🚀 Initialize async lighting system
+    initializeAsyncLightingSystem();
 
     setContentsMargins(0, 0, 0, 0);
 
@@ -423,6 +432,9 @@ Capture::~Capture()
         delete m_lightingCorrector; 
         m_lightingCorrector = nullptr; 
     }
+    
+    // 🚀 Cleanup async lighting system
+    cleanupAsyncLightingSystem();
 
     // DO NOT DELETE cameraWorker or cameraThread here.
     // They are passed in as existing objects, implying Capture does not own them.
@@ -785,6 +797,14 @@ void Capture::captureRecordingFrame()
     if (!m_isRecording)
         return;
 
+    // 🚀 CRASH PREVENTION: Memory safety check
+    const int MAX_FRAMES = 3000; // Prevent memory overflow (100 seconds at 30 FPS)
+    if (m_recordedFrames.size() >= MAX_FRAMES) {
+        qWarning() << "🚀 RECORDING: Maximum frame limit reached (" << MAX_FRAMES << ") - stopping recording";
+        stopRecording();
+        return;
+    }
+
     // 🚀 CAPTURE EXACTLY WHAT'S DISPLAYED ON SCREEN (with video template)
     QPixmap currentDisplayPixmap;
 
@@ -812,21 +832,60 @@ void Capture::captureRecordingFrame()
             return;
         }
 
-        // Convert to QPixmap for recording
-        QImage qImage = cvMatToQImage(frameToRecord);
-        currentDisplayPixmap = QPixmap::fromImage(qImage);
+        // 🚀 CRASH PREVENTION: Safe conversion to QPixmap for recording
+        try {
+            QImage qImage = cvMatToQImage(frameToRecord);
+            if (qImage.isNull()) {
+                qWarning() << "🚀 RECORDING: Failed to convert frame to QImage - skipping frame";
+                return; // Skip this frame to prevent crash
+            }
+            currentDisplayPixmap = QPixmap::fromImage(qImage);
+            if (currentDisplayPixmap.isNull()) {
+                qWarning() << "🚀 RECORDING: Failed to convert QImage to QPixmap - skipping frame";
+                return; // Skip this frame to prevent crash
+            }
+        } catch (const std::exception& e) {
+            qWarning() << "🚀 RECORDING: Exception during frame conversion:" << e.what() << "- skipping frame";
+            return; // Skip this frame to prevent crash
+        }
     }
 
-    // Add the current display directly to recorded frames (no additional processing needed)
-    m_recordedFrames.append(currentDisplayPixmap);
-    qDebug() << "🚀 DIRECT CAPTURE: Display frame captured directly, total frames:" << m_recordedFrames.size();
+    // 🚀 CRASH PREVENTION: Safe frame recording
+    try {
+        if (currentDisplayPixmap.isNull()) {
+            qWarning() << "🚀 RECORDING: Null pixmap - cannot record frame";
+            return;
+        }
+        
+        // Add the current display directly to recorded frames (no additional processing needed)
+        m_recordedFrames.append(currentDisplayPixmap);
+        qDebug() << "🚀 DIRECT CAPTURE: Display frame captured safely, total frames:" << m_recordedFrames.size();
+    } catch (const std::exception& e) {
+        qWarning() << "🚀 RECORDING: Exception during frame recording:" << e.what();
+        return;
+    }
 
-    // Also store per-frame raw person and background data for post lighting processing in dynamic output
+    // 🚀 CRASH PREVENTION: Safe raw person data recording for post-processing
     if ((m_displayMode == SegmentationMode || m_displayMode == RectangleMode)) {
-        if (!m_lastRawPersonRegion.empty() && !m_lastRawPersonMask.empty()) {
-            m_recordedRawPersonRegions.append(m_lastRawPersonRegion.clone());
-            m_recordedRawPersonMasks.append(m_lastRawPersonMask.clone());
-        } else {
+        try {
+            if (!m_lastRawPersonRegion.empty() && !m_lastRawPersonMask.empty()) {
+                cv::Mat personRegionCopy = m_lastRawPersonRegion.clone();
+                cv::Mat personMaskCopy = m_lastRawPersonMask.clone();
+                
+                if (!personRegionCopy.empty() && !personMaskCopy.empty()) {
+                    m_recordedRawPersonRegions.append(personRegionCopy);
+                    m_recordedRawPersonMasks.append(personMaskCopy);
+                } else {
+                    qWarning() << "🚀 RECORDING: Failed to clone person data - using empty mats";
+                    m_recordedRawPersonRegions.append(cv::Mat());
+                    m_recordedRawPersonMasks.append(cv::Mat());
+                }
+            } else {
+                m_recordedRawPersonRegions.append(cv::Mat());
+                m_recordedRawPersonMasks.append(cv::Mat());
+            }
+        } catch (const std::exception& e) {
+            qWarning() << "🚀 RECORDING: Exception during person data recording:" << e.what();
             m_recordedRawPersonRegions.append(cv::Mat());
             m_recordedRawPersonMasks.append(cv::Mat());
         }
@@ -1092,15 +1151,31 @@ void Capture::setupDebugDisplay()
     // connect(handDetectionButton, &QPushButton::clicked, this, &Capture::toggleHandDetection);
     // debugLayout->addWidget(handDetectionButton);
 
+    // 🚀 PERFORMANCE OPTIMIZATION: Remove lighting mode toggle button (post-processing only)
+    // QPushButton *lightingModeButton = new QPushButton("Toggle Lighting Mode", debugWidget);
+    // lightingModeButton->setStyleSheet("QPushButton { color: white; font-size: 12px; background-color: #ff6600; border: 1px solid white; padding: 5px; border-radius: 3px; }");
+    // connect(lightingModeButton, &QPushButton::clicked, this, &Capture::toggleLightingMode);
+    // debugLayout->addWidget(lightingModeButton);
+
+    // Performance mode toggle button (simplified - only controls debug logging)
+    QPushButton *performanceButton = new QPushButton("Toggle Debug Mode", debugWidget);
+    performanceButton->setStyleSheet("QPushButton { color: white; font-size: 12px; background-color: #9c27b0; border: 1px solid white; padding: 5px; border-radius: 3px; }");
+    connect(performanceButton, &QPushButton::clicked, this, [this]() {
+        static bool debugMode = true;
+        debugMode = !debugMode;
+        qDebug() << "🚀 Debug mode:" << (debugMode ? "ENABLED (verbose logging)" : "DISABLED (quiet mode)");
+    });
+    debugLayout->addWidget(performanceButton);
+
     // Performance tips label
-    QLabel *tipsLabel = new QLabel("Press 'S' to toggle detection\nPress 'G' to toggle segmentation/rectangles\nPress 'D' to hide/show\nPress 'P' for stats", debugWidget);
+    QLabel *tipsLabel = new QLabel("Press 'S' to toggle detection\nPress 'G' to toggle segmentation/rectangles\nPress 'D' to hide/show\nPress 'P' for stats\nPress 'L' for lighting toggle\n\nLIGHTING: POST-PROCESSING ONLY", debugWidget);
     tipsLabel->setStyleSheet("QLabel { color: #cccccc; font-size: 10px; font-style: italic; }");
     debugLayout->addWidget(tipsLabel);
 
     // Add debug widget to the main widget instead of videoLabel's layout
     debugWidget->setParent(this);
     debugWidget->move(10, 10); // Position in top-left corner
-    debugWidget->resize(280, 350); // Larger size for better visibility
+    debugWidget->resize(280, 400); // Larger size for new buttons
     debugWidget->raise(); // Ensure it's on top
     debugWidget->setVisible(true); // Make sure it's visible
 
@@ -1176,6 +1251,8 @@ void Capture::resetCapturePage()
 
     // Reset video recording state
     m_recordedFrames.clear();
+    m_originalRecordedFrames.clear();
+    m_hasVideoLightingComparison = false;
     m_recordedSeconds = 0;
 
     // Reset dynamic video background to start from beginning
@@ -1251,13 +1328,22 @@ void Capture::keyPressEvent(QKeyEvent *event)
             }
             break;
         case Qt::Key_L:
-            // Toggle lighting correction
+            // Toggle lighting correction (for post-processing only)
             setLightingCorrectionEnabled(!isLightingCorrectionEnabled());
-            qDebug() << "🌟 Lighting correction toggled:" << (isLightingCorrectionEnabled() ? "ON" : "OFF");
+            qDebug() << "🌟 Lighting correction toggled:" << (isLightingCorrectionEnabled() ? "ON (post-processing only)" : "OFF");
             qDebug() << "🌟 Current display mode:" << m_displayMode;
             qDebug() << "🌟 Background template enabled:" << m_useBackgroundTemplate;
             qDebug() << "🌟 Template path:" << m_selectedBackgroundTemplate;
             break;
+        // 🚀 REMOVED: F and T keys since we only use post-processing lighting
+        /*
+        case Qt::Key_F:
+            // Performance mode toggle removed - lighting always in post-processing
+            break;
+        case Qt::Key_T:
+            // Lighting mode toggle removed - always post-processing
+            break;
+        */
         case Qt::Key_S:
             // Only allow segmentation toggle if enabled in capture interface
             if (m_segmentationEnabledInCapture) {
@@ -1663,6 +1749,8 @@ void Capture::startRecording()
     }
 
     m_recordedFrames.clear();
+    m_originalRecordedFrames.clear();
+    m_hasVideoLightingComparison = false;
     m_isRecording = true;
     m_recordedSeconds = 0;
 
@@ -1705,18 +1793,44 @@ void Capture::stopRecording()
                     + " frames.";
 
     if (!m_recordedFrames.isEmpty()) {
-        // Post-process recorded frames with person lighting if segmentation/dynamic was used
-        qDebug() << "🌟 Post-processing recorded video with lighting correction (per-frame)";
-        QList<QPixmap> processedFrames = processRecordedVideoWithLighting(m_recordedFrames, m_adjustedRecordingFPS);
-        qDebug() << "🚀 DIRECT CAPTURE RECORDING: Emitting video with FPS:" << m_adjustedRecordingFPS << "(base:" << m_actualCameraFPS << ")";
-        emit videoRecorded(processedFrames, m_adjustedRecordingFPS);
+        // 🌟 Store original frames before lighting correction (just like static mode)
+        m_originalRecordedFrames = m_recordedFrames;
+        m_hasVideoLightingComparison = (m_lightingCorrector && m_lightingCorrector->isEnabled());
+        
+        // 🌟 ALWAYS: Send original frames to loading page for background preview
+        qDebug() << "🌟 Sending original frames to loading page for background preview";
+        emit videoRecordedForLoading(m_originalRecordedFrames, m_adjustedRecordingFPS);
+        
+        // 🚀 THEN: Show loading UI (now has original frame background)
+        qDebug() << "🌟 Showing loading UI with original frame background";
+        emit showLoadingPage();
+        
+        if (m_hasVideoLightingComparison) {
+            qDebug() << "🌟 Processing lighting correction for enhanced output";
+            
+            // 🚀 POST-PROCESSING: Apply lighting correction exactly like static mode
+            qDebug() << "🌟 Post-processing recorded video with lighting correction (per-frame)";
+            QList<QPixmap> processedFrames = processRecordedVideoWithLighting(m_recordedFrames, m_adjustedRecordingFPS);
+            
+            qDebug() << "🚀 DIRECT CAPTURE RECORDING: Processing complete";
+            qDebug() << "🌟 Original frames:" << m_originalRecordedFrames.size() << "Processed frames:" << processedFrames.size();
+            
+            // Send processed frames to final output page
+            emit videoRecordedWithComparison(processedFrames, m_originalRecordedFrames, m_adjustedRecordingFPS);
+        } else {
+            qDebug() << "🌟 No lighting correction needed - sending original frames to final output";
+            
+            // Send original frames to final output page
+            emit videoRecorded(m_recordedFrames, m_adjustedRecordingFPS);
+        }
     }
 
     // Re-enable capture button for re-recording
     ui->capture->setEnabled(true);
 
+    // 🚀 FINAL STEP: Show final output page after all processing is complete
     emit showFinalOutputPage();
-    qDebug() << "🚀 DIRECT CAPTURE RECORDING: Stopped - capture button re-enabled for re-recording";
+    qDebug() << "🚀 DIRECT CAPTURE RECORDING: Processing complete - showing final output page";
 }
 
 void Capture::performImageCapture()
@@ -1860,33 +1974,74 @@ void Capture::performImageCapture()
 
 QImage Capture::cvMatToQImage(const cv::Mat &mat)
 {
+    // 🚀 CRASH PREVENTION: Validate input
     if (mat.empty()) {
+        qWarning() << "🎯 cvMatToQImage: Empty mat input";
+        return QImage();
+    }
+    
+    if (mat.data == nullptr) {
+        qWarning() << "🎯 cvMatToQImage: Null data pointer";
+        return QImage();
+    }
+    
+    if (mat.cols <= 0 || mat.rows <= 0) {
+        qWarning() << "🎯 cvMatToQImage: Invalid dimensions" << mat.cols << "x" << mat.rows;
         return QImage();
     }
 
-    // Optimize for BGR format (most common from camera)
-    if (mat.type() == CV_8UC3) {
-        // Use faster conversion for BGR
-        QImage qImage(mat.data, mat.cols, mat.rows, mat.step, QImage::Format_RGB888);
-        return qImage.rgbSwapped(); // Convert BGR to RGB
-    }
+    try {
+        // Optimize for BGR format (most common from camera)
+        if (mat.type() == CV_8UC3) {
+            // Use faster conversion for BGR - create a copy to ensure memory safety
+            QImage qImage(mat.data, mat.cols, mat.rows, mat.step, QImage::Format_RGB888);
+            QImage safeCopy = qImage.rgbSwapped().copy(); // Convert BGR to RGB and copy
+            if (safeCopy.isNull()) {
+                qWarning() << "🎯 cvMatToQImage: Failed to create RGB copy";
+                return QImage();
+            }
+            return safeCopy;
+        }
 
-    // Fallback for other formats
-    switch (mat.type()) {
-        case CV_8UC1: {
-            QImage qImage(mat.data, mat.cols, mat.rows, mat.step, QImage::Format_Grayscale8);
-            return qImage.copy(); // Need to copy for grayscale
+        // Fallback for other formats
+        switch (mat.type()) {
+            case CV_8UC1: {
+                QImage qImage(mat.data, mat.cols, mat.rows, mat.step, QImage::Format_Grayscale8);
+                QImage safeCopy = qImage.copy(); // Need to copy for grayscale
+                if (safeCopy.isNull()) {
+                    qWarning() << "🎯 cvMatToQImage: Failed to create grayscale copy";
+                    return QImage();
+                }
+                return safeCopy;
+            }
+            case CV_8UC4: {
+                QImage qImage(mat.data, mat.cols, mat.rows, mat.step, QImage::Format_RGBA8888);
+                QImage safeCopy = qImage.copy(); // Need to copy for RGBA
+                if (safeCopy.isNull()) {
+                    qWarning() << "🎯 cvMatToQImage: Failed to create RGBA copy";
+                    return QImage();
+                }
+                return safeCopy;
+            }
+            default: {
+                cv::Mat converted;
+                cv::cvtColor(mat, converted, cv::COLOR_BGR2RGB);
+                if (converted.empty()) {
+                    qWarning() << "🎯 cvMatToQImage: Color conversion failed";
+                    return QImage();
+                }
+                QImage qImage(converted.data, converted.cols, converted.rows, converted.step, QImage::Format_RGB888);
+                QImage safeCopy = qImage.copy();
+                if (safeCopy.isNull()) {
+                    qWarning() << "🎯 cvMatToQImage: Failed to create converted copy";
+                    return QImage();
+                }
+                return safeCopy;
+            }
         }
-        case CV_8UC4: {
-            QImage qImage(mat.data, mat.cols, mat.rows, mat.step, QImage::Format_RGBA8888);
-            return qImage.copy(); // Need to copy for RGBA
-        }
-        default: {
-            cv::Mat converted;
-            cv::cvtColor(mat, converted, cv::COLOR_BGR2RGB);
-            QImage qImage(converted.data, converted.cols, converted.rows, converted.step, QImage::Format_RGB888);
-            return qImage.copy();
-        }
+    } catch (const std::exception& e) {
+        qWarning() << "🎯 cvMatToQImage: Exception during conversion:" << e.what();
+        return QImage();
     }
 }
 
@@ -2521,6 +2676,9 @@ cv::Mat Capture::processFrameWithUnifiedDetection(const cv::Mat &frame)
         return cv::Mat::zeros(480, 640, CV_8UC3);
     }
 
+    // 🚀 PERFORMANCE OPTIMIZATION: NEVER apply lighting during real-time processing
+    // Lighting is ONLY applied in post-processing after recording, just like static mode
+
     // Phase 2A: Use GPU-only processing if available
     if (isGPUOnlyProcessingAvailable()) {
         return processFrameWithGPUOnlyPipeline(frame);
@@ -2560,7 +2718,7 @@ cv::Mat Capture::processFrameWithUnifiedDetection(const cv::Mat &frame)
         m_lastDetections = motionFiltered;
 
         // Create segmented frame with motion-filtered detections
-        // qDebug() << "🎯 Creating segmented frame with" << motionFiltered.size() << "detections, display mode:" << m_displayMode;
+        // NO LIGHTING APPLIED HERE - only segmentation for display
         cv::Mat segmentedFrame = createSegmentedFrame(frame, motionFiltered);
 
         // Update timing info
@@ -2570,10 +2728,6 @@ cv::Mat Capture::processFrameWithUnifiedDetection(const cv::Mat &frame)
         // Log people detection for visibility (reduced frequency for performance)
         if (motionFiltered.size() > 0) {
             // qDebug() << "🎯 PEOPLE DETECTED:" << motionFiltered.size() << "person(s) in frame (motion filtered from" << found.size() << "detections)";
-            // qDebug() << "🎯 Detection details:";
-            // for (size_t i = 0; i < motionFiltered.size(); i++) {
-            //     qDebug() << "🎯 Person" << i << "at" << motionFiltered[i].x << motionFiltered[i].y << motionFiltered[i].width << "x" << motionFiltered[i].height;
-            // }
         } else {
             qDebug() << "⚠️ NO PEOPLE DETECTED in frame (total detections:" << found.size() << ")";
 
@@ -2615,7 +2769,16 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
         static cv::Mat cachedBackgroundTemplate;
         static QString lastBackgroundPath;
 
-        if (m_useDynamicVideoBackground && m_videoPlaybackActive) {
+        // 🚀 PERFORMANCE OPTIMIZATION: Always use lightweight processing during recording
+        if (m_isRecording) {
+            // Use lightweight background during recording
+            if (m_useDynamicVideoBackground && !m_dynamicVideoFrame.empty()) {
+                cv::resize(m_dynamicVideoFrame, segmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
+            } else {
+                // Use black background for performance
+                segmentedFrame = cv::Mat::zeros(frame.size(), frame.type());
+            }
+        } else if (m_useDynamicVideoBackground && m_videoPlaybackActive) {
             // Phase 1: Use pre-advanced video frame from timer instead of reading synchronously
             if (!m_dynamicVideoFrame.empty()) {
                 cv::resize(m_dynamicVideoFrame, segmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
@@ -3666,16 +3829,27 @@ std::vector<cv::Rect> Capture::detectPeople(const cv::Mat &frame)
                 m_cudaUtilized = false;
             }
 
-            // Scale results back up to original size (CUDA HOG works on resized image)
-            double scale_factor = 1.0 / 0.5; // 1/0.5 = 2.0 (matching peopledetect_v1.cpp)
-            for (auto& rect : found) {
-                rect.x = cvRound(rect.x * scale_factor);
-                rect.y = cvRound(rect.y * scale_factor);
-                rect.width = cvRound(rect.width * scale_factor);
-                rect.height = cvRound(rect.height * scale_factor);
+            // 🚀 CRASH PREVENTION: Safe scaling of detection results
+            try {
+                // Scale results back up to original size (CUDA HOG works on resized image)
+                double scale_factor = 1.0 / 0.5; // 1/0.5 = 2.0 (matching peopledetect_v1.cpp)
+                for (auto& rect : found) {
+                    if (rect.x >= 0 && rect.y >= 0 && rect.width > 0 && rect.height > 0) {
+                        rect.x = cvRound(rect.x * scale_factor);
+                        rect.y = cvRound(rect.y * scale_factor);
+                        rect.width = cvRound(rect.width * scale_factor);
+                        rect.height = cvRound(rect.height * scale_factor);
+                    } else {
+                        qWarning() << "🎮 Invalid detection rectangle:" << rect.x << rect.y << rect.width << rect.height;
+                    }
+                }
+                
+                qDebug() << "🎮 CUDA GPU: Color conversion + resize + HOG detection completed safely";
+            } catch (const std::exception& e) {
+                qWarning() << "🎮 Exception during result scaling:" << e.what();
+                found.clear(); // Clear results to prevent further issues
+                m_cudaUtilized = false;
             }
-
-            qDebug() << "🎮 CUDA GPU: Color conversion + resize + HOG detection (GPU acceleration with CPU coordination)";
 
         } catch (const cv::Exception& e) {
             qWarning() << "🎮 CUDA processing error:" << e.what() << "falling back to CPU";
@@ -3806,16 +3980,9 @@ void Capture::onPersonDetectionFinished()
             if (!result.empty()) {
                 QMutexLocker locker(&m_personDetectionMutex);
 
-                // Apply lighting correction only if template + mask exist
-                if (m_lightingCorrector && !m_lastRawPersonMask.empty() && !m_selectedTemplate.empty()) {
-                    cv::Mat maskToPass = m_lastRawPersonMask;
-                    if (maskToPass.type() != CV_8U) maskToPass.convertTo(maskToPass, CV_8U);
-
-                    m_lastSegmentedFrame = m_lightingCorrector->applyPersonLightingCorrection(
-                        result, maskToPass, m_selectedTemplate);
-                } else {
-                    m_lastSegmentedFrame = result.clone();
-                }
+                // 🚀 NO REAL-TIME LIGHTING: Store result without lighting correction
+                // Lighting will ONLY be applied in post-processing after recording
+                m_lastSegmentedFrame = result.clone();
 
                 // Update GPU utilization flags
                 if (m_useCUDA) {
@@ -4984,80 +5151,124 @@ cv::Mat Capture::applyLightingToRawPersonRegion(const cv::Mat &personRegion, con
 {
     qDebug() << "🎯 RAW PERSON APPROACH: Apply lighting to extracted person region only";
     
-    // Start with exact copy of person region
-    cv::Mat result = personRegion.clone();
-    
-    // Get template reference for color matching
-    cv::Mat templateRef = m_lightingCorrector ? m_lightingCorrector->getReferenceTemplate() : cv::Mat();
-    if (templateRef.empty()) {
-        qWarning() << "🎯 No template reference, applying subtle lighting correction";
-        // Apply subtle lighting correction to make person blend better
-        for (int y = 0; y < result.rows; y++) {
-            for (int x = 0; x < result.cols; x++) {
-                if (personMask.at<uchar>(y, x) > 0) {  // Person pixel
-                    cv::Vec3b& pixel = result.at<cv::Vec3b>(y, x);
-                    // SUBTLE CHANGES FOR NATURAL BLENDING:
-                    pixel[0] = cv::saturate_cast<uchar>(pixel[0] * 1.1);  // Slightly brighter blue
-                    pixel[1] = cv::saturate_cast<uchar>(pixel[1] * 1.05); // Slightly brighter green
-                    pixel[2] = cv::saturate_cast<uchar>(pixel[2] * 1.08); // Slightly brighter red
-                }
-            }
-        }
-    } else {
-        // Apply template-based color matching
-        cv::resize(templateRef, templateRef, personRegion.size());
-        
-        // Convert to LAB for color matching
-        cv::Mat personLab, templateLab;
-        cv::cvtColor(personRegion, personLab, cv::COLOR_BGR2Lab);
-        cv::cvtColor(templateRef, templateLab, cv::COLOR_BGR2Lab);
-        
-        // Calculate template statistics
-        cv::Scalar templateMean, templateStd;
-        cv::meanStdDev(templateLab, templateMean, templateStd);
-        
-        // Apply color matching to person region
-        cv::Mat resultLab = personLab.clone();
-        std::vector<cv::Mat> channels;
-        cv::split(resultLab, channels);
-        
-        // Apply template color matching for natural blending
-        // Calculate person statistics for comparison
-        cv::Scalar personMean, personStd;
-        cv::meanStdDev(personLab, personMean, personStd);
-        
-        // Adjust person lighting to match template characteristics
-        for (int c = 0; c < 3; c++) {
-            // Calculate the difference between template and person
-            double lightingDiff = templateMean[c] - personMean[c];
-            
-            // Apply subtle adjustment (only 15% of the difference for natural blending)
-            channels[c] = channels[c] + lightingDiff * 0.15;
-        }
-        
-        // Additional brightness adjustment for better blending
-        // If template is brighter, slightly brighten the person
-        double brightnessDiff = templateMean[0] - personMean[0]; // L channel
-        if (brightnessDiff > 0) {
-            channels[0] = channels[0] + brightnessDiff * 0.1; // Slight brightness boost
-        }
-        
-        cv::merge(channels, resultLab);
-        cv::cvtColor(resultLab, result, cv::COLOR_Lab2BGR);
-        
-        // Apply mask to ensure only person pixels are affected
-        cv::Mat maskedResult;
-        result.copyTo(maskedResult, personMask);
-        personRegion.copyTo(maskedResult, ~personMask);
-        result = maskedResult;
+    // 🚀 CRASH PREVENTION: Validate inputs
+    if (personRegion.empty() || personMask.empty()) {
+        qWarning() << "🎯 Invalid inputs - returning empty mat";
+        return cv::Mat();
     }
     
-    // Save debug images
-    cv::imwrite("debug_raw_person_original.png", personRegion);
-    cv::imwrite("debug_raw_person_mask.png", personMask);
-    cv::imwrite("debug_raw_person_result.png", result);
-    qDebug() << "🎯 RAW PERSON APPROACH: Applied lighting to person region only";
-    qDebug() << "🎯 Debug images saved: raw_person_original, raw_person_mask, raw_person_result";
+    if (personRegion.size() != personMask.size()) {
+        qWarning() << "🎯 Size mismatch between person region and mask - returning original";
+        return personRegion.clone();
+    }
+    
+    if (personRegion.type() != CV_8UC3) {
+        qWarning() << "🎯 Invalid person region format - returning original";
+        return personRegion.clone();
+    }
+    
+    if (personMask.type() != CV_8UC1) {
+        qWarning() << "🎯 Invalid mask format - returning original";
+        return personRegion.clone();
+    }
+    
+    // Start with exact copy of person region
+    cv::Mat result;
+    try {
+        result = personRegion.clone();
+    } catch (const std::exception& e) {
+        qWarning() << "🎯 Failed to clone person region:" << e.what();
+        return cv::Mat();
+    }
+    
+    // 🚀 CRASH PREVENTION: Check lighting corrector availability
+    if (!m_lightingCorrector || !m_lightingCorrector->isEnabled()) {
+        qWarning() << "🎯 No lighting corrector available - returning original";
+        return result;
+    }
+    
+    try {
+        // Get template reference for color matching
+        cv::Mat templateRef = m_lightingCorrector->getReferenceTemplate();
+        if (templateRef.empty()) {
+            qWarning() << "🎯 No template reference, applying subtle lighting correction";
+            // Apply subtle lighting correction to make person blend better
+            for (int y = 0; y < result.rows; y++) {
+                for (int x = 0; x < result.cols; x++) {
+                    if (y < personMask.rows && x < personMask.cols && 
+                        personMask.at<uchar>(y, x) > 0) {  // Person pixel
+                        cv::Vec3b& pixel = result.at<cv::Vec3b>(y, x);
+                        // SUBTLE CHANGES FOR NATURAL BLENDING:
+                        pixel[0] = cv::saturate_cast<uchar>(pixel[0] * 1.1);  // Slightly brighter blue
+                        pixel[1] = cv::saturate_cast<uchar>(pixel[1] * 1.05); // Slightly brighter green
+                        pixel[2] = cv::saturate_cast<uchar>(pixel[2] * 1.08); // Slightly brighter red
+                    }
+                }
+            }
+        } else {
+            // Apply template-based color matching
+            cv::resize(templateRef, templateRef, personRegion.size());
+            
+            // Convert to LAB for color matching
+            cv::Mat personLab, templateLab;
+            cv::cvtColor(personRegion, personLab, cv::COLOR_BGR2Lab);
+            cv::cvtColor(templateRef, templateLab, cv::COLOR_BGR2Lab);
+            
+            // Calculate template statistics
+            cv::Scalar templateMean, templateStd;
+            cv::meanStdDev(templateLab, templateMean, templateStd);
+            
+            // Apply color matching to person region
+            cv::Mat resultLab = personLab.clone();
+            std::vector<cv::Mat> channels;
+            cv::split(resultLab, channels);
+            
+            // Apply template color matching for natural blending
+            // Calculate person statistics for comparison
+            cv::Scalar personMean, personStd;
+            cv::meanStdDev(personLab, personMean, personStd);
+            
+            // Adjust person lighting to match template characteristics
+            for (int c = 0; c < 3; c++) {
+                // Calculate the difference between template and person
+                double lightingDiff = templateMean[c] - personMean[c];
+                
+                // Apply subtle adjustment (only 15% of the difference for natural blending)
+                channels[c] = channels[c] + lightingDiff * 0.15;
+            }
+            
+            // Additional brightness adjustment for better blending
+            // If template is brighter, slightly brighten the person
+            double brightnessDiff = templateMean[0] - personMean[0]; // L channel
+            if (brightnessDiff > 0) {
+                channels[0] = channels[0] + brightnessDiff * 0.1; // Slight brightness boost
+            }
+            
+            cv::merge(channels, resultLab);
+            cv::cvtColor(resultLab, result, cv::COLOR_Lab2BGR);
+            
+            // Apply mask to ensure only person pixels are affected
+            cv::Mat maskedResult;
+            result.copyTo(maskedResult, personMask);
+            personRegion.copyTo(maskedResult, ~personMask);
+            result = maskedResult;
+        }
+        
+        // Save debug images (safely)
+        try {
+            cv::imwrite("debug_raw_person_original.png", personRegion);
+            cv::imwrite("debug_raw_person_mask.png", personMask);
+            cv::imwrite("debug_raw_person_result.png", result);
+            qDebug() << "🎯 RAW PERSON APPROACH: Applied lighting to person region only";
+            qDebug() << "🎯 Debug images saved: raw_person_original, raw_person_mask, raw_person_result";
+        } catch (const std::exception& e) {
+            qWarning() << "🎯 Failed to save debug images:" << e.what();
+        }
+        
+    } catch (const std::exception& e) {
+        qWarning() << "🎯 Exception in lighting correction:" << e.what() << "- returning original";
+        return personRegion.clone();
+    }
     
     return result;
 }
@@ -5091,59 +5302,170 @@ cv::Mat Capture::createPersonMaskFromSegmentedFrame(const cv::Mat &segmentedFram
 
 QList<QPixmap> Capture::processRecordedVideoWithLighting(const QList<QPixmap> &inputFrames, double fps)
 {
+    // 🚀 LIGHTING APPLIED ONLY IN POST-PROCESSING (just like static mode)
     QList<QPixmap> outputFrames;
     outputFrames.reserve(inputFrames.size());
 
     const int total = inputFrames.size();
+    qDebug() << "🌟 Starting post-processing lighting correction for" << total << "frames";
+    
+    // 🚀 CRASH PREVENTION: Check if lighting corrector is properly initialized
+    bool lightingAvailable = (m_lightingCorrector && m_lightingCorrector->isEnabled());
+    qDebug() << "🌟 Lighting corrector available:" << lightingAvailable;
+    
+    // 🚀 CRASH PREVENTION: If no lighting available, return frames as-is
+    if (!lightingAvailable) {
+        qDebug() << "🌟 No lighting correction available, returning original frames";
+        return inputFrames;
+    }
+    
     for (int i = 0; i < total; ++i) {
         // Update progress to loading UI
         int pct = (total > 0) ? ((i * 100) / total) : 100;
         emit videoProcessingProgress(pct);
 
-        // Fetch aligned raw data if available
-        cv::Mat personRegion, personMask, background;
-        if (i < m_recordedRawPersonRegions.size()) personRegion = m_recordedRawPersonRegions.at(i);
-        if (i < m_recordedRawPersonMasks.size()) personMask = m_recordedRawPersonMasks.at(i);
-        if (i < m_recordedBackgroundFrames.size()) background = m_recordedBackgroundFrames.at(i);
+        try {
+            // 🚀 CRASH PREVENTION: Validate frame before processing
+            if (i >= inputFrames.size() || inputFrames.at(i).isNull()) {
+                qWarning() << "🌟 Invalid frame at index" << i << "- using black frame";
+                outputFrames.append(QPixmap(640, 480));
+                continue;
+            }
 
-        // Convert current composed frame for fallback/compositing
-        QImage frameImage = inputFrames.at(i).toImage().convertToFormat(QImage::Format_BGR888);
-        cv::Mat composedFrame(frameImage.height(), frameImage.width(), CV_8UC3,
-                              const_cast<uchar*>(frameImage.bits()), frameImage.bytesPerLine());
-        cv::Mat composedCopy = composedFrame.clone();
+            // Get current frame
+            QPixmap currentFrame = inputFrames.at(i);
+            
+            // Convert to cv::Mat for processing
+            QImage frameImage = currentFrame.toImage().convertToFormat(QImage::Format_BGR888);
+            if (frameImage.isNull()) {
+                qWarning() << "🌟 Failed to convert frame" << i << "to QImage - using original";
+                outputFrames.append(currentFrame);
+                continue;
+            }
 
-        cv::Mat finalFrame;
-        if (!personRegion.empty() && !personMask.empty() && m_lightingCorrector && m_lightingCorrector->isEnabled()) {
-            // Apply lighting to person-only region
-            cv::Mat litPerson = applyLightingToRawPersonRegion(personRegion, personMask);
-            // Resize to composed size
-            cv::Mat scaledPerson, scaledMask;
-            cv::resize(litPerson, scaledPerson, composedCopy.size());
-            cv::resize(personMask, scaledMask, composedCopy.size());
-            finalFrame = composedCopy.clone();
-            scaledPerson.copyTo(finalFrame, scaledMask);
-        } else if (m_lightingCorrector && m_lightingCorrector->isEnabled()) {
-            // Fallback: apply global lighting
-            finalFrame = m_lightingCorrector->applyGlobalLightingCorrection(composedCopy);
-        } else {
-            finalFrame = composedCopy;
+            cv::Mat composedFrame(frameImage.height(), frameImage.width(), CV_8UC3,
+                                  const_cast<uchar*>(frameImage.bits()), frameImage.bytesPerLine());
+            
+            if (composedFrame.empty()) {
+                qWarning() << "🌟 Failed to convert frame" << i << "to cv::Mat - using original";
+                outputFrames.append(currentFrame);
+                continue;
+            }
+
+            cv::Mat composedCopy = composedFrame.clone();
+            cv::Mat finalFrame;
+
+            // 🚀 SIMPLIFIED: Only use global lighting correction for safety
+            try {
+                finalFrame = m_lightingCorrector->applyGlobalLightingCorrection(composedCopy);
+                if (finalFrame.empty()) {
+                    qWarning() << "🌟 Lighting correction returned empty result for frame" << i;
+                    finalFrame = composedCopy;
+                }
+            } catch (const std::exception& e) {
+                qWarning() << "🌟 Lighting correction failed for frame" << i << ":" << e.what();
+                finalFrame = composedCopy;
+            }
+
+            // Convert back to QPixmap
+            QImage outImage = cvMatToQImage(finalFrame);
+            if (outImage.isNull()) {
+                qWarning() << "🌟 Failed to convert processed frame" << i << "back to QImage - using original";
+                outputFrames.append(currentFrame);
+            } else {
+                outputFrames.append(QPixmap::fromImage(outImage));
+            }
+
+        } catch (const std::exception& e) {
+            qWarning() << "🌟 Exception processing frame" << i << ":" << e.what() << "- using original frame";
+            if (i < inputFrames.size()) {
+                outputFrames.append(inputFrames.at(i));
+            } else {
+                outputFrames.append(QPixmap(640, 480));
+            }
         }
-
-        // Convert back to QPixmap
-        QImage outImage = cvMatToQImage(finalFrame);
-        outputFrames.append(QPixmap::fromImage(outImage));
     }
 
     // Ensure 100% at end
     emit videoProcessingProgress(100);
 
-    // Clear per-frame buffers for next recording
+    // Clear per-frame buffers for next recording (safely)
     m_recordedRawPersonRegions.clear();
     m_recordedRawPersonMasks.clear();
     m_recordedBackgroundFrames.clear();
 
+    qDebug() << "🌟 Post-processing lighting correction completed for" << total << "frames - output:" << outputFrames.size() << "frames";
     return outputFrames;
 }
+
+// 🚀 SIMPLIFIED: Async Lighting Processing System (for future use)
+void Capture::initializeAsyncLightingSystem()
+{
+    qDebug() << "🚀 Async lighting system: Not needed - using synchronous post-processing like static mode";
+    // Keep method for future use but don't initialize anything
+}
+
+void Capture::cleanupAsyncLightingSystem()
+{
+    qDebug() << "🚀 Async lighting system: Nothing to cleanup - using synchronous processing";
+    // Keep method for future use but don't cleanup anything
+}
+
+// 🚀 REMOVED: processLightingAsync, setRealtimeLightingEnabled, isRealtimeLightingEnabled, toggleLightingMode
+// These methods are not needed since we only use post-processing lighting
+
+// 🚀 NEW: Lightweight Segmented Frame Creation for Recording Performance
+cv::Mat Capture::createLightweightSegmentedFrame(const cv::Mat &frame)
+{
+    // Fast segmentation without heavy processing for recording performance
+    if (frame.empty()) {
+        return frame;
+    }
+    
+    // Use simple center detection for recording performance
+    cv::Rect centerRect(frame.cols * 0.2, frame.rows * 0.1, 
+                       frame.cols * 0.6, frame.rows * 0.8);
+    
+    cv::Mat result = frame.clone();
+    
+    // Apply background if available
+    if (m_useDynamicVideoBackground && !m_dynamicVideoFrame.empty()) {
+        // Resize dynamic background to match frame
+        cv::Mat bgResized;
+        cv::resize(m_dynamicVideoFrame, bgResized, cv::Size(frame.cols, frame.rows));
+        
+        // Simple mask-based compositing
+        cv::Mat mask = cv::Mat::zeros(frame.size(), CV_8UC1);
+        cv::rectangle(mask, centerRect, cv::Scalar(255), -1);
+        
+        // Apply gaussian blur for smoother edges
+        cv::GaussianBlur(mask, mask, cv::Size(21, 21), 10);
+        
+        // Composite
+        bgResized.copyTo(result);
+        frame.copyTo(result, mask);
+    } else if (m_useBackgroundTemplate && !m_selectedTemplate.empty()) {
+        // Use static background template
+        cv::Mat bgResized;
+        cv::resize(m_selectedTemplate, bgResized, cv::Size(frame.cols, frame.rows));
+        
+        // Simple mask-based compositing
+        cv::Mat mask = cv::Mat::zeros(frame.size(), CV_8UC1);
+        cv::rectangle(mask, centerRect, cv::Scalar(255), -1);
+        
+        // Apply gaussian blur for smoother edges
+        cv::GaussianBlur(mask, mask, cv::Size(21, 21), 10);
+        
+        // Composite
+        bgResized.copyTo(result);
+        frame.copyTo(result, mask);
+    }
+    
+    return result;
+}
+
+// 🚀 NEW: Performance Control Methods
+// 🚀 REMOVED: Real-time lighting methods - not needed for post-processing only mode
 
 QString Capture::resolveTemplatePath(const QString &templatePath)
 {

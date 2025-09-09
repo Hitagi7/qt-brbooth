@@ -25,6 +25,7 @@ Final::Final(QWidget *parent)
     , m_videoFPS(30.0)
     , m_stackedLayout(nullptr)
     , m_lastLoadedImage() // Initialize the QPixmap member
+    , m_hasComparisonVideos(false) // Initialize comparison flag
     , overlayImageLabel(nullptr)
 {
     ui->setupUi(this); // Initialize UI elements from final.ui
@@ -349,6 +350,53 @@ void Final::setVideo(const QList<QPixmap> &frames, double fps)
     }
 }
 
+void Final::setVideoWithComparison(const QList<QPixmap> &frames, const QList<QPixmap> &originalFrames, double fps)
+{
+    // Stop any current playback
+    if (videoPlaybackTimer->isActive()) {
+        videoPlaybackTimer->stop();
+    }
+
+    m_videoFrames = frames; // Store the processed video frames
+    m_originalVideoFrames = originalFrames; // Store the original video frames
+    m_hasComparisonVideos = true; // Enable comparison mode
+    m_currentFrameIndex = 0; // Start from the beginning
+    m_videoFPS = fps; // Store the FPS for debugging and potential future use
+    m_lastLoadedImage = QPixmap(); // Clear last image if switching to video
+
+    if (!m_videoFrames.isEmpty()) {
+        qDebug() << "🌟 Playing back video with comparison - Processed:" << m_videoFrames.size() 
+                 << "Original:" << m_originalVideoFrames.size() << "frames at" << fps << "FPS.";
+        
+        // Display the first frame immediately without advancing the index
+        QPixmap firstFrame = m_videoFrames.at(0);
+        QSize labelSize = ui->videoLabel->size();
+        QSize frameSize = firstFrame.size();
+        
+        // Only scale down if the frame is larger than the label
+        if (frameSize.width() > labelSize.width() || frameSize.height() > labelSize.height()) {
+            QPixmap scaledFrame = firstFrame.scaled(
+                labelSize,
+                Qt::KeepAspectRatio,
+                Qt::FastTransformation
+            );
+            ui->videoLabel->setPixmap(scaledFrame);
+        } else {
+            ui->videoLabel->setPixmap(firstFrame);
+        }
+        ui->videoLabel->setAlignment(Qt::AlignCenter);
+        
+        // Calculate the correct playback interval based on the actual camera FPS
+        int playbackIntervalMs = qMax(1, static_cast<int>(1000.0 / fps));
+        videoPlaybackTimer->start(playbackIntervalMs);
+        
+        qDebug() << "🎬 Video with comparison starts from frame 0, timer started with interval:" << playbackIntervalMs << "ms";
+    } else {
+        qWarning() << "No video frames provided for comparison playback!";
+        ui->videoLabel->clear(); // Clear display if no frames
+    }
+}
+
 void Final::setForegroundOverlay(const QString &foregroundPath)
 {
     if (!overlayImageLabel) {
@@ -557,15 +605,69 @@ void Final::saveVideoToFile()
     }
 
     QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss");
-    QString fileName = downloadsPath + "/video_" + timestamp + ".avi";
-
+    
     QDir dir;
     if (!dir.exists(downloadsPath)) {
         dir.mkpath(downloadsPath);
     }
 
+    // 🌟 Handle comparison videos (both enhanced and original)
+    if (m_hasComparisonVideos && !m_originalVideoFrames.isEmpty()) {
+        QString enhancedFileName = downloadsPath + "/video_lighting_enhanced_" + timestamp + ".avi";
+        QString originalFileName = downloadsPath + "/video_original_" + timestamp + ".avi";
+        
+        qDebug() << "🌟 Saving both video versions - Enhanced:" << m_videoFrames.size() 
+                 << "Original:" << m_originalVideoFrames.size() << "frames";
+        
+        bool enhancedSaved = saveVideoFramesToFile(m_videoFrames, enhancedFileName);
+        bool originalSaved = saveVideoFramesToFile(m_originalVideoFrames, originalFileName);
+        
+        if (enhancedSaved && originalSaved) {
+            QMessageBox::information(this,
+                                     "Save Videos",
+                                     QString("Both videos saved successfully:\n\n"
+                                             "Enhanced: %1\n"
+                                             "Original: %2")
+                                         .arg(enhancedFileName)
+                                         .arg(originalFileName));
+        } else if (enhancedSaved) {
+            QMessageBox::warning(this,
+                                 "Save Videos", 
+                                 QString("Enhanced video saved successfully:\n%1\n\n"
+                                         "Failed to save original video.")
+                                     .arg(enhancedFileName));
+        } else if (originalSaved) {
+            QMessageBox::warning(this,
+                                 "Save Videos", 
+                                 QString("Original video saved successfully:\n%1\n\n"
+                                         "Failed to save enhanced video.")
+                                     .arg(originalFileName));
+        } else {
+            QMessageBox::critical(this, "Save Videos", "Failed to save both videos.");
+        }
+        return;
+    }
+
+    // 🌟 Handle single video (no comparison)
+    QString fileName = downloadsPath + "/video_" + timestamp + ".avi";
+    bool saved = saveVideoFramesToFile(m_videoFrames, fileName);
+    
+    if (saved) {
+        QMessageBox::information(this, "Save Video", QString("Video saved successfully:\n%1").arg(fileName));
+    } else {
+        QMessageBox::critical(this, "Save Video", "Failed to save video.");
+    }
+}
+
+bool Final::saveVideoFramesToFile(const QList<QPixmap> &frames, const QString &fileName)
+{
+    if (frames.isEmpty()) {
+        qWarning() << "No frames to save for file:" << fileName;
+        return false;
+    }
+
     // Get frame size from the first pixmap
-    QSize frameSize = m_videoFrames.first().size();
+    QSize frameSize = frames.first().size();
     int width = frameSize.width();
     int height = frameSize.height();
 
@@ -588,7 +690,7 @@ void Final::saveVideoToFile()
         frameRate = 60.0;  // NTSC HD standard
     }
     
-    qDebug() << "Saving video with " << m_videoFrames.size() << " frames at " << frameRate << " FPS (original: " << m_videoFPS << " FPS)";
+    qDebug() << "Saving video with " << frames.size() << " frames at " << frameRate << " FPS (original: " << m_videoFPS << " FPS) to:" << fileName;
 
     cv::VideoWriter videoWriter;
 
@@ -597,15 +699,12 @@ void Final::saveVideoToFile()
     
     // Open the video writer with MJPG
     if (!videoWriter.open(fileName.toStdString(), fourcc, frameRate, cv::Size(width, height), true)) {
-        QMessageBox::critical(this,
-                              "Save Video",
-                              "Failed to open video writer. Check codecs and file path.");
-        qWarning() << "Failed to open video writer for file: " << fileName.toStdString().c_str();
-        return;
+        qWarning() << "Failed to open video writer for file: " << fileName;
+        return false;
     }
 
     // Write each frame with optimized conversion
-    for (const QPixmap &pixmap : m_videoFrames) {
+    for (const QPixmap &pixmap : frames) {
         // Convert QPixmap to QImage with optimized format
         QImage image = pixmap.toImage().convertToFormat(QImage::Format_RGB888);
         if (image.isNull()) {
@@ -629,10 +728,6 @@ void Final::saveVideoToFile()
     }
 
     videoWriter.release(); // Release the video writer
-    QMessageBox::information(this,
-                             "Save Video",
-                             QString("Video saved successfully at %1 FPS to:\n%2")
-                                 .arg(frameRate, 0, 'f', 1)
-                                 .arg(fileName));
-    qDebug() << "Video saved to: " << fileName;
+    qDebug() << "Video saved successfully to:" << fileName;
+    return true;
 }

@@ -29,6 +29,7 @@ public:
     void setImage(const QPixmap &image);
     void setImageWithComparison(const QPixmap &image, const QPixmap &originalImage);
     void setVideo(const QList<QPixmap> &frames, double fps = 30.0);
+    void setVideoWithComparison(const QList<QPixmap> &frames, const QList<QPixmap> &originalFrames, double fps = 30.0);
     void setForegroundOverlay(const QString &foregroundPath);
 
 signals:
@@ -49,6 +50,7 @@ private:
 
     QTimer *videoPlaybackTimer;
     QList<QPixmap> m_videoFrames; // Stores frames for video playback/saving
+    QList<QPixmap> m_originalVideoFrames; // Stores original frames before lighting correction
     int m_currentFrameIndex;
     double m_videoFPS; // Store the FPS for video playback
 
@@ -57,10 +59,12 @@ private:
     QPixmap m_lastLoadedImage; // To store the original image for resizing
     QPixmap m_originalImage;   // To store the original image without lighting correction
     bool m_hasComparisonImages; // Whether we have both versions for comparison
+    bool m_hasComparisonVideos; // Whether we have both video versions for comparison
 
     QLabel *overlayImageLabel; // For pixel art game UI elements
 
     void saveVideoToFile(); // Helper function for saving video
+    bool saveVideoFramesToFile(const QList<QPixmap> &frames, const QString &fileName); // Helper for saving frame list to file
 
     void refreshDisplay(); // Helper function to scale and display content
 };
