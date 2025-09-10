@@ -466,6 +466,10 @@ private:
     cv::Mat applyLightingToRawPersonRegion(const cv::Mat &personRegion, const cv::Mat &personMask);
     cv::Mat applyPostProcessingLighting();
     QList<QPixmap> processRecordedVideoWithLighting(const QList<QPixmap> &inputFrames, double fps);
+    cv::Mat applyDynamicFrameEdgeBlending(const cv::Mat &composedFrame, 
+                                          const cv::Mat &rawPersonRegion, 
+                                          const cv::Mat &rawPersonMask, 
+                                          const cv::Mat &backgroundFrame = cv::Mat());
     
     // 🚀 Optimized Async Lighting Processing (POST-PROCESSING ONLY)
     void initializeAsyncLightingSystem();

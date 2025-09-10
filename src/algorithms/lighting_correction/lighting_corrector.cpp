@@ -112,7 +112,10 @@ bool LightingCorrector::setReferenceTemplate(const QString &templatePath)
 }
 
 // Helper: Match histogram of source to reference
+#pragma warning(push)
+#pragma warning(disable: 4505) // unreferenced local function has been removed
 static cv::Mat matchHistogram(const cv::Mat& src, const cv::Mat& ref, const cv::Mat& mask = cv::Mat())
+#pragma warning(pop)
 {
     CV_Assert(src.type() == CV_8UC3 && ref.type() == CV_8UC3);
 

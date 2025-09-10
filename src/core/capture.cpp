@@ -5463,12 +5463,14 @@ cv::Mat Capture::createPersonMaskFromSegmentedFrame(const cv::Mat &segmentedFram
 
 QList<QPixmap> Capture::processRecordedVideoWithLighting(const QList<QPixmap> &inputFrames, double fps)
 {
-    // 🚀 LIGHTING APPLIED ONLY IN POST-PROCESSING (just like static mode)
+    Q_UNUSED(fps); // FPS parameter kept for future use but not currently needed
+    
+    // 🚀 ENHANCED: Apply edge-blending lighting similar to static mode
     QList<QPixmap> outputFrames;
     outputFrames.reserve(inputFrames.size());
 
     const int total = inputFrames.size();
-    qDebug() << "🌟 Starting post-processing lighting correction for" << total << "frames";
+    qDebug() << "🌟 Starting enhanced post-processing with edge blending for" << total << "frames";
     
     // 🚀 CRASH PREVENTION: Check if lighting corrector is properly initialized
     bool lightingAvailable = (m_lightingCorrector && m_lightingCorrector->isEnabled());
@@ -5516,16 +5518,42 @@ QList<QPixmap> Capture::processRecordedVideoWithLighting(const QList<QPixmap> &i
             cv::Mat composedCopy = composedFrame.clone();
             cv::Mat finalFrame;
 
-            // 🚀 SIMPLIFIED: Only use global lighting correction for safety
-            try {
-                finalFrame = m_lightingCorrector->applyGlobalLightingCorrection(composedCopy);
-                if (finalFrame.empty()) {
-                    qWarning() << "🌟 Lighting correction returned empty result for frame" << i;
+            // 🚀 ENHANCED: Apply edge blending if raw person data is available for this frame
+            bool hasRawPersonData = (i < m_recordedRawPersonRegions.size() && 
+                                     i < m_recordedRawPersonMasks.size() &&
+                                     !m_recordedRawPersonRegions[i].empty() &&
+                                     !m_recordedRawPersonMasks[i].empty());
+
+            if (hasRawPersonData) {
+                // Apply advanced edge blending similar to static mode
+                try {
+                    finalFrame = applyDynamicFrameEdgeBlending(composedCopy, 
+                                                               m_recordedRawPersonRegions[i],
+                                                               m_recordedRawPersonMasks[i],
+                                                               i < m_recordedBackgroundFrames.size() ? 
+                                                               m_recordedBackgroundFrames[i] : cv::Mat());
+                    
+                    if (finalFrame.empty()) {
+                        qWarning() << "🌟 Edge blending returned empty result for frame" << i << "- using global correction";
+                        finalFrame = m_lightingCorrector->applyGlobalLightingCorrection(composedCopy);
+                    }
+                } catch (const std::exception& e) {
+                    qWarning() << "🌟 Edge blending failed for frame" << i << ":" << e.what() << "- using global correction";
+                    finalFrame = m_lightingCorrector->applyGlobalLightingCorrection(composedCopy);
+                }
+            } else {
+                // Fallback to comprehensive global lighting correction (same as static mode)
+                qDebug() << "🌟 ENHANCED: Applying full global lighting correction (same as static mode) for frame" << i;
+                try {
+                    finalFrame = m_lightingCorrector->applyGlobalLightingCorrection(composedCopy);
+                    if (finalFrame.empty()) {
+                        qWarning() << "🌟 Global lighting correction returned empty result for frame" << i;
+                        finalFrame = composedCopy;
+                    }
+                } catch (const std::exception& e) {
+                    qWarning() << "🌟 Global lighting correction failed for frame" << i << ":" << e.what();
                     finalFrame = composedCopy;
                 }
-            } catch (const std::exception& e) {
-                qWarning() << "🌟 Lighting correction failed for frame" << i << ":" << e.what();
-                finalFrame = composedCopy;
             }
 
             // Convert back to QPixmap
@@ -5555,7 +5583,7 @@ QList<QPixmap> Capture::processRecordedVideoWithLighting(const QList<QPixmap> &i
     m_recordedRawPersonMasks.clear();
     m_recordedBackgroundFrames.clear();
 
-    qDebug() << "🌟 Post-processing lighting correction completed for" << total << "frames - output:" << outputFrames.size() << "frames";
+    qDebug() << "🌟 Enhanced post-processing with edge blending completed for" << total << "frames - output:" << outputFrames.size() << "frames";
     return outputFrames;
 }
 
@@ -5568,8 +5596,125 @@ void Capture::initializeAsyncLightingSystem()
 
 void Capture::cleanupAsyncLightingSystem()
 {
-    qDebug() << "🚀 Async lighting system: Nothing to cleanup - using synchronous processing";
+    qDebug() << "🚀 Async lighting system: No cleanup needed for synchronous mode";
     // Keep method for future use but don't cleanup anything
+}
+
+// 🚀 NEW: Dynamic Frame Edge Blending (similar to static mode)
+cv::Mat Capture::applyDynamicFrameEdgeBlending(const cv::Mat &composedFrame, 
+                                               const cv::Mat &rawPersonRegion, 
+                                               const cv::Mat &rawPersonMask, 
+                                               const cv::Mat &backgroundFrame)
+{
+    qDebug() << "🎯 DYNAMIC EDGE BLENDING: Applying edge blending to dynamic frame";
+    
+    // Validate inputs
+    if (composedFrame.empty() || rawPersonRegion.empty() || rawPersonMask.empty()) {
+        qWarning() << "🎯 Invalid input data for edge blending, using global correction";
+        return m_lightingCorrector->applyGlobalLightingCorrection(composedFrame);
+    }
+    
+    try {
+        // Start with clean background or use provided background frame
+        cv::Mat result;
+        cv::Mat cleanBackground;
+        
+        if (!backgroundFrame.empty()) {
+            cv::resize(backgroundFrame, cleanBackground, composedFrame.size());
+        } else {
+            // Extract background from dynamic template or use clean template
+            if (!m_lastTemplateBackground.empty()) {
+                cv::resize(m_lastTemplateBackground, cleanBackground, composedFrame.size());
+            } else {
+                // Fallback to zero background
+                cleanBackground = cv::Mat::zeros(composedFrame.size(), composedFrame.type());
+            }
+        }
+        result = cleanBackground.clone();
+        
+        // Apply lighting correction to the raw person region PLUS full lighting pipeline
+        cv::Mat lightingCorrectedPerson = applyLightingToRawPersonRegion(rawPersonRegion, rawPersonMask);
+        
+        // 🚀 ENHANCED: Apply additional global lighting correction for comprehensive processing
+        if (m_lightingCorrector && m_lightingCorrector->isEnabled()) {
+            try {
+                // Apply the same global lighting correction as used in static mode
+                cv::Mat enhancedPerson = m_lightingCorrector->applyGlobalLightingCorrection(lightingCorrectedPerson);
+                if (!enhancedPerson.empty()) {
+                    lightingCorrectedPerson = enhancedPerson;
+                    qDebug() << "🎯 DYNAMIC ENHANCED: Applied full lighting pipeline (raw + global correction)";
+                } else {
+                    qDebug() << "🎯 DYNAMIC: Global lighting correction returned empty, using raw person correction only";
+                }
+            } catch (const std::exception& e) {
+                qWarning() << "🎯 DYNAMIC: Global lighting correction failed:" << e.what() << "- using raw person correction only";
+            }
+        }
+        
+        // Scale the lighting-corrected person to match the composed frame size
+        cv::Mat scaledPerson, scaledMask;
+        cv::resize(lightingCorrectedPerson, scaledPerson, result.size());
+        cv::resize(rawPersonMask, scaledMask, result.size());
+        
+        // Apply guided filter edge blending (same algorithm as static mode)
+        cv::Mat binMask;
+        if (scaledMask.type() != CV_8UC1) {
+            cv::cvtColor(scaledMask, binMask, cv::COLOR_BGR2GRAY);
+        } else {
+            binMask = scaledMask.clone();
+        }
+        cv::threshold(binMask, binMask, 127, 255, cv::THRESH_BINARY);
+
+        // First: shrink mask slightly to avoid fringe, then hard-copy interior
+        cv::Mat interiorMask;
+        cv::erode(binMask, interiorMask, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(2*2+1, 2*2+1))); // ~2px shrink
+        scaledPerson.copyTo(result, interiorMask);
+
+        // Guided image filtering to refine a soft alpha only on a thin edge ring
+        const int gfRadius = 15; // window size
+        const float gfEps = 1e-3f; // regularization
+        cv::Mat alphaFloat = guidedFilterGrayAlpha(result, binMask, gfRadius, gfEps);
+        
+        // Build thin inner/outer rings around the boundary for localized updates only
+        cv::Mat inner, outer, ringInner, ringOuter;
+        cv::erode(binMask, inner, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(2*1+1, 2*1+1))); // shrink by ~1px for inner ring
+        cv::dilate(binMask, outer, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(2*4+1, 2*4+1))); // expand by ~4px for outer ring
+        cv::subtract(binMask, inner, ringInner);   // just inside the boundary
+        cv::subtract(outer, binMask, ringOuter);   // just outside the boundary
+        
+        // Clamp strictly
+        alphaFloat.setTo(1.0f, interiorMask > 0);  // full person interior remains 1
+        alphaFloat.setTo(0.0f, outer == 0); // outside remains 0
+        // Strongly bias ring blend toward template to eliminate colored outlines
+        alphaFloat = alphaFloat * 0.3f;
+
+        // Composite only where outer>0 to avoid touching background
+        cv::Mat personF, bgF; 
+        scaledPerson.convertTo(personF, CV_32F); 
+        cleanBackground.convertTo(bgF, CV_32F);
+        std::vector<cv::Mat> a3 = {alphaFloat, alphaFloat, alphaFloat};
+        cv::Mat alpha3; 
+        cv::merge(a3, alpha3);
+        
+        // Inner ring: solve for decontaminated foreground using matting equation, then composite
+        cv::Mat alphaSafe;
+        cv::max(alpha3, 0.05f, alphaSafe); // avoid division by very small alpha
+        cv::Mat Fclean = (personF - bgF.mul(1.0f - alpha3)).mul(1.0f / alphaSafe);
+        cv::Mat compF = Fclean.mul(alpha3) + bgF.mul(1.0f - alpha3);
+        cv::Mat out8u; 
+        compF.convertTo(out8u, CV_8U);
+        out8u.copyTo(result, ringInner);
+
+        // Outer ring: copy template directly to eliminate any colored outline
+        cleanBackground.copyTo(result, ringOuter);
+        
+        qDebug() << "🎯 DYNAMIC EDGE BLENDING: Successfully applied edge blending";
+        return result;
+        
+    } catch (const cv::Exception &e) {
+        qWarning() << "🎯 DYNAMIC EDGE BLENDING: Edge blending failed:" << e.what() << "- using global correction";
+        return m_lightingCorrector->applyGlobalLightingCorrection(composedFrame);
+    }
 }
 
 // 🚀 REMOVED: processLightingAsync, setRealtimeLightingEnabled, isRealtimeLightingEnabled, toggleLightingMode
