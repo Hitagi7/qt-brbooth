@@ -47,6 +47,14 @@ private:
     cv::cuda::GpuMat gpuDetectionBuffers[2];    // Detection buffers
     cv::cuda::GpuMat gpuTempBuffers[2];         // Temporary processing buffers
     
+    // 🚀 Guided Filtering GPU buffers for edge-blending
+    cv::cuda::GpuMat gpuGuidedFilterBuffers[4]; // Guided filter processing buffers
+    cv::cuda::GpuMat gpuBoxFilterBuffers[2];    // Box filter intermediate buffers
+    
+    // 🚀 Edge Blurring GPU buffers for enhanced edge processing
+    cv::cuda::GpuMat gpuEdgeBlurBuffers[3];     // Edge blurring processing buffers
+    cv::cuda::GpuMat gpuEdgeDetectionBuffers[2]; // Edge detection intermediate buffers
+    
     // Reusable CUDA filters (create once, use many times)
     cv::Ptr<cv::cuda::Filter> morphCloseFilter;
     cv::Ptr<cv::cuda::Filter> morphOpenFilter;
@@ -63,6 +71,14 @@ private:
     int currentSegBuffer = 0;
     int currentDetBuffer = 0;
     int currentTempBuffer = 0;
+    
+    // 🚀 Guided Filtering buffer rotation indices
+    int currentGuidedFilterBuffer = 0;
+    int currentBoxFilterBuffer = 0;
+    
+    // 🚀 Edge Blurring buffer rotation indices
+    int currentEdgeBlurBuffer = 0;
+    int currentEdgeDetectionBuffer = 0;
     
     // Pool state
     bool initialized = false;
@@ -82,6 +98,14 @@ public:
     cv::cuda::GpuMat& getNextSegmentationBuffer();
     cv::cuda::GpuMat& getNextDetectionBuffer();
     cv::cuda::GpuMat& getNextTempBuffer();
+    
+    // 🚀 Guided Filtering buffer management
+    cv::cuda::GpuMat& getNextGuidedFilterBuffer();
+    cv::cuda::GpuMat& getNextBoxFilterBuffer();
+    
+    // 🚀 Edge Blurring buffer management
+    cv::cuda::GpuMat& getNextEdgeBlurBuffer();
+    cv::cuda::GpuMat& getNextEdgeDetectionBuffer();
     
     // Filter access
     cv::Ptr<cv::cuda::Filter>& getMorphCloseFilter() { return morphCloseFilter; }
