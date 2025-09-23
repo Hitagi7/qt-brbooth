@@ -877,23 +877,30 @@ void Capture::captureRecordingFrame()
 
     // 🚀 CRASH PREVENTION: Safe raw person data recording for post-processing
     if ((m_displayMode == SegmentationMode || m_displayMode == RectangleMode)) {
+        // 🚀 MULTIPLE USER RECORDING: Store all detected people for this frame
         try {
-            if (!m_lastRawPersonRegion.empty() && !m_lastRawPersonMask.empty()) {
-                cv::Mat personRegionCopy = m_lastRawPersonRegion.clone();
-                cv::Mat personMaskCopy = m_lastRawPersonMask.clone();
-                
-                if (!personRegionCopy.empty() && !personMaskCopy.empty()) {
-                    m_recordedRawPersonRegions.append(personRegionCopy);
-                    m_recordedRawPersonMasks.append(personMaskCopy);
+            // The multiple user data is already stored in m_recordedRawPersonRegions during segmentation
+            // We just need to ensure the recording system uses this data
+            if (m_recordedRawPersonRegions.isEmpty() || m_recordedRawPersonMasks.isEmpty()) {
+                // Fallback to single person data if no multiple user data available
+                if (!m_lastRawPersonRegion.empty() && !m_lastRawPersonMask.empty()) {
+                    cv::Mat personRegionCopy = m_lastRawPersonRegion.clone();
+                    cv::Mat personMaskCopy = m_lastRawPersonMask.clone();
+                    
+                    if (!personRegionCopy.empty() && !personMaskCopy.empty()) {
+                        m_recordedRawPersonRegions.append(personRegionCopy);
+                        m_recordedRawPersonMasks.append(personMaskCopy);
+                    } else {
+                        qWarning() << "🚀 RECORDING: Failed to clone person data - using empty mats";
+                        m_recordedRawPersonRegions.append(cv::Mat());
+                        m_recordedRawPersonMasks.append(cv::Mat());
+                    }
                 } else {
-                    qWarning() << "🚀 RECORDING: Failed to clone person data - using empty mats";
                     m_recordedRawPersonRegions.append(cv::Mat());
                     m_recordedRawPersonMasks.append(cv::Mat());
                 }
-            } else {
-                m_recordedRawPersonRegions.append(cv::Mat());
-                m_recordedRawPersonMasks.append(cv::Mat());
             }
+            // If m_recordedRawPersonRegions already has data from segmentation, we use that
         } catch (const std::exception& e) {
             qWarning() << "🚀 RECORDING: Exception during person data recording:" << e.what();
             m_recordedRawPersonRegions.append(cv::Mat());
@@ -2965,6 +2972,7 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
             qDebug() << "🎯 Using black background (no template selected)";
         }
 
+        // 🚀 MULTIPLE USER SUPPORT: Process all detected people and composite them properly
         for (int i = 0; i < maxDetections; i++) {
             const auto& detection = detections[i];
             qDebug() << "🎯 Processing detection" << i << "at" << detection.x << detection.y << detection.width << "x" << detection.height;
@@ -2974,13 +2982,23 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
 
             // Check if mask has any non-zero pixels
             int nonZeroPixels = cv::countNonZero(personMask);
-            qDebug() << "🎯 Person mask has" << nonZeroPixels << "non-zero pixels";
+            qDebug() << "🎯 Person" << i << "mask has" << nonZeroPixels << "non-zero pixels";
 
             // Apply mask to extract person from camera frame
             cv::Mat personRegion;
             frame.copyTo(personRegion, personMask);
             
-            // Store raw person data for post-processing (lighting will be applied after capture)
+            // 🚀 MULTIPLE USER FIX: Store raw person data for each user (not just the last one)
+            // Store in vectors to handle multiple users for post-processing
+            if (i == 0) {
+                // Clear previous data for new frame
+                m_recordedRawPersonRegions.clear();
+                m_recordedRawPersonMasks.clear();
+            }
+            m_recordedRawPersonRegions.append(personRegion.clone());
+            m_recordedRawPersonMasks.append(personMask.clone());
+            
+            // Keep the last person's data in the original variables for backward compatibility
             m_lastRawPersonRegion = personRegion.clone();
             m_lastRawPersonMask = personMask.clone();
             
@@ -3045,11 +3063,15 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
                     cv::Rect backgroundRect(cv::Point(xOffset, yOffset), scaledPersonSize);
                     cv::Rect personRect(cv::Point(0, 0), scaledPersonSize);
 
-                    // Composite scaled person onto background at calculated position
+                    // 🚀 MULTIPLE USER COMPOSITING: Use proper mask-based compositing for template backgrounds
                     cv::Mat backgroundROI = segmentedFrame(backgroundRect);
-                    scaledPersonRegion(personRect).copyTo(backgroundROI, scaledPersonMask(personRect));
+                    cv::Mat personROI = scaledPersonRegion(personRect);
+                    cv::Mat maskROI = scaledPersonMask(personRect);
+                    
+                    // Use proper mask-based compositing to preserve background
+                    personROI.copyTo(backgroundROI, maskROI);
                 } else {
-                    // Fallback: composite at origin if scaling makes person too large
+                    // 🚀 MULTIPLE USER FALLBACK: Use proper mask-based compositing for fallback case
                     scaledPersonRegion.copyTo(segmentedFrame, scaledPersonMask);
                 }
             } else {
@@ -3057,7 +3079,15 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
                 cv::resize(personRegion, scaledPersonRegion, segmentedFrame.size(), 0, 0, cv::INTER_LINEAR);
                 cv::resize(personMask, scaledPersonMask, segmentedFrame.size(), 0, 0, cv::INTER_LINEAR);
 
-                // Simple compositing: copy scaled person region directly to background where mask is non-zero
+                // 🚀 MULTIPLE USER COMPOSITING: Use proper mask-based compositing
+                // This ensures multiple people are properly composited without affecting background
+                cv::Mat invertedMask;
+                cv::bitwise_not(scaledPersonMask, invertedMask);
+                
+                // First, remove person from background where mask is present
+                segmentedFrame.setTo(cv::Scalar(0, 0, 0), scaledPersonMask);
+                
+                // Then, add the person region where mask is present
                 scaledPersonRegion.copyTo(segmentedFrame, scaledPersonMask);
             }
         }
@@ -3160,12 +3190,17 @@ cv::Mat Capture::createSegmentedFrameGPUOnly(const cv::Mat &frame, const std::ve
             segmentedFrame = cv::Mat::zeros(frame.size(), frame.type());
         }
 
-        // Process detections with GPU-only silhouette segmentation
+        // 🚀 MULTIPLE USER GPU PROCESSING: Process detections with proper alpha blending
         for (int i = 0; i < maxDetections; i++) {
             cv::Mat personSegment = enhancedSilhouetteSegmentGPUOnly(m_gpuVideoFrame, detections[i]);
             if (!personSegment.empty()) {
-                // Composite person onto background
-                cv::addWeighted(segmentedFrame, 1.0, personSegment, 1.0, 0.0, segmentedFrame);
+                // 🚀 MULTIPLE USER FIX: Use proper mask-based compositing for GPU processing
+                // Extract person region and mask from the segment
+                cv::Mat personMask;
+                cv::cvtColor(personSegment, personMask, cv::COLOR_BGR2GRAY);
+                
+                // Use proper mask-based compositing to preserve background
+                personSegment.copyTo(segmentedFrame, personMask);
             }
         }
 
@@ -3187,28 +3222,12 @@ cv::Mat Capture::createSegmentedFrameGPUOnly(const cv::Mat &frame, const std::ve
 
 cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect &detection)
 {
-    // Optimized frame skipping for GPU-accelerated segmentation - process every 4th frame
-    static int frameCounter = 0;
-    static double lastProcessingTime = 0.0;
-    frameCounter++;
-
-    // More aggressive skipping to prevent freezing
-    bool shouldProcess = (frameCounter % 4 == 0); // Process every 4th frame by default
-
-    // If processing is taking too long, skip even more frames
-    if (lastProcessingTime > 20.0) { // Reduced threshold from 30ms to 20ms
-        shouldProcess = (frameCounter % 6 == 0); // Process every 6th frame
-    } else if (lastProcessingTime < 10.0) { // Reduced threshold from 15ms to 10ms
-        shouldProcess = (frameCounter % 2 == 0); // Process every 2nd frame at most
-    }
-
-    if (!shouldProcess) {
-        // Return cached result for skipped frames
-        static cv::Mat lastMask;
-        if (!lastMask.empty()) {
-            return lastMask.clone();
-        }
-    }
+    // 🚀 MULTIPLE USER FIX: Remove frame skipping for consistent segmentation of all people
+    // Frame skipping was causing inconsistent results between first and subsequent people
+    // Each person should get proper segmentation regardless of frame count
+    
+    // Always process each person detection for consistent results
+    bool shouldProcess = true;
 
     // Start timing for adaptive processing
     auto startTime = std::chrono::high_resolution_clock::now();
@@ -3585,15 +3604,9 @@ cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect 
     int finalNonZeroPixels = cv::countNonZero(finalMask);
     qDebug() << "🎯 Enhanced silhouette segmentation complete, final mask has" << finalNonZeroPixels << "non-zero pixels";
 
-    // Cache the result for frame skipping
-    static cv::Mat lastMask;
-    lastMask = finalMask.clone();
-
-    // End timing and update adaptive processing
-    auto endTime = std::chrono::high_resolution_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(endTime - startTime);
-    lastProcessingTime = duration.count() / 1000.0; // Convert to milliseconds
-
+    // 🚀 MULTIPLE USER FIX: Remove caching and timing since we process every person consistently
+    // Each person detection gets proper segmentation without shared state
+    
     return finalMask;
 }
 
@@ -5307,10 +5320,13 @@ cv::Mat Capture::applyPostProcessingLighting()
 {
     qDebug() << "🎯 POST-PROCESSING: Apply lighting to raw person data and re-composite";
     
-    // Check if we have raw person data
-    if (m_lastRawPersonRegion.empty() || m_lastRawPersonMask.empty()) {
-        qWarning() << "🎯 No raw person data available, returning original segmented frame";
-        return m_lastSegmentedFrame.clone();
+    // 🚀 MULTIPLE USER FIX: Check if we have multiple user data stored
+    if (m_recordedRawPersonRegions.isEmpty() || m_recordedRawPersonMasks.isEmpty()) {
+        // Fallback to single person data if no multiple user data
+        if (m_lastRawPersonRegion.empty() || m_lastRawPersonMask.empty()) {
+            qWarning() << "🎯 No raw person data available, returning original segmented frame";
+            return m_lastSegmentedFrame.clone();
+        }
     }
     
     // Start from a clean background template/dynamic video frame (no person composited yet)
@@ -5331,15 +5347,26 @@ cv::Mat Capture::applyPostProcessingLighting()
     }
     result = cleanBackground.clone();
     
-    // Apply lighting to the raw person region (post-processing as in original)
-    cv::Mat lightingCorrectedPerson = applyLightingToRawPersonRegion(m_lastRawPersonRegion, m_lastRawPersonMask);
+    // 🚀 MULTIPLE USER FIX: Process all stored person data for post-processing
+    int numPeople = m_recordedRawPersonRegions.size();
+    qDebug() << "🎯 POST-PROCESSING: Processing" << numPeople << "people for lighting correction";
     
-    // Scale the lighting-corrected person to match the segmented frame size for blending
-    cv::Mat scaledPerson, scaledMask;
-    cv::resize(lightingCorrectedPerson, scaledPerson, result.size());
-    cv::resize(m_lastRawPersonMask, scaledMask, result.size());
-    
-    // Soft-edge alpha blend only around the person (robust feather, background untouched)
+    // Process each person and composite them onto the background
+    for (int i = 0; i < numPeople; i++) {
+        cv::Mat personRegion = m_recordedRawPersonRegions[i];
+        cv::Mat personMask = m_recordedRawPersonMasks[i];
+        
+        qDebug() << "🎯 POST-PROCESSING: Processing person" << i << "of" << numPeople;
+        
+        // Apply lighting to this person's raw region
+        cv::Mat lightingCorrectedPerson = applyLightingToRawPersonRegion(personRegion, personMask);
+        
+        // Scale the lighting-corrected person to match the result size for blending
+        cv::Mat scaledPerson, scaledMask;
+        cv::resize(lightingCorrectedPerson, scaledPerson, result.size());
+        cv::resize(personMask, scaledMask, result.size());
+        
+        // Soft-edge alpha blend only around the person (robust feather, background untouched)
     try {
         // Ensure binary mask 0/255
         cv::Mat binMask;
@@ -5444,12 +5471,16 @@ cv::Mat Capture::applyPostProcessingLighting()
         scaledPerson.copyTo(result, scaledMask);
     }
     
+        // Composite this person onto the result
+        // (The lighting correction logic above handles the compositing)
+        
+    } // End of loop for each person
+    
     // Save debug images
     cv::imwrite("debug_post_original_segmented.png", m_lastSegmentedFrame);
-    cv::imwrite("debug_post_lighting_corrected_person.png", lightingCorrectedPerson);
     cv::imwrite("debug_post_final_result.png", result);
-    qDebug() << "🎯 POST-PROCESSING: Applied lighting to person and re-composited";
-    qDebug() << "🎯 Debug images saved: post_original_segmented, post_lighting_corrected_person, post_final_result";
+    qDebug() << "🎯 POST-PROCESSING: Applied lighting to" << numPeople << "people and re-composited";
+    qDebug() << "🎯 Debug images saved: post_original_segmented, post_final_result";
     
     return result;
 }
