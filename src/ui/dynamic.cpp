@@ -1,6 +1,6 @@
 #include "ui/dynamic.h"
 
-#include "../../build/Desktop_Qt_6_9_1_MSVC2022_64bit-Debug/ui_dynamic.h"  // Full definition of Ui::Dynamic class
+#include "../../build/Desktop_Qt_6_9_2_MSVC2022_64bit-Debug/ui_dynamic.h"  // Full definition of Ui::Dynamic class
 #include "ui/iconhover.h"  // Assuming this is a local class for hover effects
 #include <QStyle>       // For QStyle::polish
 #include <QDebug>
@@ -195,9 +195,15 @@ Dynamic::Dynamic(QWidget* parent)
 
     // Connect fullscreen player to loop at end of media
     connect(fullscreenPlayer, &QMediaPlayer::mediaStatusChanged, this, [this](QMediaPlayer::MediaStatus status) {
+        qDebug() << "Dynamic::fullscreenPlayer - Media status changed to:" << status;
         if (status == QMediaPlayer::EndOfMedia) {
+            qDebug() << "Dynamic::fullscreenPlayer - End of media reached, looping...";
             fullscreenPlayer->setPosition(0); // Reset to beginning
             fullscreenPlayer->play();         // Play again
+        } else if (status == QMediaPlayer::InvalidMedia) {
+            qWarning() << "Dynamic::fullscreenPlayer - Invalid media detected!";
+        } else if (status == QMediaPlayer::LoadedMedia) {
+            qDebug() << "Dynamic::fullscreenPlayer - Media loaded successfully";
         }
     });
     qDebug() << "Dynamic::Dynamic - Fullscreen player media status connected for looping.";
@@ -248,21 +254,14 @@ void Dynamic::setupVideoPlayers()
     // Go up one level from debug/ to the build directory
     QString buildDir = QDir(appDir).absoluteFilePath("..");
     
-    // Videos for template selection page (UI preview)
+    // Template videos for both preview and capture interface
+    // Use the correct build directory path: build/Desktop_Qt_6_9_2_MSVC2022_64bit-Debug/templates/dynamic/
     QStringList actualVideoPaths;
-    actualVideoPaths << "videos/video1.mp4"
-                     << "videos/video2.mp4"
-                     << "videos/video3.mp4"
-                     << "videos/video4.mp4"
-                     << "videos/video5.mp4";
-
-    // Template videos for capture interface (actual processing)
-    QStringList templateVideoPaths;
-    templateVideoPaths << buildDir + "/templates/dynamic/vidtemplate1.mp4"
-                       << buildDir + "/templates/dynamic/vidtemplate2.mp4"
-                       << buildDir + "/templates/dynamic/vidtemplate3.mp4"
-                       << buildDir + "/templates/dynamic/vidtemplate4.mp4"
-                       << buildDir + "/templates/dynamic/vidtemplate5.mp4";
+    actualVideoPaths << buildDir + "/templates/dynamic/vidtemplate1.mp4"
+                     << buildDir + "/templates/dynamic/vidtemplate2.mp4"
+                     << buildDir + "/templates/dynamic/vidtemplate3.mp4"
+                     << buildDir + "/templates/dynamic/vidtemplate4.mp4"
+                     << buildDir + "/templates/dynamic/vidtemplate5.mp4";
 
     // Define GIF paths for thumbnails
     QStringList gifPaths;
@@ -287,7 +286,15 @@ void Dynamic::setupVideoPlayers()
         qDebug() << "Dynamic::setupVideoPlayers - Processing button:" << button->objectName();
 
         // Store the actual video path as a property on the button
-        button->setProperty("actualVideoPath", actualVideoPaths.at(i));
+        QString videoPath = actualVideoPaths.at(i);
+        button->setProperty("actualVideoPath", videoPath);
+        
+        // Verify the video file exists
+        if (QFile::exists(videoPath)) {
+            qDebug() << "Dynamic::setupVideoPlayers - Video file exists:" << videoPath;
+        } else {
+            qWarning() << "Dynamic::setupVideoPlayers - Video file NOT found:" << videoPath;
+        }
 
         // Connect the button's clicked signal
         connect(button, &QPushButton::clicked, this, [this, button]() {
@@ -638,18 +645,8 @@ void Dynamic::processVideoClick(QObject *buttonObj)
 
     // Store the selected video path for persistence across navigation
     if (!actualVideoPath.isEmpty()) {
-        // Convert to absolute path for consistent storage
-        QString absolutePath = actualVideoPath;
-        if (QFileInfo(actualVideoPath).isRelative()) {
-            QString appDir = QCoreApplication::applicationDirPath();
-            QString buildDir = QDir(appDir).absoluteFilePath("..");
-            if (actualVideoPath.startsWith("videos/", Qt::CaseInsensitive)) {
-                absolutePath = QDir(buildDir).absoluteFilePath(actualVideoPath);
-            } else {
-                absolutePath = QDir(appDir).absoluteFilePath(actualVideoPath);
-            }
-        }
-        m_lastSelectedVideoPath = absolutePath;
+        // The actualVideoPath is already an absolute path from setupVideoPlayers
+        m_lastSelectedVideoPath = actualVideoPath;
         qDebug() << "Dynamic::processVideoClick - Updated m_lastSelectedVideoPath to:" << m_lastSelectedVideoPath;
     }
 
@@ -706,22 +703,18 @@ void Dynamic::showOverlayVideo(const QString& videoPath)
     // Ensure video widget fills the entire container
     fullscreenVideoWidget->setGeometry(fullscreenStackWidget->rect());
     
-    // Store absolute path to emit to Capture/BRBooth
-    QString absolutePath = videoPath;
-    if (QFileInfo(videoPath).isRelative()) {
-        // The desired location is build/.../videos, which is one level above appDir (debug/release)
-        QString appDir = QCoreApplication::applicationDirPath();
-        QString buildDir = QDir(appDir).absoluteFilePath("..");
-        // If the incoming path starts with "videos/", resolve from buildDir/videos
-        if (videoPath.startsWith("videos/", Qt::CaseInsensitive)) {
-            absolutePath = QDir(buildDir).absoluteFilePath(videoPath);
-        } else {
-            absolutePath = QDir(appDir).absoluteFilePath(videoPath);
-        }
+    // The videoPath is already absolute from setupVideoPlayers
+    m_selectedVideoPath = videoPath;
+    m_lastSelectedVideoPath = videoPath; // Store for persistence
+    
+    // Verify the file exists before trying to play it
+    if (!QFile::exists(videoPath)) {
+        qWarning() << "Dynamic::showOverlayVideo - Video file does not exist:" << videoPath;
+        return;
     }
-    m_selectedVideoPath = absolutePath;
-    m_lastSelectedVideoPath = absolutePath; // Store for persistence
-    fullscreenPlayer->setSource(QUrl::fromLocalFile(absolutePath));
+    
+    qDebug() << "Dynamic::showOverlayVideo - Loading video from:" << videoPath;
+    fullscreenPlayer->setSource(QUrl::fromLocalFile(videoPath));
     
     // Show the stack widget (which contains both video and back button)
     fullscreenStackWidget->show();
@@ -893,19 +886,8 @@ void Dynamic::restoreSelection()
         if (button) {
             QString buttonVideoPath = button->property("actualVideoPath").toString();
             if (!buttonVideoPath.isEmpty()) {
-                // Convert to absolute path for comparison
-                QString absoluteButtonPath = buttonVideoPath;
-                if (QFileInfo(buttonVideoPath).isRelative()) {
-                    QString appDir = QCoreApplication::applicationDirPath();
-                    QString buildDir = QDir(appDir).absoluteFilePath("..");
-                    if (buttonVideoPath.startsWith("videos/", Qt::CaseInsensitive)) {
-                        absoluteButtonPath = QDir(buildDir).absoluteFilePath(buttonVideoPath);
-                    } else {
-                        absoluteButtonPath = QDir(appDir).absoluteFilePath(buttonVideoPath);
-                    }
-                }
-                
-                if (absoluteButtonPath == m_lastSelectedVideoPath) {
+                // The buttonVideoPath is already absolute from setupVideoPlayers
+                if (buttonVideoPath == m_lastSelectedVideoPath) {
                     // Found the matching button, restore its selection
                     applyHighlightStyle(button, true);
                     currentSelectedVideoWidget = button;

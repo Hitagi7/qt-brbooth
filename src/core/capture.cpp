@@ -8,6 +8,7 @@
 #include <QPixmap>
 #include <QTimer>
 #include <QPropertyAnimation>
+#include <vector>
 #include <QFont>
 #include <QResizeEvent>
 #include <QElapsedTimer>
@@ -583,10 +584,12 @@ void Capture::updateCameraFeed(const QImage &image)
     }
 
     // BACKGROUND PROCESSING: Move heavy work to separate threads (non-blocking)
-    if (frameCount > 5 && frameCount % 3 == 0) { // Process every 3rd frame after frame 5
+    // For dynamic video backgrounds, throttle processing to reduce load while keeping video smooth
+    int processInterval = (m_useDynamicVideoBackground && m_displayMode == SegmentationMode) ? 6 : 3;
+    if (frameCount > 5 && frameCount % processInterval == 0) {
         // Process person detection in background (non-blocking) - only if segmentation is enabled
         if ((m_displayMode == RectangleMode || m_displayMode == SegmentationMode) && m_segmentationEnabledInCapture) {
-            qDebug() << "🎯 Starting person detection processing - frame:" << frameCount << "mode:" << m_displayMode;
+            qDebug() << "🎯 Starting person detection processing - frame:" << frameCount << "mode:" << m_displayMode << "interval:" << processInterval;
             QMutexLocker locker(&m_personDetectionMutex);
             m_currentFrame = qImageToCvMat(image);
 
@@ -764,8 +767,6 @@ void Capture::updateOverlayStyles()
     ui->overlayWidget->setStyleSheet("background: transparent;");
     qDebug() << "Clean professional overlay styles applied";
 }
-
-
 void Capture::printPerformanceStats() {
     if (frameCount == 0) return; // Avoid division by zero
 
@@ -1151,15 +1152,6 @@ void Capture::setupDebugDisplay()
     personSegmentationButton->setStyleSheet("QPushButton { color: white; font-size: 12px; background-color: #1976d2; border: 1px solid white; padding: 5px; border-radius: 3px; }");
     connect(personSegmentationButton, &QPushButton::clicked, this, &Capture::togglePersonDetection);
     debugLayout->addWidget(personSegmentationButton);
-
-    // handDetectionLabel = new QLabel("Hand Detection: OFF", debugWidget);
-    // handDetectionLabel->setStyleSheet("QLabel { color: #00aaff; font-size: 12px; }");
-    // debugLayout->addWidget(handDetectionLabel);
-
-    // handDetectionButton = new QPushButton("Disable Hand Detection", debugWidget);
-    // handDetectionButton->setStyleSheet("QPushButton { color: white; font-size: 12px; background-color: #d32f2f; border: 1px solid white; padding: 5px; border-radius: 3px; }");
-    // connect(handDetectionButton, &QPushButton::clicked, this, &Capture::toggleHandDetection);
-    // debugLayout->addWidget(handDetectionButton);
 
     // 🚀 PERFORMANCE OPTIMIZATION: Remove lighting mode toggle button (post-processing only)
     // QPushButton *lightingModeButton = new QPushButton("Toggle Lighting Mode", debugWidget);
@@ -1562,7 +1554,6 @@ void Capture::keyPressEvent(QKeyEvent *event)
             QWidget::keyPressEvent(event);
     }
 }
-
 void Capture::showEvent(QShowEvent *event)
 {
     QWidget::showEvent(event);
@@ -2157,6 +2148,8 @@ void Capture::setVideoTemplate(const VideoTemplate &templateData)
 
 void Capture::enableDynamicVideoBackground(const QString &videoPath)
 {
+    qDebug() << "🎞️ enableDynamicVideoBackground called with path:" << videoPath;
+    
     // Close previous if open
     if (m_dynamicVideoCap.isOpened()) {
         m_dynamicVideoCap.release();
@@ -2164,25 +2157,44 @@ void Capture::enableDynamicVideoBackground(const QString &videoPath)
     if (!m_dynamicGpuReader.empty()) {
         m_dynamicGpuReader.release();
     }
-    m_dynamicVideoPath = videoPath;
+    
+    // Clean up the path and verify file exists
+    QString cleanPath = QDir::cleanPath(videoPath);
+    m_dynamicVideoPath = cleanPath;
     m_useDynamicVideoBackground = false;
+    
+    qDebug() << "🎞️ Cleaned path:" << cleanPath;
+    qDebug() << "🎞️ File exists check:" << QFile::exists(cleanPath);
+    
+    if (!QFile::exists(cleanPath)) {
+        qWarning() << "🎞️ Video file does not exist:" << cleanPath;
+        return;
+    }
 
     bool opened = false;
-    // Try GPU reader first (NVDEC)
-    try {
-        m_dynamicGpuReader = cv::cudacodec::createVideoReader(m_dynamicVideoPath.toStdString());
-        opened = !m_dynamicGpuReader.empty();
-    } catch (const cv::Exception &e) {
-        qWarning() << "GPU video reader unavailable:" << e.what();
-        m_dynamicGpuReader.release();
+    
+    // Try multiple OpenCV backends in order of preference
+    std::vector<int> backends = {
+        cv::CAP_MSMF,      // Microsoft Media Foundation (Windows native)
+        cv::CAP_FFMPEG,    // FFmpeg
+        cv::CAP_DSHOW,     // DirectShow (Windows)
+        cv::CAP_ANY        // Auto-detect
+    };
+    
+    for (int backend : backends) {
+        qDebug() << "🎞️ Trying backend:" << backend;
+        m_dynamicVideoCap.open(cleanPath.toStdString(), backend);
+        if (m_dynamicVideoCap.isOpened()) {
+            opened = true;
+            qDebug() << "🎞️ Successfully opened video with backend:" << backend;
+            break;
+        } else {
+            qDebug() << "🎞️ Backend" << backend << "failed to open video";
+        }
     }
+    
     if (!opened) {
-        // Open using FFMPEG backend; if system has NVDEC via ffmpeg, it may use it
-        m_dynamicVideoCap.open(m_dynamicVideoPath.toStdString(), cv::CAP_FFMPEG);
-        opened = m_dynamicVideoCap.isOpened();
-    }
-    if (!opened) {
-        qWarning() << "Failed to open dynamic video background:" << m_dynamicVideoPath;
+        qWarning() << "🎞️ All backends failed to open video:" << cleanPath;
         return;
     }
 
@@ -2219,6 +2231,12 @@ void Capture::enableDynamicVideoBackground(const QString &videoPath)
             m_videoFrameRate = 30.0; // Fallback to 30 FPS if detection fails
         }
         m_videoFrameInterval = qRound(1000.0 / m_videoFrameRate); // Convert to milliseconds
+        
+        // Ensure minimum responsiveness - don't go below 16ms (60 FPS max)
+        if (m_videoFrameInterval < 16) {
+            m_videoFrameInterval = 16;
+        }
+        
         qDebug() << "🎞️ Video frame rate detected:" << m_videoFrameRate << "FPS, interval:" << m_videoFrameInterval << "ms";
     } else if (!m_dynamicGpuReader.empty()) {
         // For GPU reader, use default frame rate (GPU readers don't always expose FPS)
@@ -2227,18 +2245,19 @@ void Capture::enableDynamicVideoBackground(const QString &videoPath)
         qDebug() << "🎞️ Using default frame rate for GPU video reader:" << m_videoFrameRate << "FPS";
     }
 
-    // Prime first frame
+    // Prime first frame - skip CUDA reader for now since it's failing
     cv::Mat first;
-    if (!m_dynamicGpuReader.empty()) {
-        cv::cuda::GpuMat gpu;
-        if (m_dynamicGpuReader->nextFrame(gpu) && !gpu.empty()) {
-            cv::cuda::cvtColor(gpu, gpu, cv::COLOR_BGRA2BGR);
-            gpu.download(first);
+    bool frameRead = false;
+    
+    if (m_dynamicVideoCap.isOpened()) {
+        frameRead = m_dynamicVideoCap.read(first);
+        qDebug() << "🎞️ First frame read attempt:" << frameRead;
+        if (frameRead && !first.empty()) {
+            qDebug() << "🎞️ First frame size:" << first.cols << "x" << first.rows;
         }
-    } else if (m_dynamicVideoCap.isOpened()) {
-        m_dynamicVideoCap.read(first);
     }
-    if (!first.empty()) {
+    
+    if (frameRead && !first.empty()) {
         m_dynamicVideoFrame = first.clone();
         m_useDynamicVideoBackground = true;
         qDebug() << "🎞️ Dynamic video background enabled:" << m_dynamicVideoPath;
@@ -2303,7 +2322,6 @@ void Capture::clearDynamicVideoPath()
     m_dynamicVideoPath.clear();
     qDebug() << "🧹 Cleared dynamic video path for mode switching";
 }
-
 // Phase 1: Video Playback Timer Slot - Advances video frames at native frame rate
 void Capture::onVideoPlaybackTimer()
 {
@@ -2311,51 +2329,41 @@ void Capture::onVideoPlaybackTimer()
         return;
     }
 
-    // Advance to next video frame at native frame rate
     cv::Mat nextFrame;
     bool frameRead = false;
 
-    if (!m_dynamicGpuReader.empty()) {
-        cv::cuda::GpuMat gpu;
-        if (m_dynamicGpuReader->nextFrame(gpu) && !gpu.empty()) {
-            cv::cuda::cvtColor(gpu, gpu, cv::COLOR_BGRA2BGR);
-            gpu.download(nextFrame);
-            frameRead = true;
-        } else {
-            // Loop video - recreate reader
-            try {
-                m_dynamicGpuReader.release();
-                m_dynamicGpuReader = cv::cudacodec::createVideoReader(m_dynamicVideoPath.toStdString());
-                if (m_dynamicGpuReader->nextFrame(gpu) && !gpu.empty()) {
-                    cv::cuda::cvtColor(gpu, gpu, cv::COLOR_BGRA2BGR);
-                    gpu.download(nextFrame);
-                    frameRead = true;
+    if (m_dynamicVideoCap.isOpened()) {
+        frameRead = m_dynamicVideoCap.read(nextFrame);
+
+        if (frameRead && !nextFrame.empty()) {
+            double totalFrames = m_dynamicVideoCap.get(cv::CAP_PROP_FRAME_COUNT);
+            double currentFrameIndex = m_dynamicVideoCap.get(cv::CAP_PROP_POS_FRAMES);
+
+            if (totalFrames > 0 && currentFrameIndex >= totalFrames - 1) {
+                // Rewind to the beginning to keep playback seamless
+                m_dynamicVideoCap.set(cv::CAP_PROP_POS_FRAMES, 0);
+
+                // Immediately fetch the first frame so the loop is visible right away
+                if (!m_dynamicVideoCap.read(nextFrame) || nextFrame.empty()) {
+                    frameRead = false;
                 }
-            } catch (...) {
-                qWarning() << "Failed to loop GPU video reader";
             }
         }
-    } else if (m_dynamicVideoCap.isOpened()) {
-        if (m_dynamicVideoCap.read(nextFrame) && !nextFrame.empty()) {
-            frameRead = true;
-        } else {
-            // Loop video
-            m_dynamicVideoCap.set(cv::CAP_PROP_POS_FRAMES, 0);
-            if (m_dynamicVideoCap.read(nextFrame) && !nextFrame.empty()) {
-                frameRead = true;
+
+        if (!frameRead || nextFrame.empty()) {
+            // Hard reset: restart the video capture from disk
+            m_dynamicVideoCap.release();
+            if (m_dynamicVideoCap.open(m_dynamicVideoPath.toStdString(), cv::CAP_MSMF)) {
+                m_dynamicVideoCap.set(cv::CAP_PROP_POS_FRAMES, 0);
+                frameRead = m_dynamicVideoCap.read(nextFrame);
             }
         }
     }
 
     if (frameRead && !nextFrame.empty()) {
-        // Store the new frame for use in segmentation
         m_dynamicVideoFrame = nextFrame.clone();
-        qDebug() << "🎞️ Video frame advanced at native frame rate:" << m_videoFrameRate << "FPS";
-    } else {
-        qWarning() << "Failed to read next video frame in timer";
     }
 }
-
 // Reset dynamic video to start for re-recording
 void Capture::resetDynamicVideoToStart()
 {
@@ -2818,12 +2826,11 @@ cv::Mat Capture::processFrameWithUnifiedDetection(const cv::Mat &frame)
         } else {
             qDebug() << "⚠️ NO PEOPLE DETECTED in frame (total detections:" << found.size() << ")";
 
-            // For testing: create a fake detection in the center of the frame if no detections found
-            if (m_displayMode == SegmentationMode && frame.cols > 0 && frame.rows > 0) {
-                qDebug() << "🎯 TESTING: Creating fake detection in center for segmentation testing";
-                cv::Rect fakeDetection(frame.cols/4, frame.rows/4, frame.cols/2, frame.rows/2);
-                motionFiltered.push_back(fakeDetection);
-                qDebug() << "🎯 TESTING: Added fake detection at" << fakeDetection.x << fakeDetection.y << fakeDetection.width << "x" << fakeDetection.height;
+            // For dynamic video backgrounds, always create a segmented frame even without people detection
+            // This ensures the video background is always visible
+            if (m_displayMode == SegmentationMode && m_useDynamicVideoBackground) {
+                qDebug() << "🎯 Dynamic video mode: Creating segmented frame without people detection to show video background";
+                // Don't add fake detection, just let createSegmentedFrame handle the background
             }
         }
 
@@ -2840,14 +2847,16 @@ cv::Mat Capture::processFrameWithUnifiedDetection(const cv::Mat &frame)
         return frame.clone();
     }
 }
-
 cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv::Rect> &detections)
 {
     // Process only first 3 detections for better performance (matching peopledetect_v1.cpp)
     int maxDetections = std::min(3, (int)detections.size());
 
     if (m_displayMode == SegmentationMode) {
-        qDebug() << "🎯 SEGMENTATION MODE: Creating background + edge-based silhouettes";
+        qDebug() << "🎯 SEGMENTATION MODE (CPU): Creating background + edge-based silhouettes";
+        qDebug() << "🎯 - m_useDynamicVideoBackground:" << m_useDynamicVideoBackground;
+        qDebug() << "🎯 - m_videoPlaybackActive:" << m_videoPlaybackActive;
+        qDebug() << "🎯 - detections count:" << detections.size();
 
         // Create background for edge-based segmentation
         cv::Mat segmentedFrame;
@@ -2869,39 +2878,44 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
             // Phase 1: Use pre-advanced video frame from timer instead of reading synchronously
             if (!m_dynamicVideoFrame.empty()) {
                 cv::resize(m_dynamicVideoFrame, segmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
-                qDebug() << "🎞️ Using pre-advanced video frame for segmentation (Phase 1)";
+                qDebug() << "🎞️ ✅ Successfully using video frame for segmentation - frame size:" << m_dynamicVideoFrame.cols << "x" << m_dynamicVideoFrame.rows;
+                qDebug() << "🎞️ ✅ Segmented frame size:" << segmentedFrame.cols << "x" << segmentedFrame.rows;
             } else {
                 // Fallback: read frame synchronously if timer hasn't advanced yet
                 cv::Mat nextBg;
-                if (!m_dynamicGpuReader.empty()) {
-                    cv::cuda::GpuMat gpu;
-                    if (!m_dynamicGpuReader->nextFrame(gpu) || gpu.empty()) {
-                        // cudacodec doesn't expose random seek universally; recreate reader to loop
-                        try {
-                            m_dynamicGpuReader.release();
-                            m_dynamicGpuReader = cv::cudacodec::createVideoReader(m_dynamicVideoPath.toStdString());
-                            m_dynamicGpuReader->nextFrame(gpu);
-                        } catch (...) {}
-                    }
-                    if (!gpu.empty()) {
-                        cv::cuda::cvtColor(gpu, gpu, cv::COLOR_BGRA2BGR);
-                        gpu.download(nextBg);
-                    }
-                }
-                if (nextBg.empty() && m_dynamicVideoCap.isOpened()) {
+                
+                // Use CPU video reader (skip CUDA reader since it's failing)
+                if (m_dynamicVideoCap.isOpened()) {
                     if (!m_dynamicVideoCap.read(nextBg) || nextBg.empty()) {
                         m_dynamicVideoCap.set(cv::CAP_PROP_POS_FRAMES, 0);
                         m_dynamicVideoCap.read(nextBg);
                     }
                 }
+                
                 if (!nextBg.empty()) {
                     cv::resize(nextBg, segmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
                     m_dynamicVideoFrame = segmentedFrame.clone();
+                    qDebug() << "🎞️ Fallback: Successfully read video frame for segmentation";
                 } else {
                     segmentedFrame = cv::Mat::zeros(frame.size(), frame.type());
+                    qWarning() << "🎞️ Fallback: Failed to read video frame - using black background";
                 }
             }
-        } else if (m_useBackgroundTemplate && !m_selectedBackgroundTemplate.isEmpty()) {
+        } else {
+            // Debug why dynamic video background is not being used
+            if (m_useDynamicVideoBackground) {
+                if (!m_videoPlaybackActive) {
+                    qWarning() << "🎞️ Dynamic video background enabled but playback not active!";
+                } else if (m_dynamicVideoFrame.empty()) {
+                    qWarning() << "🎞️ Dynamic video background enabled and playback active but no video frame available!";
+                }
+            } else {
+                qDebug() << "🎞️ Dynamic video background not enabled - using template or black background";
+            }
+        }
+        
+        // Only process background templates if we're not using dynamic video background
+        if (!m_useDynamicVideoBackground && m_useBackgroundTemplate && !m_selectedBackgroundTemplate.isEmpty()) {
             // Check if we need to reload the background template
             bool needReload = cachedBackgroundTemplate.empty() ||
                              lastBackgroundPath != m_selectedBackgroundTemplate;
@@ -2959,11 +2973,12 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
 
             // Use cached background template
             segmentedFrame = cachedBackgroundTemplate.clone();
-        } else {
-            // Use black background (default) - same size as frame
+        } else if (!m_useDynamicVideoBackground) {
+            // Only use black background if we're not using dynamic video background
             segmentedFrame = cv::Mat::zeros(frame.size(), frame.type());
             qDebug() << "🎯 Using black background (no template selected)";
         }
+        // If m_useDynamicVideoBackground is true, segmentedFrame should already be set with video frame
 
         for (int i = 0; i < maxDetections; i++) {
             const auto& detection = detections[i];
@@ -3062,7 +3077,13 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
             }
         }
 
-        qDebug() << "🎯 Segmentation complete, returning segmented frame";
+        // Ensure we always return the video background in segmentation mode
+        if (segmentedFrame.empty() && m_useDynamicVideoBackground && !m_dynamicVideoFrame.empty()) {
+            qDebug() << "🎯 Segmented frame is empty, using video frame directly";
+            cv::resize(m_dynamicVideoFrame, segmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
+        }
+        
+        qDebug() << "🎯 Segmentation complete, returning segmented frame - size:" << segmentedFrame.cols << "x" << segmentedFrame.rows << "empty:" << segmentedFrame.empty();
         return segmentedFrame;
     } else if (m_displayMode == RectangleMode) {
         // Show original frame with detection rectangles
@@ -3087,7 +3108,6 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
         return frame.clone();
     }
 }
-
 // Phase 2A: GPU-Only Segmentation Frame Creation
 cv::Mat Capture::createSegmentedFrameGPUOnly(const cv::Mat &frame, const std::vector<cv::Rect> &detections)
 {
@@ -3095,7 +3115,10 @@ cv::Mat Capture::createSegmentedFrameGPUOnly(const cv::Mat &frame, const std::ve
     int maxDetections = std::min(3, (int)detections.size());
 
     if (m_displayMode == SegmentationMode) {
-        qDebug() << "🎮 Phase 2A: GPU-only segmentation frame creation";
+        qDebug() << "🎮 SEGMENTATION MODE (GPU): GPU-only segmentation frame creation";
+        qDebug() << "🎮 - m_useDynamicVideoBackground:" << m_useDynamicVideoBackground;
+        qDebug() << "🎮 - m_videoPlaybackActive:" << m_videoPlaybackActive;
+        qDebug() << "🎮 - detections count:" << detections.size();
 
         // Create background for edge-based segmentation
         cv::Mat segmentedFrame;
@@ -3115,9 +3138,11 @@ cv::Mat Capture::createSegmentedFrameGPUOnly(const cv::Mat &frame, const std::ve
 
                 // Download result
                 m_gpuSegmentedFrame.download(segmentedFrame);
-                qDebug() << "🎮 Phase 2A: GPU-only video background processing completed";
+                qDebug() << "🎮 ✅ Successfully using GPU video frame for segmentation - frame size:" << m_dynamicVideoFrame.cols << "x" << m_dynamicVideoFrame.rows;
+                qDebug() << "🎮 ✅ GPU segmented frame size:" << segmentedFrame.cols << "x" << segmentedFrame.rows;
             } else {
                 segmentedFrame = cv::Mat::zeros(frame.size(), frame.type());
+                qWarning() << "🎮 ❌ Dynamic video frame is empty - using black background";
             }
         } else if (m_useBackgroundTemplate && !m_selectedBackgroundTemplate.isEmpty()) {
             // GPU-only background template processing
@@ -3169,6 +3194,13 @@ cv::Mat Capture::createSegmentedFrameGPUOnly(const cv::Mat &frame, const std::ve
             }
         }
 
+        // Ensure we always return the video background in segmentation mode
+        if (segmentedFrame.empty() && m_useDynamicVideoBackground && !m_dynamicVideoFrame.empty()) {
+            qDebug() << "🎮 GPU segmented frame is empty, using video frame directly";
+            cv::resize(m_dynamicVideoFrame, segmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
+        }
+        
+        qDebug() << "🎮 GPU segmentation complete, returning segmented frame - size:" << segmentedFrame.cols << "x" << segmentedFrame.rows << "empty:" << segmentedFrame.empty();
         return segmentedFrame;
 
     } else if (m_displayMode == RectangleMode) {
@@ -3596,7 +3628,6 @@ cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect 
 
     return finalMask;
 }
-
 // Phase 2A: GPU-Only Silhouette Segmentation
 cv::Mat Capture::enhancedSilhouetteSegmentGPUOnly(const cv::cuda::GpuMat &gpuFrame, const cv::Rect &detection)
 {
@@ -3784,9 +3815,6 @@ void Capture::adjustRect(cv::Rect &r) const
     r.y += cvRound(r.height*0.07);
     r.height = cvRound(r.height*0.8);
 }
-
-
-
 std::vector<cv::Rect> Capture::detectPeople(const cv::Mat &frame)
 {
     std::vector<cv::Rect> found;
@@ -4386,7 +4414,6 @@ void Capture::onHandTriggeredCapture()
     qDebug() << "🎯 Hand triggered capture signal received in main thread";
     startHandTriggeredCountdown();
 }
-
 void Capture::enableHandDetection(bool enable)
 {
     m_handDetectionEnabled = enable;
@@ -4508,15 +4535,55 @@ void Capture::enableSegmentationInCapture()
     qDebug() << "🎯 Enabling segmentation for capture interface";
     m_segmentationEnabledInCapture = true;
 
-    // Restore the last segmentation mode if it was different from normal
-    if (m_lastSegmentationMode != NormalMode) {
-        m_displayMode = m_lastSegmentationMode;
-        qDebug() << "🎯 Restored segmentation mode:" << m_lastSegmentationMode;
-    } else {
-        // Default to normal mode for first-time capture page visits
-        m_displayMode = NormalMode;
-        qDebug() << "🎯 Using default normal mode for capture interface";
+    // Debug dynamic video background state
+    qDebug() << "🎯 Dynamic video background state:";
+    qDebug() << "  - m_useDynamicVideoBackground:" << m_useDynamicVideoBackground;
+    qDebug() << "  - m_videoPlaybackActive:" << m_videoPlaybackActive;
+    qDebug() << "  - m_dynamicVideoPath:" << m_dynamicVideoPath;
+    qDebug() << "  - m_dynamicVideoFrame empty:" << m_dynamicVideoFrame.empty();
+
+    // If we have a dynamic video background but playback is not active, restart it
+    if (m_useDynamicVideoBackground && !m_videoPlaybackActive && !m_dynamicVideoPath.isEmpty()) {
+        qDebug() << "🎯 Dynamic video background detected but playback not active - restarting video playback";
+        
+        // Restart video playback timer
+        if (m_videoPlaybackTimer && m_videoFrameInterval > 0) {
+            m_videoPlaybackTimer->setInterval(m_videoFrameInterval);
+            m_videoPlaybackTimer->start();
+            m_videoPlaybackActive = true;
+            qDebug() << "🎞️ Video playback timer restarted with interval:" << m_videoFrameInterval << "ms";
+        }
+        
+        // If we don't have a current frame, try to read the first frame
+        if (m_dynamicVideoFrame.empty()) {
+            cv::Mat firstFrame;
+            bool frameRead = false;
+
+            if (!m_dynamicGpuReader.empty()) {
+                cv::cuda::GpuMat gpu;
+                if (m_dynamicGpuReader->nextFrame(gpu) && !gpu.empty()) {
+                    cv::cuda::cvtColor(gpu, gpu, cv::COLOR_BGRA2BGR);
+                    gpu.download(firstFrame);
+                    frameRead = true;
+                }
+            } else if (m_dynamicVideoCap.isOpened()) {
+                if (m_dynamicVideoCap.read(firstFrame) && !firstFrame.empty()) {
+                    frameRead = true;
+                }
+            }
+
+            if (frameRead && !firstFrame.empty()) {
+                m_dynamicVideoFrame = firstFrame.clone();
+                qDebug() << "🎞️ Successfully loaded first frame for segmentation display";
+            } else {
+                qWarning() << "🎞️ Failed to load first frame for segmentation display";
+            }
+        }
     }
+
+    // Always default to normal mode - user can press 'S' to toggle to segmentation mode
+    m_displayMode = NormalMode;
+    qDebug() << "🎯 Using default normal mode for capture interface";
 
     // Clear any previous segmentation results to force new processing
     m_lastSegmentedFrame = cv::Mat();
@@ -4526,7 +4593,6 @@ void Capture::enableSegmentationInCapture()
     updatePersonDetectionButton();
     updateDebugDisplay();
 }
-
 void Capture::disableSegmentationOutsideCapture()
 {
     qDebug() << "🎯 Disabling segmentation outside capture interface";
@@ -5110,7 +5176,6 @@ QPixmap Capture::processFrameForRecordingGPU(const cv::Mat &frame)
 
     return result;
 }
-
 // Resource Management Methods
 void Capture::cleanupResources()
 {
@@ -5298,8 +5363,6 @@ cv::Mat Capture::applyPersonLightingCorrection(const cv::Mat &inputImage, const 
     
     return result;
 }
-
-
 // Forward declaration to ensure availability before use
 static cv::Mat guidedFilterGrayAlpha(const cv::Mat &guideBGR, const cv::Mat &hardMask, int radius, float eps);
 
@@ -5896,10 +5959,6 @@ cv::Mat Capture::applyDynamicFrameEdgeBlending(const cv::Mat &composedFrame,
         return m_lightingCorrector->applyGlobalLightingCorrection(composedFrame);
     }
 }
-
-// 🚀 REMOVED: processLightingAsync, setRealtimeLightingEnabled, isRealtimeLightingEnabled, toggleLightingMode
-// These methods are not needed since we only use post-processing lighting
-
 // 🚀 NEW: Lightweight Segmented Frame Creation for Recording Performance
 cv::Mat Capture::createLightweightSegmentedFrame(const cv::Mat &frame)
 {
@@ -5950,7 +6009,7 @@ cv::Mat Capture::createLightweightSegmentedFrame(const cv::Mat &frame)
     return result;
 }
 
-// 🚀 NEW: Performance Control Methods
+// 🚀 Performance Control Methods
 // 🚀 REMOVED: Real-time lighting methods - not needed for post-processing only mode
 
 // Scaffold: Guided filter-based feather alpha builder (stub)
@@ -6085,7 +6144,6 @@ static cv::Mat guidedFilterGrayAlphaCUDAOptimized(const cv::Mat &guideBGR, const
         return guidedFilterGrayAlphaCPU(guideBGR, hardMask, radius, eps);
     }
 }
-
 // 🚀 CUDA-Accelerated Guided Filter for Edge-Blending
 // GPU-optimized guided filtering that maintains FPS and quality
 static cv::Mat guidedFilterGrayAlphaCUDA(const cv::Mat &guideBGR, const cv::Mat &hardMask, int radius, float eps, 
