@@ -61,6 +61,41 @@ static double intersectionOverUnion(const cv::Rect &a, const cv::Rect &b)
     return static_cast<double>(interArea) / static_cast<double>(unionArea);
 }
 
+// Consolidate near-identical boxes (very high IoU) to ensure one box per person
+static std::vector<cv::Rect> enforceOneBoxPerPerson(const std::vector<cv::Rect> &detections)
+{
+    if (detections.size() <= 1) {
+        return detections;
+    }
+
+    const double highIoU = 0.75; // only merge near-duplicates; preserves nearby people
+
+    std::vector<cv::Rect> boxes = detections;
+    std::vector<bool> removed(boxes.size(), false);
+
+    for (size_t i = 0; i < boxes.size(); ++i) {
+        if (removed[i]) continue;
+        for (size_t j = i + 1; j < boxes.size(); ++j) {
+            if (removed[j]) continue;
+            double iou = intersectionOverUnion(boxes[i], boxes[j]);
+            if (iou >= highIoU) {
+                // Merge duplicates by taking the union to retain full-body coverage
+                boxes[i] = boxes[i] | boxes[j];
+                removed[j] = true;
+            }
+        }
+    }
+
+    std::vector<cv::Rect> result;
+    result.reserve(boxes.size());
+    for (size_t i = 0; i < boxes.size(); ++i) {
+        if (!removed[i]) {
+            result.push_back(boxes[i]);
+        }
+    }
+    return result;
+}
+
 std::vector<cv::Rect> Capture::smoothDetections(const std::vector<cv::Rect> &current)
 {
     // Parameters: EMA smoothing and IoU matching
@@ -2558,11 +2593,12 @@ cv::Mat Capture::processFrameWithGPUOnlyPipeline(const cv::Mat &frame)
         cv::Mat cpuProcessFrame;
         processFrame.download(cpuProcessFrame);
 
-        // Detect people using enhanced detection with frame skipping
+        // Detect people using enhanced detection with conditional frame skipping
         std::vector<cv::Rect> found;
-        if (m_detectionSkipCounter == 0) {
+        const bool haveRecent = !m_prevSmoothedDetections.empty();
+        if (!haveRecent || m_detectionSkipCounter == 0) {
             found = detectPeople(cpuProcessFrame);
-            m_detectionSkipCounter = (m_detectionSkipInterval > 0) ? m_detectionSkipInterval : 1;
+            m_detectionSkipCounter = (m_detectionSkipInterval > 0 && haveRecent) ? m_detectionSkipInterval : 1;
         } else {
             found = m_prevSmoothedDetections;
             m_detectionSkipCounter--;
@@ -2841,13 +2877,9 @@ void Capture::initializePersonDetection()
 
 void Capture::adjustRect(cv::Rect &r) const
 {
-    // The HOG detector returns slightly larger rectangles than the real objects,
-    // so we slightly shrink the rectangles to get a nicer output.
-    // EXACT from peopledetect_v1.cpp
-    r.x += cvRound(r.width*0.1);
-    r.width = cvRound(r.width*0.8);
-    r.y += cvRound(r.height*0.07);
-    r.height = cvRound(r.height*0.8);
+    // Ensure the detection rectangle covers the full person: do not shrink.
+    // Keeping the original detector rectangle preserves full-body coverage.
+    // No-op for performance and coverage.
 }
 
 std::vector<cv::Rect> Capture::runCudaHogPass(const cv::Mat &frame,
@@ -2927,8 +2959,8 @@ std::vector<cv::Rect> Capture::runCudaHogMultiPass(const cv::Mat &frame)
         std::vector<cv::Rect> passDetections = runCudaHogPass(frame, scale, hitThreshold, stride);
         combined.insert(combined.end(), passDetections.begin(), passDetections.end());
 
-        // Early exit if primary pass finds detections to save time
-        if (i == 0 && !passDetections.empty()) {
+        // Early exit only if primary pass already found at least 2 detections
+        if (i == 0 && passDetections.size() >= 2) {
             break;
         }
     }
@@ -3046,6 +3078,8 @@ std::vector<cv::Rect> Capture::detectPeople(const cv::Mat &frame)
 
     // Non-maximum suppression
     detections = nonMaximumSuppression(detections, 0.6);
+    // Merge near-duplicates to ensure one box per person without heavy grouping
+    detections = enforceOneBoxPerPerson(detections);
 
     // Lightweight temporal smoothing for stability
     detections = smoothDetections(detections);
@@ -3079,13 +3113,14 @@ cv::Mat Capture::processFrameWithUnifiedDetection(const cv::Mat &frame)
             cv::resize(frame, processFrame, cv::Size(), scale, scale, cv::INTER_LINEAR);
         }
 
-        // Detect people using enhanced detection with frame skipping
+        // Detect people using enhanced detection with conditional frame skipping
         std::vector<cv::Rect> found;
-        if (m_detectionSkipCounter == 0) {
+        const bool haveRecent = !m_prevSmoothedDetections.empty();
+        if (!haveRecent || m_detectionSkipCounter == 0) {
             found = detectPeople(processFrame);
-            m_detectionSkipCounter = (m_detectionSkipInterval > 0) ? m_detectionSkipInterval : 1;
+            m_detectionSkipCounter = (m_detectionSkipInterval > 0 && haveRecent) ? m_detectionSkipInterval : 1;
         } else {
-            // Reuse last smoothed detections scaled to current frame size
+            // Reuse last smoothed detections
             found = m_prevSmoothedDetections;
             m_detectionSkipCounter--;
         }
