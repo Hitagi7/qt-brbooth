@@ -37,6 +37,7 @@
 #include "core/common_types.h"    // Common data structures
 #include "algorithms/hand_detection/hand_detector.h"
 #include "algorithms/lighting_correction/lighting_corrector.h"
+#include <array>
 
 // 🚀 GPU Memory Pool for optimized CUDA operations
 class GPUMemoryPool {
@@ -459,8 +460,18 @@ private:
     cv::Mat createSegmentedFrameGPUOnly(const cv::Mat &frame, const std::vector<cv::Rect> &detections);
     cv::Mat enhancedSilhouetteSegmentGPUOnly(const cv::cuda::GpuMat &gpuFrame, const cv::Rect &detection);
     void validateGPUResults(const cv::Mat &gpuResult, const cv::Mat &cpuResult);
+    std::vector<cv::Rect> runCudaHogMultiPass(const cv::Mat &frame);
+    std::vector<cv::Rect> runCudaHogPass(const cv::Mat &frame,
+                                         double resizeScale,
+                                         double hitThreshold,
+                                         const cv::Size &winStride);
+    std::vector<cv::Rect> runClassicHogPass(const cv::Mat &frame);
+    static std::vector<cv::Rect> nonMaximumSuppression(const std::vector<cv::Rect> &detections,
+                                                       double overlapThreshold);
+    std::vector<cv::Rect> filterDetectionsByMotion(const std::vector<cv::Rect> &detections,
+                                                   const cv::Mat &motionMask,
+                                                   double minOverlapRatio) const;
     std::vector<cv::Rect> detectPeople(const cv::Mat &frame);
-    std::vector<cv::Rect> filterByMotion(const std::vector<cv::Rect> &detections, const cv::Mat &motionMask);
     cv::Mat getMotionMask(const cv::Mat &frame);
     void adjustRect(cv::Rect &r) const;
     
@@ -527,6 +538,13 @@ private:
     QImage cvMatToQImage(const cv::Mat &mat);
     cv::Mat qImageToCvMat(const QImage &image);
     QString resolveTemplatePath(const QString &templatePath);
+    std::array<double, 2> m_cudaHogScales;
+    double m_cudaHogHitThresholdPrimary;
+    double m_cudaHogHitThresholdSecondary;
+    cv::Size m_cudaHogWinStridePrimary;
+    cv::Size m_cudaHogWinStrideSecondary;
+    double m_detectionNmsOverlap;
+    double m_detectionMotionOverlap;
 };
 
 #endif // CAPTURE_H
