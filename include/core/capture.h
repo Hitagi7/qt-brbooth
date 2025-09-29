@@ -474,6 +474,8 @@ private:
     std::vector<cv::Rect> detectPeople(const cv::Mat &frame);
     cv::Mat getMotionMask(const cv::Mat &frame);
     void adjustRect(cv::Rect &r) const;
+    // Lightweight temporal smoothing of detections
+    std::vector<cv::Rect> smoothDetections(const std::vector<cv::Rect> &current);
     
     // Helper methods (implemented in .cpp)
     void updateDebugDisplay();
@@ -545,6 +547,13 @@ private:
     cv::Size m_cudaHogWinStrideSecondary;
     double m_detectionNmsOverlap;
     double m_detectionMotionOverlap;
+    // Smoothing state
+    std::vector<cv::Rect> m_prevSmoothedDetections;
+    int m_smoothingHoldFrames;
+    int m_smoothingHoldCounter;
+    // Frame-skipping for detection
+    int m_detectionSkipInterval;
+    int m_detectionSkipCounter;
 };
 
 #endif // CAPTURE_H

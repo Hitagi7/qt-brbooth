@@ -53,6 +53,66 @@ static cv::Mat applyEdgeBlurringCUDA(const cv::Mat &segmentedObject, const cv::M
 static cv::Mat applyEdgeBlurringCPU(const cv::Mat &segmentedObject, const cv::Mat &objectMask, const cv::Mat &backgroundTemplate, float blurRadius);
 static cv::Mat applyEdgeBlurringAlternative(const cv::Mat &segmentedObject, const cv::Mat &objectMask, float blurRadius);
 
+static double intersectionOverUnion(const cv::Rect &a, const cv::Rect &b)
+{
+    const int interArea = (a & b).area();
+    const int unionArea = a.area() + b.area() - interArea;
+    if (unionArea <= 0) return 0.0;
+    return static_cast<double>(interArea) / static_cast<double>(unionArea);
+}
+
+std::vector<cv::Rect> Capture::smoothDetections(const std::vector<cv::Rect> &current)
+{
+    // Parameters: EMA smoothing and IoU matching
+    const double iouMatchThreshold = 0.3;
+    const double alpha = 0.7; // keep majority of current box to avoid lag
+
+    if (m_prevSmoothedDetections.empty()) {
+        m_prevSmoothedDetections = current;
+        m_smoothingHoldCounter = m_smoothingHoldFrames;
+        return current;
+    }
+
+    std::vector<cv::Rect> result;
+    std::vector<bool> matchedPrev(m_prevSmoothedDetections.size(), false);
+
+    // Greedy match current to previous by IoU
+    for (const auto &cur : current) {
+        int bestIdx = -1;
+        double bestIou = 0.0;
+        for (size_t j = 0; j < m_prevSmoothedDetections.size(); ++j) {
+            if (matchedPrev[j]) continue;
+            double iou = intersectionOverUnion(cur, m_prevSmoothedDetections[j]);
+            if (iou > bestIou) { bestIou = iou; bestIdx = static_cast<int>(j); }
+        }
+
+        if (bestIdx >= 0 && bestIou >= iouMatchThreshold) {
+            const cv::Rect &prev = m_prevSmoothedDetections[bestIdx];
+            matchedPrev[bestIdx] = true;
+            // EMA on position and size
+            cv::Rect smoothed;
+            smoothed.x = cvRound(alpha * cur.x + (1.0 - alpha) * prev.x);
+            smoothed.y = cvRound(alpha * cur.y + (1.0 - alpha) * prev.y);
+            smoothed.width = cvRound(alpha * cur.width + (1.0 - alpha) * prev.width);
+            smoothed.height = cvRound(alpha * cur.height + (1.0 - alpha) * prev.height);
+            result.push_back(smoothed);
+        } else {
+            // New detection, accept as is
+            result.push_back(cur);
+        }
+    }
+
+    // Holdover: keep unmatched previous for a few frames to avoid flicker
+    if (result.empty() && m_smoothingHoldCounter > 0) {
+        m_smoothingHoldCounter--;
+        return m_prevSmoothedDetections;
+    }
+
+    m_prevSmoothedDetections = result;
+    m_smoothingHoldCounter = m_smoothingHoldFrames;
+    return result;
+}
+
 Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, QThread *existingCameraThread)
     : QWidget(parent)
     , ui(new Ui::Capture)
@@ -156,9 +216,13 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     , m_cudaHogHitThresholdPrimary(0.0)
     , m_cudaHogHitThresholdSecondary(-0.2)
     , m_cudaHogWinStridePrimary(8, 8)
-    , m_cudaHogWinStrideSecondary(4, 4)
+    , m_cudaHogWinStrideSecondary(16, 16)
     , m_detectionNmsOverlap(0.35)
     , m_detectionMotionOverlap(0.12)
+    , m_smoothingHoldFrames(5)
+    , m_smoothingHoldCounter(0)
+    , m_detectionSkipInterval(2)
+    , m_detectionSkipCounter(0)
     // Lighting Correction Member
     , m_lightingCorrector(nullptr)
     // 🚀 Simplified Lighting Processing (POST-PROCESSING ONLY)
@@ -2494,8 +2558,15 @@ cv::Mat Capture::processFrameWithGPUOnlyPipeline(const cv::Mat &frame)
         cv::Mat cpuProcessFrame;
         processFrame.download(cpuProcessFrame);
 
-        // Detect people using enhanced detection (CPU-based HOG)
-        std::vector<cv::Rect> found = detectPeople(cpuProcessFrame);
+        // Detect people using enhanced detection with frame skipping
+        std::vector<cv::Rect> found;
+        if (m_detectionSkipCounter == 0) {
+            found = detectPeople(cpuProcessFrame);
+            m_detectionSkipCounter = (m_detectionSkipInterval > 0) ? m_detectionSkipInterval : 1;
+        } else {
+            found = m_prevSmoothedDetections;
+            m_detectionSkipCounter--;
+        }
 
         // Scale results back if we resized the frame
         if (processFrame.cols != frame.cols) {
@@ -2811,7 +2882,19 @@ std::vector<cv::Rect> Capture::runCudaHogPass(const cv::Mat &frame,
         cv::cuda::resize(gpuGray, gpuResized, targetSize, 0, 0, cv::INTER_LINEAR);
 
         m_cudaHogDetector->setHitThreshold(hitThreshold);
-        m_cudaHogDetector->setWinStride(winStride);
+        // Validate winStride against block stride (8x8) and window size (64x128)
+        cv::Size validatedStride = winStride;
+        const cv::Size blockStride(8, 8);
+        const cv::Size winSize(64, 128);
+        if (validatedStride.width <= 0 || validatedStride.height <= 0 ||
+            (validatedStride.width % blockStride.width) != 0 ||
+            (validatedStride.height % blockStride.height) != 0 ||
+            validatedStride.width > winSize.width ||
+            validatedStride.height > winSize.height) {
+            // Prefer 16x16 for speed; otherwise fallback to 8x8
+            validatedStride = cv::Size(16, 16);
+        }
+        m_cudaHogDetector->setWinStride(validatedStride);
 
         std::vector<cv::Rect> found;
         m_cudaHogDetector->detectMultiScale(gpuResized, found);
@@ -2843,6 +2926,21 @@ std::vector<cv::Rect> Capture::runCudaHogMultiPass(const cv::Mat &frame)
 
         std::vector<cv::Rect> passDetections = runCudaHogPass(frame, scale, hitThreshold, stride);
         combined.insert(combined.end(), passDetections.begin(), passDetections.end());
+
+        // Early exit if primary pass finds detections to save time
+        if (i == 0 && !passDetections.empty()) {
+            break;
+        }
+    }
+
+    // If CUDA pass failed or found nothing, fall back to classic HOG
+    if (combined.empty()) {
+        try {
+            std::vector<cv::Rect> cpuDetections = runClassicHogPass(frame);
+            combined.insert(combined.end(), cpuDetections.begin(), cpuDetections.end());
+        } catch (...) {
+            // Keep empty if CPU also fails
+        }
     }
 
     return combined;
@@ -2949,6 +3047,9 @@ std::vector<cv::Rect> Capture::detectPeople(const cv::Mat &frame)
     // Non-maximum suppression
     detections = nonMaximumSuppression(detections, 0.6);
 
+    // Lightweight temporal smoothing for stability
+    detections = smoothDetections(detections);
+
     return detections;
 }
 
@@ -2978,8 +3079,16 @@ cv::Mat Capture::processFrameWithUnifiedDetection(const cv::Mat &frame)
             cv::resize(frame, processFrame, cv::Size(), scale, scale, cv::INTER_LINEAR);
         }
 
-        // Detect people using enhanced detection
-        std::vector<cv::Rect> found = detectPeople(processFrame);
+        // Detect people using enhanced detection with frame skipping
+        std::vector<cv::Rect> found;
+        if (m_detectionSkipCounter == 0) {
+            found = detectPeople(processFrame);
+            m_detectionSkipCounter = (m_detectionSkipInterval > 0) ? m_detectionSkipInterval : 1;
+        } else {
+            // Reuse last smoothed detections scaled to current frame size
+            found = m_prevSmoothedDetections;
+            m_detectionSkipCounter--;
+        }
 
         // Scale results back if we resized the frame
         if (processFrame.cols != frame.cols) {
@@ -3648,8 +3757,10 @@ cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect 
 
                 // Create masks for skin-like colors and non-background colors on GPU
                 cv::cuda::GpuMat gpu_skinMask, gpu_colorMask;
-                cv::cuda::inRange(gpu_hsv, cv::Scalar(0, 20, 70), cv::Scalar(20, 255, 255), gpu_skinMask);
-                cv::cuda::inRange(gpu_hsv, cv::Scalar(0, 30, 50), cv::Scalar(180, 255, 255), gpu_colorMask);
+                // Widened skin range and relaxed saturation/value to better capture varied tones/lighting
+                cv::cuda::inRange(gpu_hsv, cv::Scalar(0, 10, 40), cv::Scalar(25, 255, 255), gpu_skinMask);
+                // Broader general color mask with relaxed S/V to include darker/low-saturation clothing
+                cv::cuda::inRange(gpu_hsv, cv::Scalar(0, 15, 35), cv::Scalar(180, 255, 255), gpu_colorMask);
 
                 // Combine masks on GPU using bitwise_or
                 cv::cuda::GpuMat gpu_combinedMask;
@@ -3666,9 +3777,9 @@ cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect 
                 cv::Mat hsv;
                 cv::cvtColor(roi, hsv, cv::COLOR_BGR2HSV);
                 cv::Mat skinMask;
-                cv::inRange(hsv, cv::Scalar(0, 20, 70), cv::Scalar(20, 255, 255), skinMask);
+                cv::inRange(hsv, cv::Scalar(0, 10, 40), cv::Scalar(25, 255, 255), skinMask);
                 cv::Mat colorMask;
-                cv::inRange(hsv, cv::Scalar(0, 30, 50), cv::Scalar(180, 255, 255), colorMask);
+                cv::inRange(hsv, cv::Scalar(0, 15, 35), cv::Scalar(180, 255, 255), colorMask);
                 cv::bitwise_or(skinMask, colorMask, combinedMask);
             }
         } else {
@@ -3676,9 +3787,9 @@ cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect 
             cv::Mat hsv;
             cv::cvtColor(roi, hsv, cv::COLOR_BGR2HSV);
             cv::Mat skinMask;
-            cv::inRange(hsv, cv::Scalar(0, 20, 70), cv::Scalar(20, 255, 255), skinMask);
+            cv::inRange(hsv, cv::Scalar(0, 10, 40), cv::Scalar(25, 255, 255), skinMask);
             cv::Mat colorMask;
-            cv::inRange(hsv, cv::Scalar(0, 30, 50), cv::Scalar(180, 255, 255), colorMask);
+            cv::inRange(hsv, cv::Scalar(0, 15, 35), cv::Scalar(180, 255, 255), colorMask);
             cv::bitwise_or(skinMask, colorMask, combinedMask);
         }
 
