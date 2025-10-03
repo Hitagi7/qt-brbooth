@@ -211,6 +211,13 @@ public:
     double getPersonDetectionProcessingTime() const;
     bool isGPUAvailable() const;
     bool isCUDAAvailable() const;
+    
+    // Green-screen segmentation controls
+    void setGreenScreenEnabled(bool enabled);
+    bool isGreenScreenEnabled() const;
+    void setGreenHueRange(int hueMin, int hueMax);
+    void setGreenSaturationMin(int sMin);
+    void setGreenValueMin(int vMin);
 
 protected:
     void resizeEvent(QResizeEvent *event) override;
@@ -477,6 +484,10 @@ private:
     // Lightweight temporal smoothing of detections
     std::vector<cv::Rect> smoothDetections(const std::vector<cv::Rect> &current);
     
+    // Green-screen helpers
+    cv::Mat createGreenScreenPersonMask(const cv::Mat &frame) const;
+    std::vector<cv::Rect> deriveDetectionsFromMask(const cv::Mat &mask) const;
+    
     // Helper methods (implemented in .cpp)
     void updateDebugDisplay();
     void setupDebugDisplay();
@@ -554,6 +565,15 @@ private:
     // Frame-skipping for detection
     int m_detectionSkipInterval;
     int m_detectionSkipCounter;
+    
+    // Green-screen configuration
+    bool m_greenScreenEnabled;
+    int m_greenHueMin;   // HSV hue min for green
+    int m_greenHueMax;   // HSV hue max for green
+    int m_greenSatMin;   // HSV min saturation to be considered green
+    int m_greenValMin;   // HSV min value to be considered green
+    int m_greenMaskOpen; // morph open kernel size
+    int m_greenMaskClose;// morph close kernel size
 };
 
 #endif // CAPTURE_H

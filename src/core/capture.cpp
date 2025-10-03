@@ -334,6 +334,17 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     overlayImageLabel->resize(this->size());
     overlayImageLabel->hide();
 
+    // Green-screen defaults (robust to both ring/ceiling light scenarios)
+    m_greenScreenEnabled = false;
+    // Typical green in OpenCV HSV: H=[35, 85], allow wider tolerance for lighting shifts
+    m_greenHueMin = 35;
+    m_greenHueMax = 95;
+    m_greenSatMin = 40;
+    m_greenValMin = 30;
+    // Morphological cleanup sizes (pixels)
+    m_greenMaskOpen = 3;
+    m_greenMaskClose = 7;
+
     // Initialize status overlay
     statusOverlay = new QLabel(this);
     statusOverlay->setAlignment(Qt::AlignCenter);
@@ -3162,6 +3173,17 @@ cv::Mat Capture::processFrameWithUnifiedDetection(const cv::Mat &frame)
     // 🚀 PERFORMANCE OPTIMIZATION: NEVER apply lighting during real-time processing
     // Lighting is ONLY applied in post-processing after recording, just like static mode
 
+    // If green-screen is enabled, bypass HOG and derive mask directly
+    if (m_greenScreenEnabled && m_displayMode == SegmentationMode) {
+        cv::Mat personMask = createGreenScreenPersonMask(frame);
+        std::vector<cv::Rect> detections = deriveDetectionsFromMask(personMask);
+        m_lastDetections = detections;
+        cv::Mat segmentedFrame = createSegmentedFrame(frame, detections);
+        m_lastPersonDetectionTime = m_personDetectionTimer.elapsed() / 1000.0;
+        m_personDetectionFPS = (m_lastPersonDetectionTime > 0) ? 1.0 / m_lastPersonDetectionTime : 0;
+        return segmentedFrame;
+    }
+
     // Phase 2A: Use GPU-only processing if available
     if (isGPUOnlyProcessingAvailable()) {
         return processFrameWithGPUOnlyPipeline(frame);
@@ -3377,25 +3399,21 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
         }
         // If m_useDynamicVideoBackground is true, segmentedFrame should already be set with video frame
 
-        for (int i = 0; i < maxDetections; i++) {
-            const auto& detection = detections[i];
-            qDebug() << "🎯 Processing detection" << i << "at" << detection.x << detection.y << detection.width << "x" << detection.height;
+        if (m_greenScreenEnabled) {
+            // Whole-frame person compositing from green-screen mask
+            cv::Mat personMask = createGreenScreenPersonMask(frame);
 
-            // Get enhanced edge-based segmentation mask for this person
-            cv::Mat personMask = enhancedSilhouetteSegment(frame, detection);
-
-            // Check if mask has any non-zero pixels
             int nonZeroPixels = cv::countNonZero(personMask);
-            qDebug() << "🎯 Person mask has" << nonZeroPixels << "non-zero pixels";
+            qDebug() << "🎯 Green-screen person mask non-zero:" << nonZeroPixels;
 
             // Apply mask to extract person from camera frame
             cv::Mat personRegion;
             frame.copyTo(personRegion, personMask);
-            
+
             // Store raw person data for post-processing (lighting will be applied after capture)
             m_lastRawPersonRegion = personRegion.clone();
             m_lastRawPersonMask = personMask.clone();
-            
+
             // Store template background if using background template
             if (m_useBackgroundTemplate && !m_selectedBackgroundTemplate.isEmpty()) {
                 // Use cached template background if available, otherwise load it
@@ -3405,72 +3423,151 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
                         cv::Mat templateBg = cv::imread(resolvedPath.toStdString());
                         if (!templateBg.empty()) {
                             cv::resize(templateBg, m_lastTemplateBackground, frame.size());
-                        qDebug() << "🎯 Template background cached for post-processing from:" << resolvedPath;
+                            qDebug() << "🎯 Template background cached for post-processing from:" << resolvedPath;
                         } else {
                             qWarning() << "🎯 Failed to load template background from resolved path:" << resolvedPath;
-                            m_lastTemplateBackground = cv::Mat(); // Clear cache
+                            m_lastTemplateBackground = cv::Mat();
                         }
                     } else {
                         qWarning() << "🎯 Could not resolve template background path:" << m_selectedBackgroundTemplate;
-                        m_lastTemplateBackground = cv::Mat(); // Clear cache
+                        m_lastTemplateBackground = cv::Mat();
                     }
                 }
-                // m_lastTemplateBackground is now ready to use (either from cache or freshly loaded)
             }
 
             // Scale the person region with person-only scaling for background template mode and dynamic video mode
             cv::Mat scaledPersonRegion, scaledPersonMask;
 
-            // Apply person-only scaling if we're using background template OR dynamic video background
             if ((m_useBackgroundTemplate && !m_selectedBackgroundTemplate.isEmpty()) || m_useDynamicVideoBackground) {
-                // Calculate scaled size for person based on background size and person scale factor
                 cv::Size backgroundSize = segmentedFrame.size();
                 cv::Size scaledPersonSize;
 
                 if (qAbs(m_personScaleFactor - 1.0) > 0.01) {
-                    // Apply person scale factor
                     int scaledWidth = static_cast<int>(backgroundSize.width * m_personScaleFactor + 0.5);
                     int scaledHeight = static_cast<int>(backgroundSize.height * m_personScaleFactor + 0.5);
                     scaledPersonSize = cv::Size(scaledWidth, scaledHeight);
-
-                    qDebug() << "🎯 Person scaled to" << scaledWidth << "x" << scaledHeight
-                             << "with factor" << m_personScaleFactor;
+                    qDebug() << "🎯 Person scaled to" << scaledWidth << "x" << scaledHeight << "with factor" << m_personScaleFactor;
                 } else {
-                    // No scaling needed, use background size
                     scaledPersonSize = backgroundSize;
                 }
 
-                // Scale person to the calculated size
                 cv::resize(personRegion, scaledPersonRegion, scaledPersonSize, 0, 0, cv::INTER_LINEAR);
                 cv::resize(personMask, scaledPersonMask, scaledPersonSize, 0, 0, cv::INTER_LINEAR);
 
-                // Calculate position to center the scaled person on the background
                 int xOffset = (backgroundSize.width - scaledPersonSize.width) / 2;
                 int yOffset = (backgroundSize.height - scaledPersonSize.height) / 2;
 
-                // Ensure ROI is within background bounds
                 if (xOffset >= 0 && yOffset >= 0 &&
                     xOffset + scaledPersonSize.width <= backgroundSize.width &&
                     yOffset + scaledPersonSize.height <= backgroundSize.height) {
-
-                    // Create ROI for compositing using proper cv::Rect constructor
                     cv::Rect backgroundRect(cv::Point(xOffset, yOffset), scaledPersonSize);
                     cv::Rect personRect(cv::Point(0, 0), scaledPersonSize);
-
-                    // Composite scaled person onto background at calculated position
                     cv::Mat backgroundROI = segmentedFrame(backgroundRect);
                     scaledPersonRegion(personRect).copyTo(backgroundROI, scaledPersonMask(personRect));
                 } else {
-                    // Fallback: composite at origin if scaling makes person too large
                     scaledPersonRegion.copyTo(segmentedFrame, scaledPersonMask);
                 }
             } else {
-                // For black background, scale to match frame size (original behavior)
                 cv::resize(personRegion, scaledPersonRegion, segmentedFrame.size(), 0, 0, cv::INTER_LINEAR);
                 cv::resize(personMask, scaledPersonMask, segmentedFrame.size(), 0, 0, cv::INTER_LINEAR);
-
-                // Simple compositing: copy scaled person region directly to background where mask is non-zero
                 scaledPersonRegion.copyTo(segmentedFrame, scaledPersonMask);
+            }
+        } else {
+            for (int i = 0; i < maxDetections; i++) {
+                const auto& detection = detections[i];
+                qDebug() << "🎯 Processing detection" << i << "at" << detection.x << detection.y << detection.width << "x" << detection.height;
+
+                // Get enhanced edge-based segmentation mask for this person
+                cv::Mat personMask = enhancedSilhouetteSegment(frame, detection);
+
+                // Check if mask has any non-zero pixels
+                int nonZeroPixels = cv::countNonZero(personMask);
+                qDebug() << "🎯 Person mask has" << nonZeroPixels << "non-zero pixels";
+
+                // Apply mask to extract person from camera frame
+                cv::Mat personRegion;
+                frame.copyTo(personRegion, personMask);
+                
+                // Store raw person data for post-processing (lighting will be applied after capture)
+                m_lastRawPersonRegion = personRegion.clone();
+                m_lastRawPersonMask = personMask.clone();
+                
+                // Store template background if using background template
+                if (m_useBackgroundTemplate && !m_selectedBackgroundTemplate.isEmpty()) {
+                    // Use cached template background if available, otherwise load it
+                    if (m_lastTemplateBackground.empty() || lastBackgroundPath != m_selectedBackgroundTemplate) {
+                        QString resolvedPath = resolveTemplatePath(m_selectedBackgroundTemplate);
+                        if (!resolvedPath.isEmpty()) {
+                            cv::Mat templateBg = cv::imread(resolvedPath.toStdString());
+                            if (!templateBg.empty()) {
+                                cv::resize(templateBg, m_lastTemplateBackground, frame.size());
+                            qDebug() << "🎯 Template background cached for post-processing from:" << resolvedPath;
+                            } else {
+                                qWarning() << "🎯 Failed to load template background from resolved path:" << resolvedPath;
+                                m_lastTemplateBackground = cv::Mat(); // Clear cache
+                            }
+                        } else {
+                            qWarning() << "🎯 Could not resolve template background path:" << m_selectedBackgroundTemplate;
+                            m_lastTemplateBackground = cv::Mat(); // Clear cache
+                        }
+                    }
+                    // m_lastTemplateBackground is now ready to use (either from cache or freshly loaded)
+                }
+
+                // Scale the person region with person-only scaling for background template mode and dynamic video mode
+                cv::Mat scaledPersonRegion, scaledPersonMask;
+
+                // Apply person-only scaling if we're using background template OR dynamic video background
+                if ((m_useBackgroundTemplate && !m_selectedBackgroundTemplate.isEmpty()) || m_useDynamicVideoBackground) {
+                    // Calculate scaled size for person based on background size and person scale factor
+                    cv::Size backgroundSize = segmentedFrame.size();
+                    cv::Size scaledPersonSize;
+
+                    if (qAbs(m_personScaleFactor - 1.0) > 0.01) {
+                        // Apply person scale factor
+                        int scaledWidth = static_cast<int>(backgroundSize.width * m_personScaleFactor + 0.5);
+                        int scaledHeight = static_cast<int>(backgroundSize.height * m_personScaleFactor + 0.5);
+                        scaledPersonSize = cv::Size(scaledWidth, scaledHeight);
+
+                        qDebug() << "🎯 Person scaled to" << scaledWidth << "x" << scaledHeight
+                                 << "with factor" << m_personScaleFactor;
+                    } else {
+                        // No scaling needed, use background size
+                        scaledPersonSize = backgroundSize;
+                    }
+
+                    // Scale person to the calculated size
+                    cv::resize(personRegion, scaledPersonRegion, scaledPersonSize, 0, 0, cv::INTER_LINEAR);
+                    cv::resize(personMask, scaledPersonMask, scaledPersonSize, 0, 0, cv::INTER_LINEAR);
+
+                    // Calculate position to center the scaled person on the background
+                    int xOffset = (backgroundSize.width - scaledPersonSize.width) / 2;
+                    int yOffset = (backgroundSize.height - scaledPersonSize.height) / 2;
+
+                    // Ensure ROI is within background bounds
+                    if (xOffset >= 0 && yOffset >= 0 &&
+                        xOffset + scaledPersonSize.width <= backgroundSize.width &&
+                        yOffset + scaledPersonSize.height <= backgroundSize.height) {
+
+                        // Create ROI for compositing using proper cv::Rect constructor
+                        cv::Rect backgroundRect(cv::Point(xOffset, yOffset), scaledPersonSize);
+                        cv::Rect personRect(cv::Point(0, 0), scaledPersonSize);
+
+                        // Composite scaled person onto background at calculated position
+                        cv::Mat backgroundROI = segmentedFrame(backgroundRect);
+                        scaledPersonRegion(personRect).copyTo(backgroundROI, scaledPersonMask(personRect));
+                    } else {
+                        // Fallback: composite at origin if scaling makes person too large
+                        scaledPersonRegion.copyTo(segmentedFrame, scaledPersonMask);
+                    }
+                } else {
+                    // For black background, scale to match frame size (original behavior)
+                    cv::resize(personRegion, scaledPersonRegion, segmentedFrame.size(), 0, 0, cv::INTER_LINEAR);
+                    cv::resize(personMask, scaledPersonMask, segmentedFrame.size(), 0, 0, cv::INTER_LINEAR);
+
+                    // Simple compositing: copy scaled person region directly to background where mask is non-zero
+                    scaledPersonRegion.copyTo(segmentedFrame, scaledPersonMask);
+                }
             }
         }
 
@@ -4336,6 +4433,33 @@ bool Capture::isCUDAAvailable() const
     return m_useCUDA;
 }
 
+// --- Green-screen configuration API ---
+void Capture::setGreenScreenEnabled(bool enabled)
+{
+    m_greenScreenEnabled = enabled;
+}
+
+bool Capture::isGreenScreenEnabled() const
+{
+    return m_greenScreenEnabled;
+}
+
+void Capture::setGreenHueRange(int hueMin, int hueMax)
+{
+    m_greenHueMin = std::max(0, std::min(179, hueMin));
+    m_greenHueMax = std::max(0, std::min(179, hueMax));
+}
+
+void Capture::setGreenSaturationMin(int sMin)
+{
+    m_greenSatMin = std::max(0, std::min(255, sMin));
+}
+
+void Capture::setGreenValueMin(int vMin)
+{
+    m_greenValMin = std::max(0, std::min(255, vMin));
+}
+
 cv::Mat Capture::getMotionMask(const cv::Mat &frame)
 {
     cv::Mat fgMask;
@@ -4381,6 +4505,60 @@ cv::Mat Capture::getMotionMask(const cv::Mat &frame)
     }
 
     return fgMask;
+}
+
+// Create a person mask from non-green areas using HSV thresholding
+cv::Mat Capture::createGreenScreenPersonMask(const cv::Mat &frame) const
+{
+    if (frame.empty()) return cv::Mat();
+
+    cv::Mat hsv;
+    cv::cvtColor(frame, hsv, cv::COLOR_BGR2HSV);
+
+    // Threshold for green background
+    cv::Scalar lower(m_greenHueMin, m_greenSatMin, m_greenValMin);
+    cv::Scalar upper(m_greenHueMax, 255, 255);
+    cv::Mat greenMask;
+    cv::inRange(hsv, lower, upper, greenMask);
+
+    // Non-green = potential person
+    cv::Mat personMask;
+    cv::bitwise_not(greenMask, personMask);
+
+    // Morphological cleanup
+    int openK = std::max(1, m_greenMaskOpen);
+    int closeK = std::max(1, m_greenMaskClose);
+    cv::Mat kOpen = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(openK, openK));
+    cv::Mat kClose = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(closeK, closeK));
+    cv::morphologyEx(personMask, personMask, cv::MORPH_OPEN, kOpen);
+    cv::morphologyEx(personMask, personMask, cv::MORPH_CLOSE, kClose);
+
+    // Feather edges slightly for nicer compositing
+    cv::GaussianBlur(personMask, personMask, cv::Size(5, 5), 0);
+    cv::threshold(personMask, personMask, 127, 255, cv::THRESH_BINARY);
+
+    return personMask;
+}
+
+// Derive bounding boxes from a binary person mask
+std::vector<cv::Rect> Capture::deriveDetectionsFromMask(const cv::Mat &mask) const
+{
+    std::vector<cv::Rect> detections;
+    if (mask.empty()) return detections;
+
+    std::vector<std::vector<cv::Point>> contours;
+    cv::findContours(mask, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+
+    for (const auto &c : contours) {
+        cv::Rect r = cv::boundingRect(c);
+        if (r.area() < 1000) continue; // ignore tiny blobs
+        detections.push_back(r);
+    }
+
+    // Prefer the largest contour (likely the person)
+    std::sort(detections.begin(), detections.end(), [](const cv::Rect &a, const cv::Rect &b){ return a.area() > b.area(); });
+    if (detections.size() > 3) detections.resize(3);
+    return detections;
 }
 
 std::vector<cv::Rect> Capture::filterDetectionsByMotion(const std::vector<cv::Rect> &detections, const cv::Mat &motionMask, double overlapThreshold) const
