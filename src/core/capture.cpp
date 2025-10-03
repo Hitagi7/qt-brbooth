@@ -2276,29 +2276,43 @@ void Capture::enableDynamicVideoBackground(const QString &videoPath)
     }
 
     bool opened = false;
-    
-    // Try multiple OpenCV backends in order of preference
-    std::vector<int> backends = {
-        cv::CAP_MSMF,      // Microsoft Media Foundation (Windows native)
-        cv::CAP_FFMPEG,    // FFmpeg
-        cv::CAP_DSHOW,     // DirectShow (Windows)
-        cv::CAP_ANY        // Auto-detect
-    };
-    
-    for (int backend : backends) {
-        qDebug() << "🎞️ Trying backend:" << backend;
-        m_dynamicVideoCap.open(cleanPath.toStdString(), backend);
-        if (m_dynamicVideoCap.isOpened()) {
-            opened = true;
-            qDebug() << "🎞️ Successfully opened video with backend:" << backend;
-            break;
-        } else {
-            qDebug() << "🎞️ Backend" << backend << "failed to open video";
+
+    // Prefer GPU NVDEC via cudacodec if CUDA is enabled and available
+    if (m_useCUDA && cv::cuda::getCudaEnabledDeviceCount() > 0) {
+        try {
+            m_dynamicGpuReader = cv::cudacodec::createVideoReader(cleanPath.toStdString());
+            if (!m_dynamicGpuReader.empty()) {
+                opened = true;
+                qDebug() << "🎞️ Using CUDA VideoReader (NVDEC) for dynamic video background";
+            }
+        } catch (const cv::Exception &e) {
+            qWarning() << "🎞️ CUDA VideoReader unavailable, falling back to CPU VideoCapture:" << e.what();
+            m_dynamicGpuReader.release();
         }
     }
-    
+
+    // CPU fallback using multiple backends
     if (!opened) {
-        qWarning() << "🎞️ All backends failed to open video:" << cleanPath;
+        std::vector<int> backends = {
+            cv::CAP_MSMF,
+            cv::CAP_FFMPEG,
+            cv::CAP_DSHOW,
+            cv::CAP_ANY
+        };
+
+        for (int backend : backends) {
+            qDebug() << "🎞️ Trying CPU backend:" << backend;
+            m_dynamicVideoCap.open(cleanPath.toStdString(), backend);
+            if (m_dynamicVideoCap.isOpened()) {
+                opened = true;
+                qDebug() << "🎞️ Successfully opened video with CPU backend:" << backend;
+                break;
+            }
+        }
+    }
+
+    if (!opened) {
+        qWarning() << "🎞️ Failed to open dynamic video with both GPU and CPU readers:" << cleanPath;
         return;
     }
 
@@ -2310,10 +2324,14 @@ void Capture::enableDynamicVideoBackground(const QString &videoPath)
         m_videoFrameRate = m_dynamicVideoCap.get(cv::CAP_PROP_FPS);
         if (m_videoFrameRate > 0 && totalFrames > 0) {
             videoDurationSeconds = totalFrames / m_videoFrameRate;
-            qDebug() << "🎯 VIDEO DURATION DETECTED:" << videoDurationSeconds << "seconds";
+            qDebug() << "🎯 VIDEO DURATION DETECTED (CPU):" << videoDurationSeconds << "seconds";
             qDebug() << "  - Total frames:" << totalFrames;
             qDebug() << "  - Frame rate:" << m_videoFrameRate << "FPS";
         }
+    } else if (!m_dynamicGpuReader.empty()) {
+        // cudacodec does not reliably expose FPS/frames; keep template duration as-is
+        m_videoFrameRate = 30.0;
+        qDebug() << "🎯 Using default FPS (30) for CUDA reader; duration unchanged";
     }
 
     // Update video template with detected duration
@@ -2341,32 +2359,49 @@ void Capture::enableDynamicVideoBackground(const QString &videoPath)
             m_videoFrameInterval = 16;
         }
         
-        qDebug() << "🎞️ Video frame rate detected:" << m_videoFrameRate << "FPS, interval:" << m_videoFrameInterval << "ms";
+        qDebug() << "🎞️ Video frame rate detected (CPU):" << m_videoFrameRate << "FPS, interval:" << m_videoFrameInterval << "ms";
     } else if (!m_dynamicGpuReader.empty()) {
         // For GPU reader, use default frame rate (GPU readers don't always expose FPS)
-        m_videoFrameRate = 30.0;
-        m_videoFrameInterval = 33;
-        qDebug() << "🎞️ Using default frame rate for GPU video reader:" << m_videoFrameRate << "FPS";
+        if (m_videoFrameRate <= 0) m_videoFrameRate = 30.0;
+        m_videoFrameInterval = qRound(1000.0 / m_videoFrameRate);
+        if (m_videoFrameInterval < 16) m_videoFrameInterval = 16;
+        qDebug() << "🎞️ Using default frame rate for CUDA reader:" << m_videoFrameRate << "FPS";
     }
 
-    // Prime first frame - skip CUDA reader for now since it's failing
+    // Prime first frame using available reader
     cv::Mat first;
     bool frameRead = false;
-    
-    if (m_dynamicVideoCap.isOpened()) {
-        frameRead = m_dynamicVideoCap.read(first);
-        qDebug() << "🎞️ First frame read attempt:" << frameRead;
-        if (frameRead && !first.empty()) {
-            qDebug() << "🎞️ First frame size:" << first.cols << "x" << first.rows;
+
+    if (!m_dynamicGpuReader.empty()) {
+        try {
+            cv::cuda::GpuMat gpu;
+            if (m_dynamicGpuReader->nextFrame(gpu) && !gpu.empty()) {
+                // Ensure 3-channel BGR for downstream composition
+                if (gpu.type() == CV_8UC4) {
+                    cv::cuda::cvtColor(gpu, gpu, cv::COLOR_BGRA2BGR);
+                }
+                m_dynamicGpuFrame = gpu; // keep GPU copy for GPU compositing paths
+                gpu.download(first);
+                frameRead = !first.empty();
+            }
+        } catch (const cv::Exception &e) {
+            qWarning() << "🎞️ CUDA reader failed to read first frame, falling back to CPU:" << e.what();
+            m_dynamicGpuReader.release();
         }
     }
-    
+
+    if (!frameRead && m_dynamicVideoCap.isOpened()) {
+        frameRead = m_dynamicVideoCap.read(first);
+        if (frameRead && !first.empty()) {
+            qDebug() << "🎞️ First frame size (CPU):" << first.cols << "x" << first.rows;
+        }
+    }
+
     if (frameRead && !first.empty()) {
         m_dynamicVideoFrame = first.clone();
         m_useDynamicVideoBackground = true;
         qDebug() << "🎞️ Dynamic video background enabled:" << m_dynamicVideoPath;
 
-        // Phase 1: Start video playback timer for frame rate synchronization
         if (m_videoPlaybackTimer) {
             m_videoPlaybackTimer->setInterval(m_videoFrameInterval);
             m_videoPlaybackTimer->start();
@@ -2436,30 +2471,59 @@ void Capture::onVideoPlaybackTimer()
     cv::Mat nextFrame;
     bool frameRead = false;
 
-    if (m_dynamicVideoCap.isOpened()) {
-        frameRead = m_dynamicVideoCap.read(nextFrame);
+    // Try GPU reader first
+    if (!m_dynamicGpuReader.empty()) {
+        try {
+            cv::cuda::GpuMat gpu;
+            if (m_dynamicGpuReader->nextFrame(gpu) && !gpu.empty()) {
+                if (gpu.type() == CV_8UC4) {
+                    cv::cuda::cvtColor(gpu, gpu, cv::COLOR_BGRA2BGR);
+                }
+                m_dynamicGpuFrame = gpu; // keep latest GPU frame
+                gpu.download(nextFrame);
+                frameRead = !nextFrame.empty();
+            } else {
+                // Attempt soft restart of GPU reader
+                m_dynamicGpuReader.release();
+                m_dynamicGpuReader = cv::cudacodec::createVideoReader(m_dynamicVideoPath.toStdString());
+                cv::cuda::GpuMat gpuRetry;
+                if (!m_dynamicGpuReader.empty() && m_dynamicGpuReader->nextFrame(gpuRetry) && !gpuRetry.empty()) {
+                    if (gpuRetry.type() == CV_8UC4) {
+                        cv::cuda::cvtColor(gpuRetry, gpuRetry, cv::COLOR_BGRA2BGR);
+                    }
+                    m_dynamicGpuFrame = gpuRetry;
+                    gpuRetry.download(nextFrame);
+                    frameRead = !nextFrame.empty();
+                }
+            }
+        } catch (const cv::Exception &e) {
+            qWarning() << "🎞️ CUDA reader failed during timer; switching to CPU:" << e.what();
+            m_dynamicGpuReader.release();
+        }
+    }
 
-        if (frameRead && !nextFrame.empty()) {
-            double totalFrames = m_dynamicVideoCap.get(cv::CAP_PROP_FRAME_COUNT);
-            double currentFrameIndex = m_dynamicVideoCap.get(cv::CAP_PROP_POS_FRAMES);
-
-            if (totalFrames > 0 && currentFrameIndex >= totalFrames - 1) {
-                // Rewind to the beginning to keep playback seamless
-                m_dynamicVideoCap.set(cv::CAP_PROP_POS_FRAMES, 0);
-
-                // Immediately fetch the first frame so the loop is visible right away
-                if (!m_dynamicVideoCap.read(nextFrame) || nextFrame.empty()) {
-                    frameRead = false;
+    // CPU fallback
+    if (!frameRead) {
+        if (!m_dynamicVideoCap.isOpened()) {
+            // Reopen with preferred backend
+            if (!m_dynamicVideoPath.isEmpty()) {
+                m_dynamicVideoCap.open(m_dynamicVideoPath.toStdString(), cv::CAP_MSMF);
+                if (!m_dynamicVideoCap.isOpened()) {
+                    m_dynamicVideoCap.open(m_dynamicVideoPath.toStdString(), cv::CAP_FFMPEG);
                 }
             }
         }
-
-        if (!frameRead || nextFrame.empty()) {
-            // Hard reset: restart the video capture from disk
-            m_dynamicVideoCap.release();
-            if (m_dynamicVideoCap.open(m_dynamicVideoPath.toStdString(), cv::CAP_MSMF)) {
-                m_dynamicVideoCap.set(cv::CAP_PROP_POS_FRAMES, 0);
-                frameRead = m_dynamicVideoCap.read(nextFrame);
+        if (m_dynamicVideoCap.isOpened()) {
+            frameRead = m_dynamicVideoCap.read(nextFrame);
+            if (frameRead && !nextFrame.empty()) {
+                double totalFrames = m_dynamicVideoCap.get(cv::CAP_PROP_FRAME_COUNT);
+                double currentFrameIndex = m_dynamicVideoCap.get(cv::CAP_PROP_POS_FRAMES);
+                if (totalFrames > 0 && currentFrameIndex >= totalFrames - 1) {
+                    m_dynamicVideoCap.set(cv::CAP_PROP_POS_FRAMES, 0);
+                    if (!m_dynamicVideoCap.read(nextFrame) || nextFrame.empty()) {
+                        frameRead = false;
+                    }
+                }
             }
         }
     }
