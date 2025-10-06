@@ -401,12 +401,14 @@ private:
     cv::Mat m_dynamicVideoFrame; // Last fetched frame for reuse if needed
     cv::Ptr<cv::cudacodec::VideoReader> m_dynamicGpuReader; // GPU video reader if available
     cv::cuda::GpuMat m_dynamicGpuFrame; // GPU frame buffer
+    mutable QMutex m_dynamicVideoMutex; // Thread-safe access to dynamic video frames
     
     // Video Playback Timer for Phase 1: Frame Rate Synchronization
     QTimer *m_videoPlaybackTimer; // Separate timer for video frame rate synchronization
     double m_videoFrameRate; // Native video frame rate (FPS)
     int m_videoFrameInterval; // Timer interval in milliseconds
     bool m_videoPlaybackActive; // Track if video playback is active
+    int m_videoTotalFrames; // Total frame count of template video for exact sync
     
     // Phase 2A: GPU-Only Video Processing Members
     cv::cuda::GpuMat m_gpuVideoFrame; // GPU video frame buffer
@@ -486,6 +488,15 @@ private:
     
     // Green-screen helpers
     cv::Mat createGreenScreenPersonMask(const cv::Mat &frame) const;
+    cv::cuda::GpuMat createGreenScreenPersonMaskGPU(const cv::cuda::GpuMat &gpuFrame) const;
+    cv::cuda::GpuMat removeGreenSpillGPU(const cv::cuda::GpuMat &gpuFrame, const cv::cuda::GpuMat &gpuMask) const;
+    cv::Mat refineGreenScreenMaskWithContours(const cv::Mat &mask, int minArea = 5000) const;
+    cv::Mat applyTemporalMaskSmoothing(const cv::Mat &currentMask) const;
+    cv::Mat refineWithGrabCut(const cv::Mat &frame, const cv::Mat &initialMask) const;
+    cv::Mat applyDistanceBasedRefinement(const cv::Mat &frame, const cv::Mat &mask) const;
+    cv::Mat createTrimap(const cv::Mat &mask, int erodeSize = 5, int dilateSize = 10) const;
+    cv::Mat customGuidedFilter(const cv::Mat &guide, const cv::Mat &src, int radius, double eps) const;
+    cv::Mat extractPersonWithAlphaMatting(const cv::Mat &frame, const cv::Mat &trimap) const;
     std::vector<cv::Rect> deriveDetectionsFromMask(const cv::Mat &mask) const;
     
     // Helper methods (implemented in .cpp)
@@ -574,6 +585,16 @@ private:
     int m_greenValMin;   // HSV min value to be considered green
     int m_greenMaskOpen; // morph open kernel size
     int m_greenMaskClose;// morph close kernel size
+    
+    // 🚀 GPU Green Screen Filter Cache (prevent memory allocation on every frame)
+    cv::Ptr<cv::cuda::CannyEdgeDetector> m_greenScreenCannyDetector;
+    cv::Ptr<cv::cuda::Filter> m_greenScreenMorphOpen;
+    cv::Ptr<cv::cuda::Filter> m_greenScreenMorphClose;
+    cv::Ptr<cv::cuda::Filter> m_greenScreenGaussianBlur;
+    
+    // 🎯 Temporal green screen mask smoothing
+    mutable cv::Mat m_lastGreenScreenMask;
+    mutable int m_greenScreenMaskStableCount;
 };
 
 #endif // CAPTURE_H
