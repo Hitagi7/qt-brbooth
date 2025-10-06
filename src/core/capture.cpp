@@ -53,6 +53,25 @@ static cv::Mat applyEdgeBlurringCUDA(const cv::Mat &segmentedObject, const cv::M
 static cv::Mat applyEdgeBlurringCPU(const cv::Mat &segmentedObject, const cv::Mat &objectMask, const cv::Mat &backgroundTemplate, float blurRadius);
 static cv::Mat applyEdgeBlurringAlternative(const cv::Mat &segmentedObject, const cv::Mat &objectMask, float blurRadius);
 
+// Fixed segmentation rectangle configuration
+// Adjust kFixedRectX and kFixedRectY to reposition the rectangle on screen.
+// Size of the rectanglez
+static const int kFixedRectWidth = 960;   // constant width in pixels
+static const int kFixedRectHeight = 720;  // constant height in pixels
+// Move left to right
+static const int kFixedRectX = 0;       // left offset in pixels (adjustable)
+static const int kFixedRectY = 100;        // top offset in pixels (adjustable)
+
+// Compute a fixed rectangle and clamp it to the frame bounds to ensure it stays inside
+static cv::Rect getFixedSegmentationRect(const cv::Size &frameSize)
+{
+    int w = std::min(kFixedRectWidth, frameSize.width);
+    int h = std::min(kFixedRectHeight, frameSize.height);
+    int x = std::max(0, std::min(kFixedRectX, frameSize.width - w));
+    int y = std::max(0, std::min(kFixedRectY, frameSize.height - h));
+    return cv::Rect(x, y, w, h);
+}
+
 static double intersectionOverUnion(const cv::Rect &a, const cv::Rect &b)
 {
     const int interArea = (a & b).area();
@@ -2843,47 +2862,15 @@ cv::Mat Capture::processFrameWithGPUOnlyPipeline(const cv::Mat &frame)
             cv::cuda::resize(m_gpuVideoFrame, processFrame, cv::Size(), scale, scale, cv::INTER_LINEAR);
         }
 
-        // Download for person detection (still need CPU for HOG)
-        cv::Mat cpuProcessFrame;
-        processFrame.download(cpuProcessFrame);
-
-        // Detect people using enhanced detection with conditional frame skipping
-        std::vector<cv::Rect> found;
-        const bool haveRecent = !m_prevSmoothedDetections.empty();
-        // 🎯 RECORDING: Force detection every frame during recording for smooth capture
-        // 🎯 OPTIMIZATION: Use more aggressive skipping during live preview (not recording) to maintain video speed
-        const bool forceDetection = m_isRecording;
-        const int livePreviewSkip = m_isRecording ? 0 : 3; // Skip 3 frames during preview, 0 during recording
-        if (!haveRecent || m_detectionSkipCounter == 0 || forceDetection) {
-            found = detectPeople(cpuProcessFrame);
-            m_detectionSkipCounter = forceDetection ? 1 : std::max(livePreviewSkip, m_detectionSkipInterval);
-        } else {
-            found = m_prevSmoothedDetections;
-            m_detectionSkipCounter--;
-        }
-
-        // Scale results back if we resized the frame
-        if (processFrame.cols != frame.cols) {
-            double scale = (double)frame.cols / processFrame.cols;
-            for (auto& rect : found) {
-                rect.x = cvRound(rect.x * scale);
-                rect.y = cvRound(rect.y * scale);
-                rect.width = cvRound(rect.width * scale);
-                rect.height = cvRound(rect.height * scale);
-            }
-        }
-
-        // Get motion mask for filtering (GPU-based)
-        cv::Mat motionMask = getMotionMask(frame);
-
-        // Filter detections by motion
-        std::vector<cv::Rect> motionFiltered = filterDetectionsByMotion(found, motionMask, m_detectionMotionOverlap);
+        // Use a fixed, bounded segmentation rectangle instead of person detection
+        std::vector<cv::Rect> fixedDetections;
+        fixedDetections.push_back(getFixedSegmentationRect(frame.size()));
 
         // Store detections for UI display
-        m_lastDetections = motionFiltered;
+        m_lastDetections = fixedDetections;
 
         // Create segmented frame with GPU-only processing
-        cv::Mat segmentedFrame = createSegmentedFrameGPUOnly(frame, motionFiltered);
+        cv::Mat segmentedFrame = createSegmentedFrameGPUOnly(frame, fixedDetections);
 
         // Update timing info
         m_lastPersonDetectionTime = m_personDetectionTimer.elapsed() / 1000.0;
@@ -3383,55 +3370,26 @@ cv::Mat Capture::processFrameWithUnifiedDetection(const cv::Mat &frame)
             cv::resize(frame, processFrame, cv::Size(), scale, scale, cv::INTER_LINEAR);
         }
 
-        // Detect people using enhanced detection with conditional frame skipping
-        std::vector<cv::Rect> found;
-        const bool haveRecent = !m_prevSmoothedDetections.empty();
-        // 🎯 RECORDING: Force detection every frame during recording for smooth capture
-        // 🎯 OPTIMIZATION: Use more aggressive skipping during live preview (not recording) to maintain video speed
-        const bool forceDetection = m_isRecording;
-        const int livePreviewSkip = m_isRecording ? 0 : 3; // Skip 3 frames during preview, 0 during recording
-        if (!haveRecent || m_detectionSkipCounter == 0 || forceDetection) {
-            found = detectPeople(processFrame);
-            m_detectionSkipCounter = forceDetection ? 1 : std::max(livePreviewSkip, m_detectionSkipInterval);
-        } else {
-            // Reuse last smoothed detections
-            found = m_prevSmoothedDetections;
-            m_detectionSkipCounter--;
-        }
-
-        // Scale results back if we resized the frame
-        if (processFrame.cols != frame.cols) {
-            double scale = (double)frame.cols / processFrame.cols;
-            for (auto& rect : found) {
-                rect.x = cvRound(rect.x * scale);
-                rect.y = cvRound(rect.y * scale);
-                rect.width = cvRound(rect.width * scale);
-                rect.height = cvRound(rect.height * scale);
-            }
-        }
-
-        // Get motion mask for filtering
-        cv::Mat motionMask = getMotionMask(frame);
-
-        // Filter detections by motion
-        std::vector<cv::Rect> motionFiltered = filterDetectionsByMotion(found, motionMask, m_detectionMotionOverlap);
+        // Use a fixed, bounded segmentation rectangle instead of person detection
+        std::vector<cv::Rect> fixedDetections;
+        fixedDetections.push_back(getFixedSegmentationRect(frame.size()));
 
         // Store detections for UI display
-        m_lastDetections = motionFiltered;
+        m_lastDetections = fixedDetections;
 
-        // Create segmented frame with motion-filtered detections
+        // Create segmented frame with fixed rectangle
         // NO LIGHTING APPLIED HERE - only segmentation for display
-        cv::Mat segmentedFrame = createSegmentedFrame(frame, motionFiltered);
+        cv::Mat segmentedFrame = createSegmentedFrame(frame, fixedDetections);
 
         // Update timing info
         m_lastPersonDetectionTime = m_personDetectionTimer.elapsed() / 1000.0;
         m_personDetectionFPS = (m_lastPersonDetectionTime > 0) ? 1.0 / m_lastPersonDetectionTime : 0;
 
-        // Log people detection for visibility (reduced frequency for performance)
-        if (motionFiltered.size() > 0) {
-            // qDebug() << "🎯 PEOPLE DETECTED:" << motionFiltered.size() << "person(s) in frame (motion filtered from" << found.size() << "detections)";
+        // Log detections for visibility (reduced frequency for performance)
+        if (fixedDetections.size() > 0) {
+            // qDebug() << "🎯 FIXED RECTANGLE ACTIVE:" << fixedDetections[0].x << fixedDetections[0].y << fixedDetections[0].width << "x" << fixedDetections[0].height;
         } else {
-            qDebug() << "⚠️ NO PEOPLE DETECTED in frame (total detections:" << found.size() << ")";
+            qDebug() << "⚠️ NO FIXED RECTANGLE (unexpected)";
 
             // For dynamic video backgrounds, always create a segmented frame even without people detection
             // This ensures the video background is always visible
