@@ -288,6 +288,7 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     , m_lightingCorrectedImage()
     , m_hasLightingComparison(false)
     , m_hasVideoLightingComparison(false)
+    , m_recordedPersonScaleFactor(1.0) // Initialize to default scale (100%)
 
 {
     ui->setupUi(this);
@@ -707,6 +708,10 @@ void Capture::updateCameraFeed(const QImage &image)
                 int newWidth = qRound(originalSize.width() * m_personScaleFactor);
                 int newHeight = qRound(originalSize.height() * m_personScaleFactor);
 
+                // 🚀 CRASH PREVENTION: Ensure scaled size is always valid (at least 1x1)
+                newWidth = qMax(1, newWidth);
+                newHeight = qMax(1, newHeight);
+
                 scaledPixmap = scaledPixmap.scaled(
                     newWidth, newHeight,
                     Qt::KeepAspectRatio,
@@ -1079,6 +1084,14 @@ void Capture::on_back_clicked()
         stopRecording();
     }
     ui->capture->setEnabled(true);
+    
+    // Reset scaling slider to default position (0 = 100% scale)
+    if (ui->verticalSlider) {
+        ui->verticalSlider->setValue(0);
+        m_personScaleFactor = 1.0; // Reset scale factor to normal size
+        qDebug() << "🔄 Scaling slider reset to default position (0 = 100% scale)";
+    }
+    
     emit backtoPreviousPage();
 }
 
@@ -1411,6 +1424,14 @@ void Capture::resetCapturePage()
     if (m_useDynamicVideoBackground && m_videoPlaybackActive) {
         resetDynamicVideoToStart();
         qDebug() << "🎞️ Dynamic video reset to start for re-recording";
+    }
+
+    // Reset scaling slider to default position (0 = 100% scale)
+    if (ui->verticalSlider) {
+        ui->verticalSlider->setValue(0);
+        m_personScaleFactor = 1.0; // Reset scale factor to normal size
+        m_recordedPersonScaleFactor = 1.0; // Reset recorded scale factor
+        qDebug() << "🔄 Scaling slider reset to default position (0 = 100% scale)";
     }
 
     qDebug() << "✅ Capture page completely reset - all state cleared";
@@ -1903,6 +1924,10 @@ void Capture::startRecording()
     m_hasVideoLightingComparison = false;
     m_isRecording = true;
     m_recordedSeconds = 0;
+    
+    // 🎯 SCALING PRESERVATION: Store the current scaling factor for post-processing
+    m_recordedPersonScaleFactor = m_personScaleFactor;
+    qDebug() << "🎯 SCALING: Stored scaling factor" << m_recordedPersonScaleFactor << "for post-processing";
 
     // Choose recording FPS: use template's native FPS for dynamic video backgrounds, else camera FPS
     if (m_useDynamicVideoBackground && m_videoFrameRate > 0.0) {
@@ -2002,214 +2027,65 @@ void Capture::stopRecording()
 
 void Capture::performImageCapture()
 {
-    // Capture the processed frame that includes background template and segmentation
-    if (!m_originalCameraImage.isNull()) {
-        QPixmap cameraPixmap;
-        QSize labelSize = ui->videoLabel->size();
-
-        // Check if we have a processed segmented frame to capture
-        if ((m_displayMode == SegmentationMode || m_displayMode == RectangleMode) && !m_lastSegmentedFrame.empty()) {
-            // Store original segmented frame for comparison
-            cv::Mat originalSegmentedFrame = m_lastSegmentedFrame.clone();
-            
-            // Apply person-only lighting correction using template reference
-            cv::Mat lightingCorrectedFrame;
-            qDebug() << "🌟 LIGHTING DEBUG - Segmentation mode detected";
-            qDebug() << "🌟 LIGHTING DEBUG - Lighting enabled:" << isLightingCorrectionEnabled();
-            qDebug() << "🌟 LIGHTING DEBUG - Background template enabled:" << m_useBackgroundTemplate;
-            qDebug() << "🌟 LIGHTING DEBUG - Template path:" << m_selectedBackgroundTemplate;
-            qDebug() << "🌟 LIGHTING DEBUG - Lighting corrector exists:" << (m_lightingCorrector != nullptr);
-            
-            // POST-PROCESSING: Apply lighting to raw person data and re-composite
-            qDebug() << "🎯 POST-PROCESSING: Apply lighting to raw person data";
-            lightingCorrectedFrame = applyPostProcessingLighting();
-            qDebug() << "🎯 Post-processing lighting applied";
-            
-            // Store both versions for saving
-            m_originalCapturedImage = originalSegmentedFrame;
-            m_lightingCorrectedImage = lightingCorrectedFrame;
-            m_hasLightingComparison = true;
-            
-            qDebug() << "🔥 FORCED: Stored both original and lighting-corrected versions for comparison";
-            
-            // Convert the processed OpenCV frame to QImage for capture
-            QImage processedImage = cvMatToQImage(lightingCorrectedFrame);
-            cameraPixmap = QPixmap::fromImage(processedImage);
-            qDebug() << "🎯 Capturing processed segmented frame with background template and person lighting correction";
-        } else {
-            // For normal mode, apply global lighting correction if enabled
-            cv::Mat originalFrame = qImageToCvMat(m_originalCameraImage);
-            cv::Mat lightingCorrectedFrame;
-            qDebug() << "🌟 LIGHTING DEBUG - Normal mode detected";
-            qDebug() << "🌟 LIGHTING DEBUG - Lighting enabled:" << isLightingCorrectionEnabled();
-            qDebug() << "🌟 LIGHTING DEBUG - Lighting corrector exists:" << (m_lightingCorrector != nullptr);
-            
-            if (isLightingCorrectionEnabled() && m_lightingCorrector) {
-                lightingCorrectedFrame = m_lightingCorrector->applyGlobalLightingCorrection(originalFrame);
-                qDebug() << "🎯 Applied global lighting correction (normal mode)";
-            } else {
-                lightingCorrectedFrame = originalFrame;
-                qDebug() << "🎯 No lighting correction applied (normal mode)";
-            }
-            
-            // Convert back to QImage
-            QImage correctedImage = cvMatToQImage(lightingCorrectedFrame);
-            cameraPixmap = QPixmap::fromImage(correctedImage);
-            qDebug() << "🎯 Capturing original camera frame with lighting correction (normal mode)";
-        }
-
-        // Apply the same scaling logic as the live display
-        // First scale to fit the label - use FastTransformation for better performance
-        QPixmap scaledPixmap = cameraPixmap.scaled(
-            labelSize,
-            Qt::KeepAspectRatioByExpanding,
-            Qt::FastTransformation
-        );
-
-        // Apply person-only scaling for background template/dynamic video mode, frame scaling for other modes
-        if (qAbs(m_personScaleFactor - 1.0) > 0.01) {
-            // Check if we're in segmentation mode with background template or dynamic video background
-            if (m_displayMode == SegmentationMode && ((m_useBackgroundTemplate &&
-                !m_selectedBackgroundTemplate.isEmpty()) || m_useDynamicVideoBackground)) {
-                // For background template mode or dynamic video mode, don't scale the entire frame
-                // Person scaling is already applied in createSegmentedFrame
-                qDebug() << "🎯 Person-only scaling preserved in final output (background template or dynamic video mode)";
-            } else {
-                // Apply frame scaling for other modes (normal, rectangle, black background)
-                QSize originalSize = scaledPixmap.size();
-                int newWidth = qRound(originalSize.width() * m_personScaleFactor);
-                int newHeight = qRound(originalSize.height() * m_personScaleFactor);
-
-                scaledPixmap = scaledPixmap.scaled(
-                    newWidth, newHeight,
-                    Qt::KeepAspectRatio,
-                    Qt::FastTransformation
-                );
-
-                qDebug() << "🎯 Frame scaled in final output to" << newWidth << "x" << newHeight
-                         << "with factor" << m_personScaleFactor;
-            }
-        }
-
-        m_capturedImage = scaledPixmap;
+    // 🎯 FIX: Capture exactly what's displayed on screen (same as video recording)
+    // This ensures the user's scaling is perfectly preserved
+    if (ui->videoLabel) {
+        QPixmap currentDisplayPixmap = ui->videoLabel->pixmap();
         
-        // 🌟 LOADING UI INTEGRATION: Show loading page with original frame background
-        if (m_hasLightingComparison && !m_originalCapturedImage.empty()) {
-            // Convert original image to QPixmap for preview and comparison
-            QImage originalQImage = cvMatToQImage(m_originalCapturedImage);
-            QPixmap originalPixmap = QPixmap::fromImage(originalQImage);
-            
-            // Apply same scaling to original image
-            QPixmap scaledOriginalPixmap = originalPixmap.scaled(
-                labelSize,
-                Qt::KeepAspectRatioByExpanding,
-                Qt::FastTransformation
-            );
-            
-            // Apply person scaling if needed
-            if (qAbs(m_personScaleFactor - 1.0) > 0.01) {
-                if (m_displayMode == SegmentationMode && ((m_useBackgroundTemplate &&
-                    !m_selectedBackgroundTemplate.isEmpty()) || m_useDynamicVideoBackground)) {
-                    qDebug() << "🎯 Person-only scaling preserved in original output";
-                } else {
-                    QSize originalSize = scaledOriginalPixmap.size();
-                    int newWidth = qRound(originalSize.width() * m_personScaleFactor);
-                    int newHeight = qRound(originalSize.height() * m_personScaleFactor);
-                    scaledOriginalPixmap = scaledOriginalPixmap.scaled(
-                        newWidth, newHeight,
-                        Qt::KeepAspectRatio,
-                        Qt::FastTransformation
-                    );
-                }
-            }
-            
-            // 🌟 FIRST: Send original image to loading page for background preview
-            qDebug() << "🌟 STATIC: Sending original image to loading page for background";
-            emit imageCapturedForLoading(scaledOriginalPixmap);
-            
-            // 🌟 THEN: Show loading UI with original image background
-            qDebug() << "🌟 STATIC: Showing loading UI with original image background";
-            emit showLoadingPage();
-            
-            // 🌟 START: Progress simulation for static processing
-            emit videoProcessingProgress(0);
-            
-            // 🌟 PROGRESS: Simulate processing stages with realistic timing
-            QTimer::singleShot(200, [this]() {
-                emit videoProcessingProgress(25);
-                qDebug() << "🌟 STATIC: Processing progress 25%";
-            });
-            
-            QTimer::singleShot(600, [this]() {
-                emit videoProcessingProgress(50);
-                qDebug() << "🌟 STATIC: Processing progress 50%";
-            });
-            
-            QTimer::singleShot(1000, [this]() {
-                emit videoProcessingProgress(75);
-                qDebug() << "🌟 STATIC: Processing progress 75%";
-            });
-            
-            QTimer::singleShot(1400, [this]() {
-                emit videoProcessingProgress(90);
-                qDebug() << "🌟 STATIC: Processing progress 90%";
-            });
-            
-            // 🌟 FINALLY: Send processed image to final output page (after processing simulation)
-            QTimer::singleShot(1800, [this, scaledOriginalPixmap]() {
-                emit videoProcessingProgress(100);
-                qDebug() << "🌟 STATIC: Processing complete - sending to final output";
-                emit imageCapturedWithComparison(m_capturedImage, scaledOriginalPixmap);
-                emit showFinalOutputPage();
-            });
-            
-            qDebug() << "🎯 Emitted static image with loading UI flow - corrected and original versions";
-        } else {
-            // No comparison available - send to loading page first, then final page
-            qDebug() << "🌟 STATIC: Sending single image to loading page";
-            emit imageCapturedForLoading(m_capturedImage);
-            
-            qDebug() << "� STATIC: Showing loading UI";
-            emit showLoadingPage();
-            
-            // Send to final output page with progress simulation
-            // 🌟 START: Progress simulation for static processing
-            emit videoProcessingProgress(0);
-            
-            // 🌟 PROGRESS: Simulate processing stages with realistic timing
-            QTimer::singleShot(200, [this]() {
-                emit videoProcessingProgress(25);
-                qDebug() << "🌟 STATIC: Processing progress 25%";
-            });
-            
-            QTimer::singleShot(600, [this]() {
-                emit videoProcessingProgress(50);
-                qDebug() << "🌟 STATIC: Processing progress 50%";
-            });
-            
-            QTimer::singleShot(1000, [this]() {
-                emit videoProcessingProgress(75);
-                qDebug() << "🌟 STATIC: Processing progress 75%";
-            });
-            
-            QTimer::singleShot(1400, [this]() {
-                emit videoProcessingProgress(90);
-                qDebug() << "🌟 STATIC: Processing progress 90%";
-            });
-            
-            // Send to final output page after processing simulation
-            QTimer::singleShot(1800, [this]() {
-                emit videoProcessingProgress(100);
-                qDebug() << "🌟 STATIC: Processing complete - sending single image to final output";
-                emit imageCaptured(m_capturedImage);
-                emit showFinalOutputPage();
-            });
-            
-            qDebug() << "🎯 Emitted single image with loading UI flow";
+        if (currentDisplayPixmap.isNull()) {
+            qWarning() << "🎯 CAPTURE: Video label pixmap is null - cannot capture";
+            QMessageBox::warning(this, "Capture Failed", "No camera feed available to capture an image.");
+            return;
         }
         
-        qDebug() << "Image captured (includes background template and segmentation).";
-        qDebug() << "Captured image size:" << m_capturedImage.size() << "Original size:" << cameraPixmap.size();
+        qDebug() << "🎯 CAPTURE: Capturing exactly what's displayed on screen";
+        qDebug() << "🎯 CAPTURE: Display size:" << currentDisplayPixmap.size();
+        qDebug() << "🎯 CAPTURE: Scale factor:" << m_personScaleFactor;
+        
+        // Store the displayed image as the captured image (with user's scaling preserved)
+        m_capturedImage = currentDisplayPixmap;
+        
+        // 🎯 SIMPLIFIED: Send to loading page first, then to final output
+        qDebug() << "🎯 CAPTURE: Sending captured image to loading page";
+        emit imageCapturedForLoading(m_capturedImage);
+        
+        qDebug() << "🎯 CAPTURE: Showing loading UI";
+        emit showLoadingPage();
+        
+        // 🌟 START: Progress simulation for static processing
+        emit videoProcessingProgress(0);
+        
+        // 🌟 PROGRESS: Simulate processing stages with realistic timing
+        QTimer::singleShot(200, [this]() {
+            emit videoProcessingProgress(25);
+            qDebug() << "🎯 CAPTURE: Processing progress 25%";
+        });
+        
+        QTimer::singleShot(600, [this]() {
+            emit videoProcessingProgress(50);
+            qDebug() << "🎯 CAPTURE: Processing progress 50%";
+        });
+        
+        QTimer::singleShot(1000, [this]() {
+            emit videoProcessingProgress(75);
+            qDebug() << "🎯 CAPTURE: Processing progress 75%";
+        });
+        
+        QTimer::singleShot(1400, [this]() {
+            emit videoProcessingProgress(90);
+            qDebug() << "🎯 CAPTURE: Processing progress 90%";
+        });
+        
+        // Send to final output page after processing simulation
+        QTimer::singleShot(1800, [this]() {
+            emit videoProcessingProgress(100);
+            qDebug() << "🎯 CAPTURE: Processing complete - sending to final output with preserved scaling";
+            emit imageCaptured(m_capturedImage);
+            emit showFinalOutputPage();
+        });
+        
+        qDebug() << "🎯 CAPTURE: Image captured with preserved scaling from display";
+        qDebug() << "🎯 CAPTURE: Captured image size:" << m_capturedImage.size();
     } else {
         qWarning() << "Failed to capture image: original camera image is empty.";
         QMessageBox::warning(this, "Capture Failed", "No camera feed available to capture an image.");
@@ -3602,32 +3478,71 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
                 if (qAbs(m_personScaleFactor - 1.0) > 0.01) {
                     int scaledWidth = static_cast<int>(backgroundSize.width * m_personScaleFactor + 0.5);
                     int scaledHeight = static_cast<int>(backgroundSize.height * m_personScaleFactor + 0.5);
+                    
+                    // 🚀 CRASH PREVENTION: Ensure scaled size is always valid (at least 1x1)
+                    scaledWidth = qMax(1, scaledWidth);
+                    scaledHeight = qMax(1, scaledHeight);
+                    
                     scaledPersonSize = cv::Size(scaledWidth, scaledHeight);
                     qDebug() << "🎯 Person scaled to" << scaledWidth << "x" << scaledHeight << "with factor" << m_personScaleFactor;
                 } else {
                     scaledPersonSize = backgroundSize;
                 }
 
-                cv::resize(personRegion, scaledPersonRegion, scaledPersonSize, 0, 0, cv::INTER_LINEAR);
-                cv::resize(personMask, scaledPersonMask, scaledPersonSize, 0, 0, cv::INTER_LINEAR);
-
-                int xOffset = (backgroundSize.width - scaledPersonSize.width) / 2;
-                int yOffset = (backgroundSize.height - scaledPersonSize.height) / 2;
-
-                if (xOffset >= 0 && yOffset >= 0 &&
-                    xOffset + scaledPersonSize.width <= backgroundSize.width &&
-                    yOffset + scaledPersonSize.height <= backgroundSize.height) {
-                    cv::Rect backgroundRect(cv::Point(xOffset, yOffset), scaledPersonSize);
-                    cv::Rect personRect(cv::Point(0, 0), scaledPersonSize);
-                    cv::Mat backgroundROI = segmentedFrame(backgroundRect);
-                    scaledPersonRegion(personRect).copyTo(backgroundROI, scaledPersonMask(personRect));
+                // 🚀 CRASH PREVENTION: Validate size before resize
+                if (scaledPersonSize.width > 0 && scaledPersonSize.height > 0 &&
+                    personRegion.cols > 0 && personRegion.rows > 0) {
+                    cv::resize(personRegion, scaledPersonRegion, scaledPersonSize, 0, 0, cv::INTER_LINEAR);
+                    cv::resize(personMask, scaledPersonMask, scaledPersonSize, 0, 0, cv::INTER_LINEAR);
                 } else {
-                    scaledPersonRegion.copyTo(segmentedFrame, scaledPersonMask);
+                    qWarning() << "🚀 CRASH PREVENTION: Invalid size for scaling - using original size";
+                    scaledPersonRegion = personRegion.clone();
+                    scaledPersonMask = personMask.clone();
+                }
+
+                // 🚀 CRASH PREVENTION: Validate scaled mats before compositing
+                if (!scaledPersonRegion.empty() && !scaledPersonMask.empty() &&
+                    scaledPersonRegion.cols > 0 && scaledPersonRegion.rows > 0 &&
+                    scaledPersonMask.cols > 0 && scaledPersonMask.rows > 0) {
+                    
+                    // Use actual scaled dimensions instead of calculated size
+                    cv::Size actualScaledSize(scaledPersonRegion.cols, scaledPersonRegion.rows);
+                    int xOffset = (backgroundSize.width - actualScaledSize.width) / 2;
+                    int yOffset = (backgroundSize.height - actualScaledSize.height) / 2;
+
+                    if (xOffset >= 0 && yOffset >= 0 &&
+                        xOffset + actualScaledSize.width <= backgroundSize.width &&
+                        yOffset + actualScaledSize.height <= backgroundSize.height &&
+                        scaledPersonRegion.cols == scaledPersonMask.cols &&
+                        scaledPersonRegion.rows == scaledPersonMask.rows) {
+                        
+                        try {
+                            cv::Rect backgroundRect(cv::Point(xOffset, yOffset), actualScaledSize);
+                            cv::Mat backgroundROI = segmentedFrame(backgroundRect);
+                            scaledPersonRegion.copyTo(backgroundROI, scaledPersonMask);
+                            qDebug() << "🚀 COMPOSITING: Successfully composited scaled person at offset" << xOffset << "," << yOffset;
+                        } catch (const cv::Exception& e) {
+                            qWarning() << "🚀 CRASH PREVENTION: Compositing failed:" << e.what() << "- using fallback";
+                            scaledPersonRegion.copyTo(segmentedFrame, scaledPersonMask);
+                        }
+                    } else {
+                        scaledPersonRegion.copyTo(segmentedFrame, scaledPersonMask);
+                        qDebug() << "🚀 COMPOSITING: Using fallback compositing due to bounds check";
+                    }
+                } else {
+                    qWarning() << "🚀 CRASH PREVENTION: Scaled mats are empty or invalid - skipping compositing";
                 }
             } else {
-                cv::resize(personRegion, scaledPersonRegion, segmentedFrame.size(), 0, 0, cv::INTER_LINEAR);
-                cv::resize(personMask, scaledPersonMask, segmentedFrame.size(), 0, 0, cv::INTER_LINEAR);
-                scaledPersonRegion.copyTo(segmentedFrame, scaledPersonMask);
+                // 🚀 CRASH PREVENTION: Validate before resize and composite
+                if (!personRegion.empty() && !personMask.empty() && 
+                    segmentedFrame.cols > 0 && segmentedFrame.rows > 0) {
+                    cv::resize(personRegion, scaledPersonRegion, segmentedFrame.size(), 0, 0, cv::INTER_LINEAR);
+                    cv::resize(personMask, scaledPersonMask, segmentedFrame.size(), 0, 0, cv::INTER_LINEAR);
+                    
+                    if (!scaledPersonRegion.empty() && !scaledPersonMask.empty()) {
+                        scaledPersonRegion.copyTo(segmentedFrame, scaledPersonMask);
+                    }
+                }
             }
         } else {
             for (int i = 0; i < maxDetections; i++) {
@@ -3709,6 +3624,11 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
                         // Apply person scale factor
                         int scaledWidth = static_cast<int>(backgroundSize.width * m_personScaleFactor + 0.5);
                         int scaledHeight = static_cast<int>(backgroundSize.height * m_personScaleFactor + 0.5);
+                        
+                        // 🚀 CRASH PREVENTION: Ensure scaled size is always valid (at least 1x1)
+                        scaledWidth = qMax(1, scaledWidth);
+                        scaledHeight = qMax(1, scaledHeight);
+                        
                         scaledPersonSize = cv::Size(scaledWidth, scaledHeight);
 
                         qDebug() << "🎯 Person scaled to" << scaledWidth << "x" << scaledHeight
@@ -3718,37 +3638,68 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
                         scaledPersonSize = backgroundSize;
                     }
 
-                    // Scale person to the calculated size
-                    cv::resize(personRegion, scaledPersonRegion, scaledPersonSize, 0, 0, cv::INTER_LINEAR);
-                    cv::resize(personMask, scaledPersonMask, scaledPersonSize, 0, 0, cv::INTER_LINEAR);
-
-                    // Calculate position to center the scaled person on the background
-                    int xOffset = (backgroundSize.width - scaledPersonSize.width) / 2;
-                    int yOffset = (backgroundSize.height - scaledPersonSize.height) / 2;
-
-                    // Ensure ROI is within background bounds
-                    if (xOffset >= 0 && yOffset >= 0 &&
-                        xOffset + scaledPersonSize.width <= backgroundSize.width &&
-                        yOffset + scaledPersonSize.height <= backgroundSize.height) {
-
-                        // Create ROI for compositing using proper cv::Rect constructor
-                        cv::Rect backgroundRect(cv::Point(xOffset, yOffset), scaledPersonSize);
-                        cv::Rect personRect(cv::Point(0, 0), scaledPersonSize);
-
-                        // Composite scaled person onto background at calculated position
-                        cv::Mat backgroundROI = segmentedFrame(backgroundRect);
-                        scaledPersonRegion(personRect).copyTo(backgroundROI, scaledPersonMask(personRect));
+                    // 🚀 CRASH PREVENTION: Validate size before resize
+                    if (scaledPersonSize.width > 0 && scaledPersonSize.height > 0 &&
+                        personRegion.cols > 0 && personRegion.rows > 0) {
+                        // Scale person to the calculated size
+                        cv::resize(personRegion, scaledPersonRegion, scaledPersonSize, 0, 0, cv::INTER_LINEAR);
+                        cv::resize(personMask, scaledPersonMask, scaledPersonSize, 0, 0, cv::INTER_LINEAR);
                     } else {
-                        // Fallback: composite at origin if scaling makes person too large
-                        scaledPersonRegion.copyTo(segmentedFrame, scaledPersonMask);
+                        qWarning() << "🚀 CRASH PREVENTION: Invalid size for scaling - using original size";
+                        scaledPersonRegion = personRegion.clone();
+                        scaledPersonMask = personMask.clone();
+                    }
+
+                    // 🚀 CRASH PREVENTION: Validate scaled mats before compositing
+                    if (!scaledPersonRegion.empty() && !scaledPersonMask.empty() &&
+                        scaledPersonRegion.cols > 0 && scaledPersonRegion.rows > 0 &&
+                        scaledPersonMask.cols > 0 && scaledPersonMask.rows > 0) {
+                        
+                        // Use actual scaled dimensions instead of calculated size
+                        cv::Size actualScaledSize(scaledPersonRegion.cols, scaledPersonRegion.rows);
+                        int xOffset = (backgroundSize.width - actualScaledSize.width) / 2;
+                        int yOffset = (backgroundSize.height - actualScaledSize.height) / 2;
+
+                        // Ensure ROI is within background bounds and mats are compatible
+                        if (xOffset >= 0 && yOffset >= 0 &&
+                            xOffset + actualScaledSize.width <= backgroundSize.width &&
+                            yOffset + actualScaledSize.height <= backgroundSize.height &&
+                            scaledPersonRegion.cols == scaledPersonMask.cols &&
+                            scaledPersonRegion.rows == scaledPersonMask.rows) {
+
+                            try {
+                                // Create ROI for compositing using actual scaled size
+                                cv::Rect backgroundRect(cv::Point(xOffset, yOffset), actualScaledSize);
+                                cv::Mat backgroundROI = segmentedFrame(backgroundRect);
+                                
+                                // Composite scaled person onto background at calculated position
+                                scaledPersonRegion.copyTo(backgroundROI, scaledPersonMask);
+                                qDebug() << "🚀 COMPOSITING: Successfully composited scaled person at offset" << xOffset << "," << yOffset;
+                            } catch (const cv::Exception& e) {
+                                qWarning() << "🚀 CRASH PREVENTION: Compositing failed:" << e.what() << "- using fallback";
+                                scaledPersonRegion.copyTo(segmentedFrame, scaledPersonMask);
+                            }
+                        } else {
+                            // Fallback: composite at origin if scaling makes person too large
+                            scaledPersonRegion.copyTo(segmentedFrame, scaledPersonMask);
+                            qDebug() << "🚀 COMPOSITING: Using fallback compositing due to bounds check";
+                        }
+                    } else {
+                        qWarning() << "🚀 CRASH PREVENTION: Scaled mats are empty or invalid - skipping compositing for detection" << i;
                     }
                 } else {
                     // For black background, scale to match frame size (original behavior)
-                    cv::resize(personRegion, scaledPersonRegion, segmentedFrame.size(), 0, 0, cv::INTER_LINEAR);
-                    cv::resize(personMask, scaledPersonMask, segmentedFrame.size(), 0, 0, cv::INTER_LINEAR);
+                    // 🚀 CRASH PREVENTION: Validate before resize and composite
+                    if (!personRegion.empty() && !personMask.empty() && 
+                        segmentedFrame.cols > 0 && segmentedFrame.rows > 0) {
+                        cv::resize(personRegion, scaledPersonRegion, segmentedFrame.size(), 0, 0, cv::INTER_LINEAR);
+                        cv::resize(personMask, scaledPersonMask, segmentedFrame.size(), 0, 0, cv::INTER_LINEAR);
 
-                    // Simple compositing: copy scaled person region directly to background where mask is non-zero
-                    scaledPersonRegion.copyTo(segmentedFrame, scaledPersonMask);
+                        // Simple compositing: copy scaled person region directly to background where mask is non-zero
+                        if (!scaledPersonRegion.empty() && !scaledPersonMask.empty()) {
+                            scaledPersonRegion.copyTo(segmentedFrame, scaledPersonMask);
+                        }
+                    }
                 }
             }
         }
@@ -6499,6 +6450,12 @@ QPixmap Capture::processFrameForRecordingGPU(const cv::Mat &frame)
                 // Apply frame scaling for other modes
                 int newWidth = qRound(frame.cols * m_personScaleFactor);
                 int newHeight = qRound(frame.rows * m_personScaleFactor);
+                
+                // 🚀 CRASH PREVENTION: Ensure scaled size is always valid (at least 1x1)
+                newWidth = qMax(1, newWidth);
+                newHeight = qMax(1, newHeight);
+                
+                qDebug() << "🚀 GPU RECORDING: Scaling frame to" << newWidth << "x" << newHeight << "with factor" << m_personScaleFactor;
                 cv::cuda::resize(gpuFrame, gpuScaled, cv::Size(newWidth, newHeight), 0, 0, cv::INTER_LINEAR, m_recordingStream);
             }
         } else {
@@ -7213,10 +7170,32 @@ cv::Mat Capture::applyDynamicFrameEdgeBlending(const cv::Mat &composedFrame,
             }
         }
         
-        // Scale the lighting-corrected person to match the composed frame size
+        // 🎯 SCALING PRESERVATION: Scale the lighting-corrected person using the recorded scaling factor
         cv::Mat scaledPerson, scaledMask;
-        cv::resize(lightingCorrectedPerson, scaledPerson, result.size());
-        cv::resize(rawPersonMask, scaledMask, result.size());
+        
+        // Calculate the scaled size using the recorded scaling factor
+        cv::Size backgroundSize = result.size();
+        cv::Size scaledPersonSize;
+        
+        if (qAbs(m_recordedPersonScaleFactor - 1.0) > 0.01) {
+            int scaledWidth = static_cast<int>(backgroundSize.width * m_recordedPersonScaleFactor + 0.5);
+            int scaledHeight = static_cast<int>(backgroundSize.height * m_recordedPersonScaleFactor + 0.5);
+            
+            // 🚀 CRASH PREVENTION: Ensure scaled size is always valid (at least 1x1)
+            scaledWidth = qMax(1, scaledWidth);
+            scaledHeight = qMax(1, scaledHeight);
+            
+            scaledPersonSize = cv::Size(scaledWidth, scaledHeight);
+            qDebug() << "🎯 SCALING PRESERVATION: Scaling person to" << scaledWidth << "x" << scaledHeight 
+                     << "with recorded factor" << m_recordedPersonScaleFactor;
+        } else {
+            scaledPersonSize = backgroundSize;
+            qDebug() << "🎯 SCALING PRESERVATION: No scaling needed, using full size";
+        }
+        
+        // Scale person and mask to the calculated size
+        cv::resize(lightingCorrectedPerson, scaledPerson, scaledPersonSize);
+        cv::resize(rawPersonMask, scaledMask, scaledPersonSize);
         
         // Apply guided filter edge blending (same algorithm as static mode)
         cv::Mat binMask;
@@ -7226,11 +7205,41 @@ cv::Mat Capture::applyDynamicFrameEdgeBlending(const cv::Mat &composedFrame,
             binMask = scaledMask.clone();
         }
         cv::threshold(binMask, binMask, 127, 255, cv::THRESH_BINARY);
-
-        // First: shrink mask slightly to avoid fringe, then hard-copy interior
+        
+        // 🎯 SCOPE FIX: Declare interiorMask at broader scope for later use
         cv::Mat interiorMask;
-        cv::erode(binMask, interiorMask, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(2*2+1, 2*2+1))); // ~2px shrink
-        scaledPerson.copyTo(result, interiorMask);
+
+        // 🎯 SCALING PRESERVATION: Center the scaled person on the background
+        int xOffset = (backgroundSize.width - scaledPersonSize.width) / 2;
+        int yOffset = (backgroundSize.height - scaledPersonSize.height) / 2;
+        
+        // Ensure ROI is within background bounds
+        if (xOffset >= 0 && yOffset >= 0 &&
+            xOffset + scaledPersonSize.width <= backgroundSize.width &&
+            yOffset + scaledPersonSize.height <= backgroundSize.height) {
+            
+            try {
+                // Create ROI for compositing using actual scaled size
+                cv::Rect backgroundRect(cv::Point(xOffset, yOffset), scaledPersonSize);
+                cv::Mat backgroundROI = result(backgroundRect);
+                
+                // First: shrink mask slightly to avoid fringe, then hard-copy interior
+                cv::erode(binMask, interiorMask, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(2*2+1, 2*2+1))); // ~2px shrink
+                scaledPerson.copyTo(backgroundROI, interiorMask);
+                
+                qDebug() << "🎯 SCALING PRESERVATION: Successfully composited scaled person at offset" << xOffset << "," << yOffset;
+            } catch (const cv::Exception& e) {
+                qWarning() << "🎯 SCALING PRESERVATION: Compositing failed:" << e.what() << "- using fallback";
+                // Fallback: composite at origin if scaling makes person too large
+                cv::erode(binMask, interiorMask, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(2*2+1, 2*2+1)));
+                scaledPerson.copyTo(result, interiorMask);
+            }
+        } else {
+            // Fallback: composite at origin if scaling makes person too large
+            cv::erode(binMask, interiorMask, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(2*2+1, 2*2+1)));
+            scaledPerson.copyTo(result, interiorMask);
+            qDebug() << "🎯 SCALING PRESERVATION: Using fallback compositing due to bounds check";
+        }
 
         // 🚀 CUDA-Accelerated Guided image filtering to refine a soft alpha only on a thin edge ring
         const int gfRadius = 8; // window size (reduced for better performance)

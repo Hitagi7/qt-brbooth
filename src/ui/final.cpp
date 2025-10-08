@@ -169,29 +169,17 @@ void Final::refreshDisplay()
     }
     // If no video frames, but a single image is loaded
     else if (!m_lastLoadedImage.isNull()) {
-        // The image is already scaled from the capture interface, so display it as-is
-        // Only apply minimal scaling if the image is too large for the label
-        QSize labelSize = ui->videoLabel->size();
+        // 🎯 FIX: Display the image as-is from capture interface (preserve user scaling)
+        // The image already has the user's desired scaling applied from the capture interface
         QSize imageSize = m_lastLoadedImage.size();
         
-        qDebug() << "Final interface displaying image. Image size:" << imageSize << "Label size:" << labelSize;
+        qDebug() << "🎯 Final interface displaying image with preserved scaling. Image size:" << imageSize;
         
-        // Only scale down if the image is larger than the label
-        if (imageSize.width() > labelSize.width() || imageSize.height() > labelSize.height()) {
-            QPixmap scaledImage = m_lastLoadedImage.scaled(
-                labelSize,
-                Qt::KeepAspectRatio,
-                Qt::FastTransformation
-            );
-            ui->videoLabel->setPixmap(scaledImage);
-            qDebug() << "Image was re-scaled down to:" << scaledImage.size();
-        } else {
-            // Display the image as-is since it's already properly scaled
-            ui->videoLabel->setPixmap(m_lastLoadedImage);
-            qDebug() << "Image displayed as-is (no re-scaling needed)";
-        }
-        
+        // Display the image as-is - DO NOT re-scale to preserve capture interface scaling
+        ui->videoLabel->setPixmap(m_lastLoadedImage);
         ui->videoLabel->setAlignment(Qt::AlignCenter);
+        
+        qDebug() << "🎯 Image displayed with preserved scaling from capture interface";
     }
     // If nothing is loaded, clear the display
     else {
@@ -242,29 +230,21 @@ void Final::showEvent(QShowEvent *event)
         // Reset to frame 0
         m_currentFrameIndex = 0;
         
-        // Display the first frame immediately
+        // 🎯 FIX: Display the first frame as-is (preserve capture interface scaling)
         QPixmap firstFrame = m_videoFrames.at(0);
-        QSize labelSize = ui->videoLabel->size();
         QSize frameSize = firstFrame.size();
         
-        // Only scale down if the frame is larger than the label
-        if (frameSize.width() > labelSize.width() || frameSize.height() > labelSize.height()) {
-            QPixmap scaledFrame = firstFrame.scaled(
-                labelSize,
-                Qt::KeepAspectRatio,
-                Qt::FastTransformation
-            );
-            ui->videoLabel->setPixmap(scaledFrame);
-        } else {
-            ui->videoLabel->setPixmap(firstFrame);
-        }
+        qDebug() << "🎯 Displaying first frame with preserved scaling. Frame size:" << frameSize;
+        
+        // Display frame as-is - DO NOT re-scale to preserve capture interface scaling
+        ui->videoLabel->setPixmap(firstFrame);
         ui->videoLabel->setAlignment(Qt::AlignCenter);
         
         // Restart the timer for continuous playback from the beginning
         int playbackIntervalMs = qMax(1, static_cast<int>(1000.0 / m_videoFPS));
         videoPlaybackTimer->start(playbackIntervalMs);
         
-        qDebug() << "🎬 Video reset to frame 0 and playback restarted";
+        qDebug() << "🎬 Video reset to frame 0 and playback restarted with preserved scaling";
     }
 }
 
@@ -321,29 +301,21 @@ void Final::setVideo(const QList<QPixmap> &frames, double fps)
     if (!m_videoFrames.isEmpty()) {
         qDebug() << "Playing back video with " << m_videoFrames.size() << " frames at " << fps << " FPS.";
         
-        // Display the first frame immediately without advancing the index
+        // 🎯 FIX: Display the first frame as-is (preserve capture interface scaling)
         QPixmap firstFrame = m_videoFrames.at(0);
-        QSize labelSize = ui->videoLabel->size();
         QSize frameSize = firstFrame.size();
         
-        // Only scale down if the frame is larger than the label
-        if (frameSize.width() > labelSize.width() || frameSize.height() > labelSize.height()) {
-            QPixmap scaledFrame = firstFrame.scaled(
-                labelSize,
-                Qt::KeepAspectRatio,
-                Qt::FastTransformation
-            );
-            ui->videoLabel->setPixmap(scaledFrame);
-        } else {
-            ui->videoLabel->setPixmap(firstFrame);
-        }
+        qDebug() << "🎯 Displaying first frame with preserved scaling. Frame size:" << frameSize;
+        
+        // Display frame as-is - DO NOT re-scale to preserve capture interface scaling
+        ui->videoLabel->setPixmap(firstFrame);
         ui->videoLabel->setAlignment(Qt::AlignCenter);
         
         // Calculate the correct playback interval based on the actual camera FPS
         int playbackIntervalMs = qMax(1, static_cast<int>(1000.0 / fps));
         videoPlaybackTimer->start(playbackIntervalMs);
         
-        qDebug() << "🎬 Video starts from frame 0, timer started with interval:" << playbackIntervalMs << "ms";
+        qDebug() << "🎬 Video starts from frame 0 with preserved scaling, timer interval:" << playbackIntervalMs << "ms";
     } else {
         qWarning() << "No video frames provided for playback!";
         ui->videoLabel->clear(); // Clear display if no frames
@@ -368,29 +340,21 @@ void Final::setVideoWithComparison(const QList<QPixmap> &frames, const QList<QPi
         qDebug() << "🌟 Playing back video with comparison - Processed:" << m_videoFrames.size() 
                  << "Original:" << m_originalVideoFrames.size() << "frames at" << fps << "FPS.";
         
-        // Display the first frame immediately without advancing the index
+        // 🎯 FIX: Display the first frame as-is (preserve capture interface scaling)
         QPixmap firstFrame = m_videoFrames.at(0);
-        QSize labelSize = ui->videoLabel->size();
         QSize frameSize = firstFrame.size();
         
-        // Only scale down if the frame is larger than the label
-        if (frameSize.width() > labelSize.width() || frameSize.height() > labelSize.height()) {
-            QPixmap scaledFrame = firstFrame.scaled(
-                labelSize,
-                Qt::KeepAspectRatio,
-                Qt::FastTransformation
-            );
-            ui->videoLabel->setPixmap(scaledFrame);
-        } else {
-            ui->videoLabel->setPixmap(firstFrame);
-        }
+        qDebug() << "🎯 Displaying first comparison frame with preserved scaling. Frame size:" << frameSize;
+        
+        // Display frame as-is - DO NOT re-scale to preserve capture interface scaling
+        ui->videoLabel->setPixmap(firstFrame);
         ui->videoLabel->setAlignment(Qt::AlignCenter);
         
         // Calculate the correct playback interval based on the actual camera FPS
         int playbackIntervalMs = qMax(1, static_cast<int>(1000.0 / fps));
         videoPlaybackTimer->start(playbackIntervalMs);
         
-        qDebug() << "🎬 Video with comparison starts from frame 0, timer started with interval:" << playbackIntervalMs << "ms";
+        qDebug() << "🎬 Video with comparison starts from frame 0 with preserved scaling, timer interval:" << playbackIntervalMs << "ms";
     } else {
         qWarning() << "No video frames provided for comparison playback!";
         ui->videoLabel->clear(); // Clear display if no frames
@@ -448,23 +412,12 @@ void Final::playNextFrame()
         qDebug() << "🔄 Video looped back to frame 0";
     }
 
-    // Get the current frame - it's already scaled from the capture interface
+    // 🎯 FIX: Get and display the current frame as-is (preserve capture interface scaling)
+    // The frames are already scaled from the capture interface, so display them without modification
     QPixmap currentFrame = m_videoFrames.at(m_currentFrameIndex);
-    QSize labelSize = ui->videoLabel->size();
-    QSize frameSize = currentFrame.size();
     
-    // Only scale down if the frame is larger than the label
-    if (frameSize.width() > labelSize.width() || frameSize.height() > labelSize.height()) {
-        QPixmap scaledFrame = currentFrame.scaled(
-            labelSize,
-            Qt::KeepAspectRatio,
-            Qt::FastTransformation
-        );
-        ui->videoLabel->setPixmap(scaledFrame);
-    } else {
-        // Display the frame as-is since it's already properly scaled
-        ui->videoLabel->setPixmap(currentFrame);
-    }
+    // Display frame as-is - DO NOT re-scale to preserve capture interface scaling
+    ui->videoLabel->setPixmap(currentFrame);
     ui->videoLabel->setAlignment(Qt::AlignCenter);
 }
 

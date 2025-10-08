@@ -557,6 +557,7 @@ private:
     QList<cv::Mat> m_recordedRawPersonRegions;
     QList<cv::Mat> m_recordedRawPersonMasks;
     QList<cv::Mat> m_recordedBackgroundFrames;
+    double m_recordedPersonScaleFactor; // Store scaling factor used during recording
     
     // Utility functions
     QImage cvMatToQImage(const cv::Mat &mat);
