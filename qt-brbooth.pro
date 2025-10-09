@@ -44,6 +44,7 @@ SOURCES += \
     src/core/camera.cpp \
     src/core/capture.cpp \
     src/ui/loading.cpp \
+    src/ui/confirm.cpp \
     src/ui/background.cpp \
     src/ui/foreground.cpp \
     src/ui/dynamic.cpp \
@@ -62,6 +63,7 @@ HEADERS += \
     include/core/videotemplate.h \
     include/core/common_types.h \
     include/ui/loading.h \
+    include/ui/confirm.h \
     include/ui/background.h \
     include/ui/foreground.h \
     include/ui/dynamic.h \
@@ -77,6 +79,7 @@ FORMS += \
     ui/background.ui \
     ui/brbooth.ui \
     ui/capture.ui \
+    ui/confirm.ui \
     ui/dynamic.ui \
     ui/final.ui \
     ui/loading.ui \

@@ -6,6 +6,7 @@
 #include "ui/dynamic.h"
 #include "ui/final.h"
 #include "ui/loading.h"
+#include "ui/confirm.h"
 #include "ui/foreground.h"
 #include "ui_brbooth.h"
 #include <QThread>
@@ -242,6 +243,11 @@ BRBooth::BRBooth(QWidget *parent)
     ui->stackedWidget->addWidget(loadingPage);
     loadingPageIndex = ui->stackedWidget->indexOf(loadingPage);
 
+    // Confirm page (between capture and loading for dynamic mode)
+    confirmPage = new Confirm(this);
+    ui->stackedWidget->addWidget(confirmPage);
+    confirmPageIndex = ui->stackedWidget->indexOf(confirmPage);
+
     // Set initial page
     showLandingPage();
 
@@ -360,7 +366,7 @@ BRBooth::BRBooth(QWidget *parent)
         connect(capturePage, &Capture::showLoadingPage, this, [this]() {
             qDebug() << "🌟 Switching to loading page for post-processing";
             if (loadingPage) {
-                loadingPage->setMessage("Processing Video...");
+                loadingPage->setMessage("Loading Output...");
                 loadingPage->resetProgress();
             }
             ui->stackedWidget->setCurrentIndex(loadingPageIndex);
@@ -385,11 +391,59 @@ BRBooth::BRBooth(QWidget *parent)
         connect(capturePage, &Capture::videoProcessingProgress, loadingPage, &Loading::setProgress);
     }
 
+    if (confirmPage && capturePage) {
+        // 🎬 NEW FLOW: After dynamic recording, show confirm page instead of loading directly
+        connect(capturePage, &Capture::showConfirmPage, this, [this]() {
+            qDebug() << "🎬 Dynamic recording complete - showing confirm page";
+            ui->stackedWidget->setCurrentIndex(confirmPageIndex);
+        });
+        
+        // Send recorded video to confirm page for preview
+        connect(capturePage, &Capture::videoRecordedForConfirm, confirmPage, &Confirm::setVideo);
+        
+        // When user clicks back on confirm page, return to capture
+        connect(confirmPage, &Confirm::backToCapture, this, [this]() {
+            qDebug() << "🔙 User clicked back - returning to capture from confirm page";
+            confirmPage->clearPreview();
+            
+            // Reset capture page (including slider) when returning from confirm
+            if (capturePage) {
+                capturePage->resetCapturePage();
+                qDebug() << "🔙 Capture page reset (slider returned to default)";
+            }
+            
+            showCapturePage();
+        });
+        
+        // When user clicks confirm, proceed to loading/processing
+        connect(confirmPage, &Confirm::proceedToProcessing, this, [this]() {
+            qDebug() << "✅ User confirmed - proceeding to post-processing";
+            confirmPage->clearPreview();
+            
+            // Show loading page
+            if (loadingPage) {
+                loadingPage->setMessage("Loading Output...");
+                loadingPage->resetProgress();
+            }
+            ui->stackedWidget->setCurrentIndex(loadingPageIndex);
+            
+            // Trigger capture page to start post-processing
+            capturePage->startPostProcessing();
+        });
+    }
+
     if (finalOutputPage) {
         connect(finalOutputPage, &Final::backToCapturePage, this, [this]() {
             // When going back from final output to capture, preserve the original lastVisitedPageIndex
             // so we can go back to the correct page (background or dynamic)
             qDebug() << "🎯 Going back from final output to capture page";
+            
+            // Reset capture page (including slider) when returning from final output
+            if (capturePage) {
+                capturePage->resetCapturePage();
+                qDebug() << "🎯 Capture page reset (slider returned to default)";
+            }
+            
             showCapturePage();
         });
         connect(finalOutputPage, &Final::backToLandingPage, this, &BRBooth::showLandingPage);

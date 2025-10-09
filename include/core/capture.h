@@ -187,6 +187,9 @@ public:
     
     // Resource Management Methods
     void cleanupResources(); // Clean up all resources when leaving capture page
+    
+    // Post-Processing Control
+    void startPostProcessing(); // Trigger post-processing after user confirmation
     void initializeResources(); // Initialize resources when entering capture page
     
     // Loading camera label management
@@ -233,8 +236,10 @@ signals:
     void videoRecorded(const QList<QPixmap> &frames, double fps);
     void videoRecordedWithComparison(const QList<QPixmap> &correctedFrames, const QList<QPixmap> &originalFrames, double fps);
     void videoRecordedForLoading(const QList<QPixmap> &originalFrames, double fps); // Original frames for loading page preview
+    void videoRecordedForConfirm(const QList<QPixmap> &frames, double fps); // Send video to confirm page
     void videoProcessingProgress(int percent);
     void showLoadingPage(); // Show loading UI during post-processing
+    void showConfirmPage(); // Show confirm page after dynamic recording
     void showFinalOutputPage();
     void personDetectedInFrame();
     void foregroundPathChanged(const QString &foregroundPath);

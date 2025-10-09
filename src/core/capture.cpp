@@ -977,9 +977,23 @@ void Capture::captureRecordingFrame()
         // Fallback: Get the appropriate frame to record
         cv::Mat frameToRecord;
 
-        if ((m_displayMode == SegmentationMode || m_displayMode == RectangleMode) && !m_lastSegmentedFrame.empty()) {
-            frameToRecord = m_lastSegmentedFrame.clone();
-            qDebug() << "🚀 DIRECT CAPTURE: Fallback - using segmented frame";
+        // 🛡️ CRITICAL FIX: Use mutex when reading segmented frame from background thread
+        if (m_displayMode == SegmentationMode || m_displayMode == RectangleMode) {
+            QMutexLocker locker(&m_personDetectionMutex);
+            if (!m_lastSegmentedFrame.empty()) {
+                frameToRecord = m_lastSegmentedFrame.clone();
+                locker.unlock();
+                qDebug() << "🚀 DIRECT CAPTURE: Fallback - using segmented frame";
+            } else {
+                locker.unlock();
+                if (!m_originalCameraImage.isNull()) {
+                    frameToRecord = qImageToCvMat(m_originalCameraImage);
+                    qDebug() << "🚀 DIRECT CAPTURE: Fallback - using original frame";
+                } else {
+                    qWarning() << "🚀 DIRECT CAPTURE: No frame available for recording";
+                    return;
+                }
+            }
         } else if (!m_originalCameraImage.isNull()) {
             frameToRecord = qImageToCvMat(m_originalCameraImage);
             qDebug() << "🚀 DIRECT CAPTURE: Fallback - using original frame";
@@ -1024,9 +1038,16 @@ void Capture::captureRecordingFrame()
     // 🚀 CRASH PREVENTION: Safe raw person data recording for post-processing
     if ((m_displayMode == SegmentationMode || m_displayMode == RectangleMode)) {
         try {
+            // 🛡️ CRITICAL FIX: Use mutex to protect shared person data from race conditions
+            // These variables are written by background segmentation thread and read by recording thread
+            QMutexLocker locker(&m_personDetectionMutex);
+            
             if (!m_lastRawPersonRegion.empty() && !m_lastRawPersonMask.empty()) {
                 cv::Mat personRegionCopy = m_lastRawPersonRegion.clone();
                 cv::Mat personMaskCopy = m_lastRawPersonMask.clone();
+                
+                // Release lock before doing more work
+                locker.unlock();
                 
                 if (!personRegionCopy.empty() && !personMaskCopy.empty()) {
                     m_recordedRawPersonRegions.append(personRegionCopy);
@@ -1037,6 +1058,7 @@ void Capture::captureRecordingFrame()
                     m_recordedRawPersonMasks.append(cv::Mat());
                 }
             } else {
+                locker.unlock();
                 m_recordedRawPersonRegions.append(cv::Mat());
                 m_recordedRawPersonMasks.append(cv::Mat());
             }
@@ -1411,10 +1433,11 @@ void Capture::resetCapturePage()
     m_handDetectionFPS = 0.0;
     m_lastHandDetectionTime = 0.0;
 
-    // Reset capture mode
-    m_currentCaptureMode = ImageCaptureMode;
+    // 🛡️ BUG FIX: Don't reset capture mode - preserve user's mode selection (static/dynamic)
+    // The mode should only be changed when user explicitly selects a different template type
+    qDebug() << "🔄 Preserving capture mode:" << (m_currentCaptureMode == VideoRecordMode ? "VideoRecordMode" : "ImageCaptureMode");
 
-    // Reset video recording state
+    // Reset video recording state (but keep the mode)
     m_recordedFrames.clear();
     m_originalRecordedFrames.clear();
     m_hasVideoLightingComparison = false;
@@ -1919,6 +1942,39 @@ void Capture::startRecording()
         return;
     }
 
+    // 🛡️ CRASH FIX: Ensure background subtractor is initialized before recording in segmentation mode
+    if ((m_displayMode == SegmentationMode || m_displayMode == RectangleMode) && !m_bgSubtractor) {
+        qWarning() << "🎯 ⚠️ Background subtractor not initialized, initializing now...";
+        m_bgSubtractor = cv::createBackgroundSubtractorMOG2(500, 16, false);
+        if (!m_bgSubtractor) {
+            qWarning() << "🎯 ⚠️ Failed to create background subtractor!";
+            QMessageBox::warning(this, "Recording Error", "Failed to initialize segmentation system. Please restart the application.");
+            ui->capture->setEnabled(true);
+            return;
+        }
+    }
+
+    // 🛡️ CRASH FIX: Validate dynamic video is ready if in dynamic mode
+    if (m_useDynamicVideoBackground && m_displayMode == SegmentationMode) {
+        if (!m_videoPlaybackActive) {
+            qWarning() << "🎞️ ⚠️ Dynamic video playback not active, attempting to restart...";
+            if (m_videoPlaybackTimer && m_videoFrameInterval > 0) {
+                m_videoPlaybackTimer->setInterval(m_videoFrameInterval);
+                m_videoPlaybackTimer->start();
+                m_videoPlaybackActive = true;
+                qDebug() << "🎞️ Video playback timer restarted";
+            } else {
+                qWarning() << "🎞️ ⚠️ Cannot start video playback - timer or interval invalid!";
+                QMessageBox::warning(this, "Recording Error", "Dynamic video background is not ready. Please return to video selection and try again.");
+                ui->capture->setEnabled(true);
+                return;
+            }
+        }
+        if (m_dynamicVideoFrame.empty()) {
+            qWarning() << "🎞️ ⚠️ Dynamic video frame is empty, recording may have issues";
+        }
+    }
+
     m_recordedFrames.clear();
     m_originalRecordedFrames.clear();
     m_hasVideoLightingComparison = false;
@@ -1989,7 +2045,33 @@ void Capture::stopRecording()
         m_originalRecordedFrames = m_recordedFrames;
         m_hasVideoLightingComparison = (m_lightingCorrector && m_lightingCorrector->isEnabled());
         
-        // 🌟 ALWAYS: Send original frames to loading page for background preview
+        // 🎬 NEW FLOW: Send frames to confirm page FIRST for user confirmation
+        qDebug() << "🎬 Sending recorded frames to confirm page for user review";
+        qDebug() << "🎬 Recorded frames:" << m_recordedFrames.size() << "at FPS:" << m_adjustedRecordingFPS;
+        qDebug() << "🎬 Video template FPS:" << m_videoFrameRate;
+        emit videoRecordedForConfirm(m_recordedFrames, m_adjustedRecordingFPS);
+        
+        // 🎬 Show confirm page (user can review before post-processing)
+        qDebug() << "🎬 Showing confirm page - waiting for user confirmation";
+        emit showConfirmPage();
+        
+        // 🎬 POST-PROCESSING NOW HAPPENS IN startPostProcessing() - AFTER USER CONFIRMS
+    }
+
+    // Re-enable capture button for re-recording
+    ui->capture->setEnabled(true);
+}
+
+void Capture::startPostProcessing()
+{
+    qDebug() << "🚀 Starting post-processing after user confirmation";
+    
+    if (m_recordedFrames.isEmpty()) {
+        qWarning() << "🚀 No recorded frames available for post-processing";
+        return;
+    }
+    
+    // 🌟 Send original frames to loading page for background preview
         qDebug() << "🌟 Sending original frames to loading page for background preview";
         emit videoRecordedForLoading(m_originalRecordedFrames, m_adjustedRecordingFPS);
         
@@ -2014,11 +2096,7 @@ void Capture::stopRecording()
             
             // Send original frames to final output page
             emit videoRecorded(m_recordedFrames, m_adjustedRecordingFPS);
-        }
     }
-
-    // Re-enable capture button for re-recording
-    ui->capture->setEnabled(true);
 
     // 🚀 FINAL STEP: Show final output page after all processing is complete
     emit showFinalOutputPage();
@@ -3309,8 +3387,21 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
         // 🚀 PERFORMANCE OPTIMIZATION: Always use lightweight processing during recording
         if (m_isRecording) {
             // Use lightweight background during recording
-            if (m_useDynamicVideoBackground && !m_dynamicVideoFrame.empty()) {
-                cv::resize(m_dynamicVideoFrame, segmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
+            // 🛡️ CRASH FIX: Add mutex lock and validation when accessing dynamic video frame
+            if (m_useDynamicVideoBackground) {
+                QMutexLocker locker(&m_dynamicVideoMutex);
+                if (!m_dynamicVideoFrame.empty() && m_dynamicVideoFrame.cols > 0 && m_dynamicVideoFrame.rows > 0) {
+                    try {
+                        cv::resize(m_dynamicVideoFrame, segmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
+                        qDebug() << "🚀 RECORDING: Using dynamic video frame as background";
+                    } catch (const cv::Exception &e) {
+                        qWarning() << "🚀 RECORDING: Failed to resize dynamic video frame:" << e.what();
+                        segmentedFrame = cv::Mat::zeros(frame.size(), frame.type());
+                    }
+                } else {
+                    qWarning() << "🚀 RECORDING: Dynamic video frame invalid, using black background";
+                    segmentedFrame = cv::Mat::zeros(frame.size(), frame.type());
+                }
             } else {
                 // Use black background for performance
                 segmentedFrame = cv::Mat::zeros(frame.size(), frame.type());
@@ -3443,9 +3534,13 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
             cv::Mat personRegion;
             frame.copyTo(personRegion, personMask);
 
+            // 🛡️ CRITICAL FIX: Use mutex to protect shared person data from race conditions
             // Store raw person data for post-processing (lighting will be applied after capture)
-            m_lastRawPersonRegion = personRegion.clone();
-            m_lastRawPersonMask = personMask.clone();
+            {
+                QMutexLocker locker(&m_personDetectionMutex);
+                m_lastRawPersonRegion = personRegion.clone();
+                m_lastRawPersonMask = personMask.clone();
+            }
 
             // Store template background if using background template
             if (m_useBackgroundTemplate && !m_selectedBackgroundTemplate.isEmpty()) {
@@ -3570,9 +3665,13 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
                     // Apply mask to extract person from camera frame
                     frame.copyTo(personRegion, personMask);
                     
+                    // 🛡️ CRITICAL FIX: Use mutex to protect shared person data from race conditions
                     // Store raw person data for post-processing (lighting will be applied after capture)
-                    m_lastRawPersonRegion = personRegion.clone();
-                    m_lastRawPersonMask = personMask.clone();
+                    {
+                        QMutexLocker locker(&m_personDetectionMutex);
+                        m_lastRawPersonRegion = personRegion.clone();
+                        m_lastRawPersonMask = personMask.clone();
+                    }
                 } catch (const cv::Exception &e) {
                     qWarning() << "🎯 ❌ CPU segmentation failed for detection" << i << ":" << e.what();
                     // Continue with next detection
@@ -3746,6 +3845,7 @@ cv::Mat Capture::createSegmentedFrameGPUOnly(const cv::Mat &frame, const std::ve
         qDebug() << "🎮 - m_useDynamicVideoBackground:" << m_useDynamicVideoBackground;
         qDebug() << "🎮 - m_videoPlaybackActive:" << m_videoPlaybackActive;
         qDebug() << "🎮 - detections count:" << detections.size();
+        qDebug() << "🎮 - m_isRecording:" << m_isRecording;
 
         // Create background for edge-based segmentation
         cv::Mat segmentedFrame;
@@ -3754,7 +3854,32 @@ cv::Mat Capture::createSegmentedFrameGPUOnly(const cv::Mat &frame, const std::ve
         static cv::Mat cachedBackgroundTemplate;
         static QString lastBackgroundPath;
 
-        if (m_useDynamicVideoBackground && m_videoPlaybackActive) {
+        // 🚀 PERFORMANCE OPTIMIZATION: Lightweight GPU processing during recording
+        if (m_isRecording && m_useDynamicVideoBackground) {
+            qDebug() << "🎮 RECORDING MODE: Using lightweight GPU processing";
+            try {
+                // 🔒 THREAD SAFETY: Lock mutex for safe GPU frame access
+                QMutexLocker locker(&m_dynamicVideoMutex);
+                
+                // 🛡️ CRASH FIX: Validate frames before GPU operations
+                if (!m_dynamicGpuFrame.empty() && m_dynamicGpuFrame.cols > 0 && m_dynamicGpuFrame.rows > 0) {
+                    cv::cuda::resize(m_dynamicGpuFrame, m_gpuSegmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
+                    m_gpuSegmentedFrame.download(segmentedFrame);
+                    qDebug() << "🎮 RECORDING: Using GPU frame for background";
+                } else if (!m_dynamicVideoFrame.empty() && m_dynamicVideoFrame.cols > 0 && m_dynamicVideoFrame.rows > 0) {
+                    m_gpuBackgroundFrame.upload(m_dynamicVideoFrame);
+                    cv::cuda::resize(m_gpuBackgroundFrame, m_gpuSegmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
+                    m_gpuSegmentedFrame.download(segmentedFrame);
+                    qDebug() << "🎮 RECORDING: Using CPU frame for background (uploaded to GPU)";
+                } else {
+                    qWarning() << "🎮 RECORDING: No valid video frame, using black background";
+                    segmentedFrame = cv::Mat::zeros(frame.size(), frame.type());
+                }
+            } catch (const cv::Exception &e) {
+                qWarning() << "🎮 RECORDING: GPU processing failed:" << e.what() << "- using black background";
+                segmentedFrame = cv::Mat::zeros(frame.size(), frame.type());
+            }
+        } else if (m_useDynamicVideoBackground && m_videoPlaybackActive) {
             // Phase 2A: GPU-only video background processing
             try {
                 // 🔒 THREAD SAFETY: Lock mutex for safe GPU frame access
@@ -4045,6 +4170,12 @@ cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect 
     // If no valid edge contours found, use background subtraction approach
     if (validContours.empty()) {
         qDebug() << "🎯 No valid edge contours, trying background subtraction";
+        // 🛡️ CRASH FIX: Check if background subtractor is initialized
+        if (!m_bgSubtractor) {
+            qWarning() << "🎯 ⚠️ Background subtractor not initialized, cannot perform segmentation";
+            // Return empty mask - let caller handle this gracefully
+            return cv::Mat::zeros(roi.size(), CV_8UC1);
+        }
         // Use background subtraction for motion-based segmentation
         cv::Mat fgMask;
         m_bgSubtractor->apply(roi, fgMask);
