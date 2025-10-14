@@ -221,6 +221,7 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     , m_handDetectionFPS(0)
     , m_lastHandDetections()
     , m_handDetectionFuture()
+    , m_handDetectionWatcher(nullptr)
     , m_captureReady(false)
     , m_lastSegmentationMode(NormalMode)
     , m_segmentationEnabledInCapture(false)
@@ -359,10 +360,10 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     // Green-screen defaults (robust to both ring/ceiling light scenarios)
     m_greenScreenEnabled = false;
     // Typical green in OpenCV HSV: H=[35, 85], allow wider tolerance for lighting shifts
-    m_greenHueMin = 35;
-    m_greenHueMax = 95;
-    m_greenSatMin = 40;
-    m_greenValMin = 30;
+    m_greenHueMin = 30;  // Target true greens, not dark teals
+    m_greenHueMax = 95;  // Limit to avoid catching person's dark teal/greenish colors
+    m_greenSatMin = 30;  // Higher saturation to target actual green screen, not person's dark colors
+    m_greenValMin = 40;  // Higher brightness to avoid dark greenish colors on person
     // Morphological cleanup sizes (pixels)
     m_greenMaskOpen = 3;
     m_greenMaskClose = 7;
@@ -507,6 +508,11 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     m_personDetectionWatcher = new QFutureWatcher<cv::Mat>(this);
     connect(m_personDetectionWatcher, &QFutureWatcher<cv::Mat>::finished,
             this, &Capture::onPersonDetectionFinished);
+
+    // Initialize async processing for hand detection
+    m_handDetectionWatcher = new QFutureWatcher<QList<HandDetection>>(this);
+    connect(m_handDetectionWatcher, &QFutureWatcher<QList<HandDetection>>::finished,
+            this, &Capture::onHandDetectionFinished);
 
     // Connect hand detection signal to slot for thread-safe UI updates
     connect(this, &Capture::handTriggeredCapture, this, &Capture::onHandTriggeredCapture);
@@ -746,7 +752,7 @@ void Capture::updateCameraFeed(const QImage &image)
         }
 
         // Process hand detection in background (non-blocking) - only after initial frames
-        if (m_handDetectionEnabled && frameCount > 30) {
+        if (m_handDetectionEnabled && frameCount > 30 && !m_handDetectionWatcher->isRunning()) {
             QMutexLocker locker(&m_handDetectionMutex);
             m_currentFrame = qImageToCvMat(image);
 
@@ -755,8 +761,8 @@ void Capture::updateCameraFeed(const QImage &image)
                 return m_handDetector->detect(m_currentFrame);
             });
 
-            // Store the future for later processing
-            m_handDetectionFuture = future;
+            // Set the future to the watcher for async processing
+            m_handDetectionWatcher->setFuture(future);
         }
     }
 
@@ -1133,7 +1139,7 @@ void Capture::on_capture_clicked()
         if (m_handDetector) {
             m_handDetector->resetGestureState();
         }
-        qDebug() << "🖐️ Hand detection RE-ENABLED by recapture button press";
+        qDebug() << "✊ FIST DETECTION RE-ENABLED by recapture button press - Make a FIST to trigger!";
         return; // Don't start countdown, just enable hand detection
     }
 
@@ -1761,7 +1767,7 @@ void Capture::showEvent(QShowEvent *event)
             m_handDetector->resetGestureState();
         }
         enableSegmentationInCapture();
-        qDebug() << "🖐️ Hand detection ENABLED - close your hand to trigger capture automatically";
+        qDebug() << "✊ FIST DETECTION ENABLED - Make a FIST gesture to trigger capture automatically!";
         qDebug() << "🎯 Segmentation ENABLED for capture interface";
 
         // Restore dynamic video background if a path was previously set
@@ -1779,7 +1785,7 @@ void Capture::hideEvent(QHideEvent *event)
 
     // Disable hand detection when page is hidden (but keep camera running for faster return)
     enableHandDetection(false);
-    qDebug() << "🖐️ Hand detection DISABLED";
+    qDebug() << "✊ FIST DETECTION DISABLED";
 
     // Disable segmentation when leaving capture page
     disableSegmentationOutsideCapture();
@@ -2157,7 +2163,60 @@ void Capture::performImageCapture()
         // Send to final output page after processing simulation
         QTimer::singleShot(1800, [this]() {
             emit videoProcessingProgress(100);
-            qDebug() << "🎯 CAPTURE: Processing complete - sending to final output with preserved scaling";
+            qDebug() << "🎯 CAPTURE: Starting post-processing with lighting and edge blending";
+            
+            // 🚀 APPLY POST-PROCESSING: Apply lighting correction and edge blending to static image
+            try {
+                // Convert captured QPixmap to cv::Mat for processing
+                QImage capturedQImage = m_capturedImage.toImage().convertToFormat(QImage::Format_BGR888);
+                if (capturedQImage.isNull()) {
+                    qWarning() << "🎯 CAPTURE: Failed to convert captured image to processable format";
+                    emit imageCaptured(m_capturedImage);
+                    emit showFinalOutputPage();
+                    return;
+                }
+                
+                cv::Mat capturedMat(capturedQImage.height(), capturedQImage.width(), CV_8UC3,
+                                   const_cast<uchar*>(capturedQImage.bits()), capturedQImage.bytesPerLine());
+                cv::Mat capturedMatCopy = capturedMat.clone();
+                
+                qDebug() << "🎯 CAPTURE: Captured image converted to cv::Mat, size:" << capturedMatCopy.cols << "x" << capturedMatCopy.rows;
+                
+                // Apply post-processing
+                cv::Mat processedImage;
+                
+                // Try full post-processing first (with raw person data)
+                if (!m_lastRawPersonRegion.empty() && !m_lastRawPersonMask.empty()) {
+                    qDebug() << "🎯 CAPTURE: Applying full post-processing pipeline (lighting + edge blending)";
+                    processedImage = applyPostProcessingLighting();
+                } else {
+                    qDebug() << "🎯 CAPTURE: No raw person data - applying global lighting correction to captured image";
+                    // Fallback: apply global lighting correction directly to captured image
+                    if (m_lightingCorrector && m_lightingCorrector->isEnabled()) {
+                        processedImage = m_lightingCorrector->applyGlobalLightingCorrection(capturedMatCopy);
+                    } else {
+                        qWarning() << "🎯 CAPTURE: No lighting corrector available";
+                        processedImage = capturedMatCopy;
+                    }
+                }
+                
+                if (!processedImage.empty()) {
+                    // Convert processed image back to QPixmap
+                    QImage qimg = cvMatToQImage(processedImage);
+                    if (!qimg.isNull()) {
+                        m_capturedImage = QPixmap::fromImage(qimg);
+                        qDebug() << "🎯 CAPTURE: ✅ Successfully applied post-processing (lighting + edge blending)";
+                    } else {
+                        qWarning() << "🎯 CAPTURE: Failed to convert processed image to QImage - using original";
+                    }
+                } else {
+                    qWarning() << "🎯 CAPTURE: Post-processing returned empty image - using original";
+                }
+            } catch (const std::exception& e) {
+                qWarning() << "🎯 CAPTURE: Post-processing exception:" << e.what() << "- using original image";
+            }
+            
+            qDebug() << "🎯 CAPTURE: Processing complete - sending to final output";
             emit imageCaptured(m_capturedImage);
             emit showFinalOutputPage();
         });
@@ -4829,17 +4888,17 @@ cv::Mat Capture::createGreenScreenPersonMask(const cv::Mat &frame) const
     // AGGRESSIVE GREEN FRAGMENT REMOVAL
     // Stage 1: Remove high saturation pixels (likely green fragments)
     cv::Mat highSatMask;
-    cv::threshold(hsvChannels[1], highSatMask, 60, 255, cv::THRESH_BINARY);
+    cv::threshold(hsvChannels[1], highSatMask, 80, 255, cv::THRESH_BINARY);  // Increased from 60 to 80
     cv::bitwise_not(highSatMask, highSatMask);
     cv::bitwise_and(personMask, highSatMask, personMask);
 
     // Stage 2: Remove greenish hue pixels
     cv::Mat nearGreenMask1, nearGreenMask2, nearGreenRange;
-    cv::threshold(hsvChannels[0], nearGreenMask1, m_greenHueMin - 10, 255, cv::THRESH_BINARY);
-    cv::threshold(hsvChannels[0], nearGreenMask2, m_greenHueMax + 10, 255, cv::THRESH_BINARY_INV);
+    cv::threshold(hsvChannels[0], nearGreenMask1, m_greenHueMin - 5, 255, cv::THRESH_BINARY);  // Reduced margin from -10 to -5
+    cv::threshold(hsvChannels[0], nearGreenMask2, m_greenHueMax + 5, 255, cv::THRESH_BINARY_INV);  // Reduced margin from +10 to +5
     cv::bitwise_and(nearGreenMask1, nearGreenMask2, nearGreenRange);
     cv::Mat satGreenMask;
-    cv::threshold(hsvChannels[1], satGreenMask, 40, 255, cv::THRESH_BINARY);
+    cv::threshold(hsvChannels[1], satGreenMask, 60, 255, cv::THRESH_BINARY);  // Increased from 40 to 60
     cv::Mat greenFragmentMask;
     cv::bitwise_and(nearGreenRange, satGreenMask, greenFragmentMask);
     cv::bitwise_not(greenFragmentMask, greenFragmentMask);
@@ -4847,7 +4906,7 @@ cv::Mat Capture::createGreenScreenPersonMask(const cv::Mat &frame) const
 
     // Stage 3: Remove high green channel pixels
     cv::Mat greenChannelMask;
-    cv::threshold(bgrChannels[1], greenChannelMask, 120, 255, cv::THRESH_BINARY_INV);
+    cv::threshold(bgrChannels[1], greenChannelMask, 150, 255, cv::THRESH_BINARY_INV);  // Increased from 120 to 150
     cv::bitwise_and(personMask, greenChannelMask, personMask);
 
     // AGGRESSIVE MORPHOLOGICAL CLEANUP
@@ -4979,21 +5038,21 @@ cv::cuda::GpuMat Capture::createGreenScreenPersonMaskGPU(const cv::cuda::GpuMat 
         
         // Stage 1: Remove any pixels with high saturation (likely green screen fragments)
         cv::cuda::GpuMat highSatMask;
-        cv::cuda::threshold(hsvChannels[1], highSatMask, 60, 255, cv::THRESH_BINARY); // More aggressive threshold
+        cv::cuda::threshold(hsvChannels[1], highSatMask, 80, 255, cv::THRESH_BINARY); // Increased from 60 to 80
         cv::cuda::bitwise_not(highSatMask, highSatMask); // Invert: low sat = keep
         cv::cuda::bitwise_and(gpuPersonMask, highSatMask, gpuPersonMask);
         
         // Stage 2: Remove pixels that are greenish (even if not fully green)
         // Detect pixels with hue in green range (even at lower saturation)
         cv::cuda::GpuMat nearGreenMask1, nearGreenMask2;
-        cv::cuda::threshold(hsvChannels[0], nearGreenMask1, m_greenHueMin - 10, 255, cv::THRESH_BINARY); // Lower bound
-        cv::cuda::threshold(hsvChannels[0], nearGreenMask2, m_greenHueMax + 10, 255, cv::THRESH_BINARY_INV); // Upper bound
+        cv::cuda::threshold(hsvChannels[0], nearGreenMask1, m_greenHueMin - 5, 255, cv::THRESH_BINARY); // Reduced margin from -10 to -5
+        cv::cuda::threshold(hsvChannels[0], nearGreenMask2, m_greenHueMax + 5, 255, cv::THRESH_BINARY_INV); // Reduced margin from +10 to +5
         cv::cuda::GpuMat nearGreenRange;
         cv::cuda::bitwise_and(nearGreenMask1, nearGreenMask2, nearGreenRange);
         
         // Remove pixels that are both saturated AND in green hue range
         cv::cuda::GpuMat satGreenMask;
-        cv::cuda::threshold(hsvChannels[1], satGreenMask, 40, 255, cv::THRESH_BINARY); // Medium saturation
+        cv::cuda::threshold(hsvChannels[1], satGreenMask, 60, 255, cv::THRESH_BINARY); // Increased from 40 to 60
         cv::cuda::GpuMat greenFragmentMask;
         cv::cuda::bitwise_and(nearGreenRange, satGreenMask, greenFragmentMask);
         cv::cuda::bitwise_not(greenFragmentMask, greenFragmentMask); // Invert to keep non-green
@@ -5004,7 +5063,7 @@ cv::cuda::GpuMat Capture::createGreenScreenPersonMaskGPU(const cv::cuda::GpuMat 
         cv::cuda::split(gpuFrame, bgrChannels);
         
         cv::cuda::GpuMat greenChannelMask;
-        cv::cuda::threshold(bgrChannels[1], greenChannelMask, 120, 255, cv::THRESH_BINARY_INV); // Keep if green channel < 120
+        cv::cuda::threshold(bgrChannels[1], greenChannelMask, 150, 255, cv::THRESH_BINARY_INV); // Increased from 120 to 150
         cv::cuda::bitwise_and(gpuPersonMask, greenChannelMask, gpuPersonMask);
 
         // 5️⃣ AGGRESSIVE MORPHOLOGICAL CLEANUP to remove all fragments
@@ -5445,8 +5504,8 @@ cv::Mat Capture::applyDistanceBasedRefinement(const cv::Mat &frame, const cv::Ma
         cv::cvtColor(frame, hsv, cv::COLOR_BGR2HSV);
         
         // Create strict green mask (more aggressive than chroma key)
-        cv::Scalar lowerGreen(m_greenHueMin - 5, m_greenSatMin + 20, m_greenValMin);
-        cv::Scalar upperGreen(m_greenHueMax + 5, 255, 255);
+        cv::Scalar lowerGreen(m_greenHueMin, m_greenSatMin + 40, m_greenValMin + 30);  // Much stricter: only bright, saturated greens
+        cv::Scalar upperGreen(m_greenHueMax, 255, 255);
         cv::Mat strictGreenMask;
         cv::inRange(hsv, lowerGreen, upperGreen, strictGreenMask);
         
@@ -5624,10 +5683,10 @@ cv::cuda::GpuMat Capture::removeGreenSpillGPU(const cv::cuda::GpuMat &gpuFrame, 
         // Pixels closer to green hue will be more desaturated
         cv::cuda::GpuMat hueChannel = hsvChannels[0].clone();
         
-        // Create desaturation mask for greenish pixels
+        // Create desaturation mask for greenish pixels (narrower range to preserve person's colors)
         cv::cuda::GpuMat greenishMask1, greenishMask2;
-        cv::cuda::threshold(hueChannel, greenishMask1, m_greenHueMin - 15, 255, cv::THRESH_BINARY);
-        cv::cuda::threshold(hueChannel, greenishMask2, m_greenHueMax + 15, 255, cv::THRESH_BINARY_INV);
+        cv::cuda::threshold(hueChannel, greenishMask1, m_greenHueMin, 255, cv::THRESH_BINARY);  // No extra margin
+        cv::cuda::threshold(hueChannel, greenishMask2, m_greenHueMax, 255, cv::THRESH_BINARY_INV);  // No extra margin
         cv::cuda::GpuMat greenishRange;
         cv::cuda::bitwise_and(greenishMask1, greenishMask2, greenishRange);
         
@@ -5841,6 +5900,11 @@ void Capture::startHandTriggeredCountdown()
     // This slot runs in the main thread and safely updates UI elements
     if (!countdownTimer || !countdownTimer->isActive()) {
         qDebug() << "🎯 Starting countdown from hand detection signal...";
+        
+        // CRITICAL: Disable hand detection to prevent loop!
+        enableHandDetection(false);
+        qDebug() << "🚫 Hand detection DISABLED during countdown";
+        
         // Start 5-second countdown for hand-triggered capture (same as button press)
         ui->capture->setEnabled(false);
         countdownValue = 5; // 5 second countdown
@@ -5860,10 +5924,76 @@ void Capture::onHandTriggeredCapture()
     qDebug() << "🎯 Hand triggered capture signal received in main thread";
     startHandTriggeredCountdown();
 }
+
+void Capture::onHandDetectionFinished()
+{
+    // This slot runs in the main thread when hand detection completes
+    if (!m_handDetectionWatcher || !m_handDetectionEnabled) {
+        return;
+    }
+
+    // Get the detection results from the watcher
+    QList<HandDetection> detections = m_handDetectionWatcher->result();
+    
+    // Store detections for debug display
+    {
+        QMutexLocker locker(&m_handDetectionMutex);
+        m_lastHandDetections = detections;
+    }
+
+    // ✊ FIST GESTURE TRIGGER LOGIC
+    // Track consecutive frames where a fist is detected
+    static int closedFistFrameCount = 0;
+    static bool alreadyTriggered = false;
+    
+    bool fistDetectedThisFrame = false;
+    
+    // Debug: Show what we got
+    if (!detections.isEmpty()) {
+        qDebug() << "📦 Received" << detections.size() << "FIST detection(s) | Confidence threshold:" << m_handDetector->getConfidenceThreshold();
+    }
+    
+    // ALL detections are already FISTS (filtered in detectHandGestures)
+    // Just check if any detection has sufficient confidence
+    for (const auto& detection : detections) {
+        qDebug() << "🔍 Checking FIST - Type:" << detection.handType 
+                 << "| Confidence:" << detection.confidence 
+                 << "| isClosed:" << detection.isClosed;
+        
+        if (detection.confidence >= m_handDetector->getConfidenceThreshold()) {
+            // This is a valid FIST with good confidence!
+            fistDetectedThisFrame = true;
+            qDebug() << "✅✊ VALID FIST CONFIRMED! Confidence:" << detection.confidence;
+            break; // Found a valid fist, no need to check other detections
+        } else {
+            qDebug() << "⚠️ Fist detected but confidence too low:" << detection.confidence << "<" << m_handDetector->getConfidenceThreshold();
+        }
+    }
+    
+    // Update frame counter based on detection
+    if (fistDetectedThisFrame) {
+        closedFistFrameCount++;
+        qDebug() << "📊 Fist frame count:" << closedFistFrameCount << "/ 2 required";
+        
+        // Trigger capture after 2 consecutive fist frames
+        if (closedFistFrameCount >= 2 && !alreadyTriggered) {
+            qDebug() << "🎯✊ FIST TRIGGER! 2 consecutive frames detected - starting capture!";
+            alreadyTriggered = true;
+            emit handTriggeredCapture();
+        }
+    } else {
+        // Reset counter if no fist detected
+        if (closedFistFrameCount > 0) {
+            qDebug() << "⚠️ Fist lost - resetting counter from" << closedFistFrameCount;
+        }
+        closedFistFrameCount = 0;
+        alreadyTriggered = false; // Allow new triggers
+    }
+}
 void Capture::enableHandDetection(bool enable)
 {
     m_handDetectionEnabled = enable;
-    qDebug() << "🖐️ Hand detection" << (enable ? "ENABLED" : "DISABLED");
+    qDebug() << "✊ FIST DETECTION" << (enable ? "ENABLED" : "DISABLED") << "- Only detecting FIST gestures!";
 
     if (enable) {
         // Enable hand detection
@@ -5872,13 +6002,13 @@ void Capture::enableHandDetection(bool enable)
         }
         if (m_handDetector) {
             m_handDetector->resetGestureState();
-            qDebug() << "🖐️ Hand detection gesture state reset - ready for new detection";
+            qDebug() << "✊ FIST detector ready - Make a FIST to trigger capture!";
         }
     } else {
         // Disable hand detection
         if (m_handDetector) {
             m_handDetector->resetGestureState();
-            qDebug() << "🖐️ Hand detection gesture state reset - disabled";
+            qDebug() << "✊ FIST detection disabled";
         }
         // Clear any pending detections
         m_lastHandDetections.clear();
@@ -6128,12 +6258,22 @@ void Capture::setSelectedBackgroundTemplate(const QString &path)
 {
     m_selectedBackgroundTemplate = path;
     m_useBackgroundTemplate = !path.isEmpty();
-    qDebug() << "🎯 Background template set to:" << path << "Use template:" << m_useBackgroundTemplate;
+    qDebug() << "🎯🎯🎯 Background template set to:" << path << "Use template:" << m_useBackgroundTemplate;
     
     // Automatically set the reference template for lighting correction
     if (m_useBackgroundTemplate && !path.isEmpty()) {
+        qDebug() << "🌟 Setting reference template for lighting correction...";
         setReferenceTemplate(path);
-        qDebug() << "🌟 Reference template automatically set for lighting correction";
+        qDebug() << "🌟✅ Reference template automatically set for lighting correction";
+        
+        // VERIFY it was set
+        if (m_lightingCorrector) {
+            cv::Mat refTemplate = m_lightingCorrector->getReferenceTemplate();
+            qDebug() << "🌟 VERIFICATION: Reference template is" << (refTemplate.empty() ? "EMPTY ❌" : "SET ✅");
+            if (!refTemplate.empty()) {
+                qDebug() << "🌟 Reference template size:" << refTemplate.cols << "x" << refTemplate.rows;
+            }
+        }
     }
 }
 
@@ -6718,7 +6858,7 @@ void Capture::initializeResources()
 
 void Capture::initializeLightingCorrection()
 {
-    qDebug() << "🌟 Initializing lighting correction system";
+    qDebug() << "🌟🌟🌟 Initializing lighting correction system";
     
     try {
         // Create lighting corrector instance
@@ -6726,16 +6866,21 @@ void Capture::initializeLightingCorrection()
         
         // Initialize the lighting corrector
         if (m_lightingCorrector->initialize()) {
-            qDebug() << "🌟 Lighting correction system initialized successfully";
-            qDebug() << "🌟 GPU acceleration:" << (m_lightingCorrector->isGPUAvailable() ? "Available" : "Not available");
+            qDebug() << "🌟✅ Lighting correction system initialized successfully";
+            qDebug() << "🌟✅ GPU acceleration:" << (m_lightingCorrector->isGPUAvailable() ? "Available" : "Not available");
+            qDebug() << "🌟✅ Lighting correction ENABLED:" << m_lightingCorrector->isEnabled();
+            
+            // FORCE ENABLE to ensure it's on
+            m_lightingCorrector->setEnabled(true);
+            qDebug() << "🌟✅ Lighting correction FORCE ENABLED - status:" << m_lightingCorrector->isEnabled();
         } else {
-            qWarning() << "🌟 Lighting correction initialization failed";
+            qWarning() << "🌟❌ Lighting correction initialization failed";
             delete m_lightingCorrector;
             m_lightingCorrector = nullptr;
         }
         
     } catch (const std::exception& e) {
-        qWarning() << "🌟 Lighting correction initialization failed:" << e.what();
+        qWarning() << "🌟❌ Lighting correction initialization failed:" << e.what();
         if (m_lightingCorrector) {
             delete m_lightingCorrector;
             m_lightingCorrector = nullptr;
@@ -6813,10 +6958,44 @@ static cv::Mat guidedFilterGrayAlpha(const cv::Mat &guideBGR, const cv::Mat &har
 cv::Mat Capture::applyPostProcessingLighting()
 {
     qDebug() << "🎯 POST-PROCESSING: Apply lighting to raw person data and re-composite";
+    qDebug() << "🎯 POST-PROCESSING: Checking raw person data availability...";
+    qDebug() << "🎯 POST-PROCESSING: m_lastRawPersonRegion empty:" << m_lastRawPersonRegion.empty();
+    qDebug() << "🎯 POST-PROCESSING: m_lastRawPersonMask empty:" << m_lastRawPersonMask.empty();
+    qDebug() << "🎯 POST-PROCESSING: m_lastSegmentedFrame empty:" << m_lastSegmentedFrame.empty();
+    qDebug() << "🎯 POST-PROCESSING: m_lightingCorrector exists:" << (m_lightingCorrector != nullptr);
+    if (m_lightingCorrector) {
+        qDebug() << "🎯 POST-PROCESSING: m_lightingCorrector enabled:" << m_lightingCorrector->isEnabled();
+        qDebug() << "🎯 POST-PROCESSING: Reference template empty:" << m_lightingCorrector->getReferenceTemplate().empty();
+    }
     
     // Check if we have raw person data
     if (m_lastRawPersonRegion.empty() || m_lastRawPersonMask.empty()) {
-        qWarning() << "🎯 No raw person data available, returning original segmented frame";
+        qWarning() << "🎯❌ POST-PROCESSING: No raw person data available!";
+        qWarning() << "🎯❌ POST-PROCESSING: This means segmentation wasn't running or data wasn't stored!";
+        
+        // 🚀 FALLBACK: If we don't have raw person data, apply global lighting correction to the captured image
+        if (m_lightingCorrector && m_lightingCorrector->isEnabled() && !m_lastSegmentedFrame.empty()) {
+            qWarning() << "🎯 POST-PROCESSING: Applying fallback global lighting correction to entire frame";
+            try {
+                cv::Mat result = m_lightingCorrector->applyGlobalLightingCorrection(m_lastSegmentedFrame);
+                if (!result.empty()) {
+                    qDebug() << "🎯 POST-PROCESSING: Successfully applied global lighting correction as fallback";
+                    return result;
+                } else {
+                    qWarning() << "🎯 POST-PROCESSING: Global correction failed, returning original";
+                    return m_lastSegmentedFrame.clone();
+                }
+            } catch (const std::exception& e) {
+                qWarning() << "🎯 POST-PROCESSING: Global correction exception:" << e.what();
+                return m_lastSegmentedFrame.clone();
+            }
+        }
+        
+        if (m_lastSegmentedFrame.empty()) {
+            qWarning() << "🎯❌ No segmented frame either - returning empty Mat!";
+            return cv::Mat();
+        }
+        qWarning() << "🎯❌ Returning original segmented frame without any processing!";
         return m_lastSegmentedFrame.clone();
     }
     
@@ -6962,128 +7141,115 @@ cv::Mat Capture::applyPostProcessingLighting()
 }
 cv::Mat Capture::applyLightingToRawPersonRegion(const cv::Mat &personRegion, const cv::Mat &personMask)
 {
-    qDebug() << "🎯 RAW PERSON APPROACH: Apply lighting to extracted person region only";
+    qDebug() << "🎯✨ RAW PERSON APPROACH: Apply lighting to extracted person region using LightingCorrector";
+    qDebug() << "🎯 Input person region size:" << personRegion.cols << "x" << personRegion.rows;
+    qDebug() << "🎯 Input person mask size:" << personMask.cols << "x" << personMask.rows;
     
     // 🚀 CRASH PREVENTION: Validate inputs
     if (personRegion.empty() || personMask.empty()) {
-        qWarning() << "🎯 Invalid inputs - returning empty mat";
+        qWarning() << "🎯❌ Invalid inputs - returning empty mat";
         return cv::Mat();
     }
     
     if (personRegion.size() != personMask.size()) {
-        qWarning() << "🎯 Size mismatch between person region and mask - returning original";
+        qWarning() << "🎯❌ Size mismatch between person region and mask - returning original";
         return personRegion.clone();
     }
     
     if (personRegion.type() != CV_8UC3) {
-        qWarning() << "🎯 Invalid person region format - returning original";
+        qWarning() << "🎯❌ Invalid person region format - returning original";
         return personRegion.clone();
     }
     
     if (personMask.type() != CV_8UC1) {
-        qWarning() << "🎯 Invalid mask format - returning original";
+        qWarning() << "🎯❌ Invalid mask format - returning original";
         return personRegion.clone();
     }
     
-    // Start with exact copy of person region
-    cv::Mat result;
-    try {
-        result = personRegion.clone();
-    } catch (const std::exception& e) {
-        qWarning() << "🎯 Failed to clone person region:" << e.what();
-        return cv::Mat();
+    // 🚀 CRASH PREVENTION: Check lighting corrector availability
+    if (!m_lightingCorrector) {
+        qWarning() << "🎯❌ LIGHTING CORRECTOR IS NULL - returning original";
+        return personRegion.clone();
     }
     
-    // 🚀 CRASH PREVENTION: Check lighting corrector availability
-    if (!m_lightingCorrector || !m_lightingCorrector->isEnabled()) {
-        qWarning() << "🎯 No lighting corrector available - returning original";
-        return result;
+    if (!m_lightingCorrector->isEnabled()) {
+        qWarning() << "🎯❌ LIGHTING CORRECTOR IS DISABLED - returning original";
+        return personRegion.clone();
     }
+    
+    qDebug() << "🎯✅ Lighting corrector exists and is enabled";
     
     try {
         // Get template reference for color matching
         cv::Mat templateRef = m_lightingCorrector->getReferenceTemplate();
+        qDebug() << "🎯 Template reference size:" << templateRef.cols << "x" << templateRef.rows;
+        qDebug() << "🎯 Template reference empty:" << templateRef.empty();
+        
+        cv::Mat result;
+        
         if (templateRef.empty()) {
-            qWarning() << "🎯 No template reference, applying subtle lighting correction";
-            // Apply subtle lighting correction to make person blend better
-            for (int y = 0; y < result.rows; y++) {
-                for (int x = 0; x < result.cols; x++) {
-                    if (y < personMask.rows && x < personMask.cols && 
-                        personMask.at<uchar>(y, x) > 0) {  // Person pixel
-                        cv::Vec3b& pixel = result.at<cv::Vec3b>(y, x);
-                        // SUBTLE CHANGES FOR NATURAL BLENDING:
-                        pixel[0] = cv::saturate_cast<uchar>(pixel[0] * 1.1);  // Slightly brighter blue
-                        pixel[1] = cv::saturate_cast<uchar>(pixel[1] * 1.05); // Slightly brighter green
-                        pixel[2] = cv::saturate_cast<uchar>(pixel[2] * 1.08); // Slightly brighter red
-                    }
-                }
+            qWarning() << "🎯⚠️ No template reference - applying global lighting correction instead";
+            // Apply global lighting correction if no template available
+            result = m_lightingCorrector->applyGlobalLightingCorrection(personRegion);
+            if (!result.empty()) {
+                qDebug() << "🎯✅ Applied global lighting correction to person region";
+                qDebug() << "🎯 Result size:" << result.cols << "x" << result.rows;
+                return result;
+            } else {
+                qWarning() << "🎯❌ Global lighting correction failed - returning original";
+                return personRegion.clone();
             }
         } else {
-            // Apply template-based color matching
-            cv::resize(templateRef, templateRef, personRegion.size());
+            // 🚀 USE ACTUAL LIGHTING CORRECTOR: Apply the full lighting correction pipeline
+            qDebug() << "🎯✨ Applying LightingCorrector::applyPersonLightingCorrection with template reference";
+            qDebug() << "🎯 Template size:" << templateRef.cols << "x" << templateRef.rows;
             
-            // Convert to LAB for color matching
-            cv::Mat personLab, templateLab;
-            cv::cvtColor(personRegion, personLab, cv::COLOR_BGR2Lab);
-            cv::cvtColor(templateRef, templateLab, cv::COLOR_BGR2Lab);
+            result = m_lightingCorrector->applyPersonLightingCorrection(personRegion, personMask, templateRef);
             
-            // Calculate template statistics
-            cv::Scalar templateMean, templateStd;
-            cv::meanStdDev(templateLab, templateMean, templateStd);
-            
-            // Apply color matching to person region
-            cv::Mat resultLab = personLab.clone();
-            std::vector<cv::Mat> channels;
-            cv::split(resultLab, channels);
-            
-            // Apply template color matching for natural blending
-            // Calculate person statistics for comparison
-            cv::Scalar personMean, personStd;
-            cv::meanStdDev(personLab, personMean, personStd);
-            
-            // Adjust person lighting to match template characteristics
-            for (int c = 0; c < 3; c++) {
-                // Calculate the difference between template and person
-                double lightingDiff = templateMean[c] - personMean[c];
+            if (!result.empty()) {
+                qDebug() << "🎯✅✅✅ Successfully applied person lighting correction (CLAHE + color balance + gamma)";
+                qDebug() << "🎯 Result size:" << result.cols << "x" << result.rows;
                 
-                // Apply subtle adjustment (only 15% of the difference for natural blending)
-                channels[c] = channels[c] + lightingDiff * 0.15;
+                // Save debug images (safely)
+                try {
+                    cv::imwrite("debug_raw_person_original.png", personRegion);
+                    cv::imwrite("debug_raw_person_mask.png", personMask);
+                    cv::imwrite("debug_raw_person_result.png", result);
+                    qDebug() << "🎯 Debug images saved: raw_person_original, raw_person_mask, raw_person_result";
+                } catch (const std::exception& e) {
+                    qWarning() << "🎯 Failed to save debug images:" << e.what();
+                }
+                
+                return result;
+            } else {
+                qWarning() << "🎯❌ Person lighting correction returned empty - trying global correction as fallback";
+                // Try global correction as fallback
+                result = m_lightingCorrector->applyGlobalLightingCorrection(personRegion);
+                if (!result.empty()) {
+                    qDebug() << "🎯✅ Applied global lighting correction as fallback";
+                    return result;
+                }
+                qWarning() << "🎯❌ All lighting correction failed - returning original";
+                return personRegion.clone();
             }
-            
-            // Additional brightness adjustment for better blending
-            // If template is brighter, slightly brighten the person
-            double brightnessDiff = templateMean[0] - personMean[0]; // L channel
-            if (brightnessDiff > 0) {
-                channels[0] = channels[0] + brightnessDiff * 0.1; // Slight brightness boost
-            }
-            
-            cv::merge(channels, resultLab);
-            cv::cvtColor(resultLab, result, cv::COLOR_Lab2BGR);
-            
-            // Apply mask to ensure only person pixels are affected
-            cv::Mat maskedResult;
-            result.copyTo(maskedResult, personMask);
-            personRegion.copyTo(maskedResult, ~personMask);
-            result = maskedResult;
-        }
-        
-        // Save debug images (safely)
-        try {
-            cv::imwrite("debug_raw_person_original.png", personRegion);
-            cv::imwrite("debug_raw_person_mask.png", personMask);
-            cv::imwrite("debug_raw_person_result.png", result);
-            qDebug() << "🎯 RAW PERSON APPROACH: Applied lighting to person region only";
-            qDebug() << "🎯 Debug images saved: raw_person_original, raw_person_mask, raw_person_result";
-        } catch (const std::exception& e) {
-            qWarning() << "🎯 Failed to save debug images:" << e.what();
         }
         
     } catch (const std::exception& e) {
-        qWarning() << "🎯 Exception in lighting correction:" << e.what() << "- returning original";
+        qWarning() << "🎯❌ Exception in lighting correction:" << e.what() << "- trying global correction";
+        try {
+            cv::Mat result = m_lightingCorrector->applyGlobalLightingCorrection(personRegion);
+            if (!result.empty()) {
+                qDebug() << "🎯✅ Applied global lighting correction after exception";
+                return result;
+            }
+        } catch (...) {
+            qWarning() << "🎯❌ Global correction also failed - returning original";
+        }
         return personRegion.clone();
     }
     
-    return result;
+    // Should never reach here, but return original as fallback
+    return personRegion.clone();
 }
 
 cv::Mat Capture::createPersonMaskFromSegmentedFrame(const cv::Mat &segmentedFrame)

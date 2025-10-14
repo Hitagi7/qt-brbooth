@@ -92,16 +92,6 @@
        </spacer>
       </item>
       <item>
-       <widget class="QLabel" name="confirmLabel">
-        <property name="text">
-         <string>Confirm Output?</string>
-        </property>
-        <property name="alignment">
-         <set>Qt::AlignmentFlag::AlignCenter</set>
-        </property>
-       </widget>
-      </item>
-      <item>
        <layout class="QHBoxLayout" name="horizontalLayoutTop">
         <item>
          <spacer name="verticalSpacer1">
@@ -160,6 +150,32 @@
           <property name="sizeHint" stdset="0">
            <size>
             <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+        <item>
+         <widget class="QLabel" name="confirmLabel">
+          <property name="text">
+           <string>Confirm Output?</string>
+          </property>
+          <property name="alignment">
+           <set>Qt::AlignmentFlag::AlignCenter</set>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <spacer name="horizontalSpacer_3">
+          <property name="orientation">
+           <enum>Qt::Orientation::Horizontal</enum>
+          </property>
+          <property name="sizeType">
+           <enum>QSizePolicy::Policy::Maximum</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>700</width>
             <height>20</height>
            </size>
           </property>

@@ -275,6 +275,7 @@ private slots:
     // Hand Detection Slots
     void startHandTriggeredCountdown();
     void onHandTriggeredCapture();
+    void onHandDetectionFinished();
     
     // 🚀 Asynchronous Recording Slots
     void processRecordingFrame();
@@ -385,6 +386,7 @@ private:
     double m_handDetectionFPS;
     QList<HandDetection> m_lastHandDetections;
     QFuture<QList<HandDetection>> m_handDetectionFuture;
+    QFutureWatcher<QList<HandDetection>> *m_handDetectionWatcher;
     
     // Capture Mode State
     bool m_captureReady;  // Only allow hand detection to trigger capture when true
