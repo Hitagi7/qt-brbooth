@@ -458,6 +458,13 @@ BRBooth::BRBooth(QWidget *parent)
             // Start camera only when reaching capture page
             if (cameraWorker && !cameraWorker->isCameraOpen()) {
                 qDebug() << "📹 Starting camera for Capture page...";
+                
+                // Show "Loading Camera..." message while camera initializes
+                if (capturePage) {
+                    capturePage->showLoadingCameraLabel();
+                    qDebug() << "📹 Showing Loading Camera label while reopening camera";
+                }
+                
                 emit startCameraWorker();
             } else {
                 qDebug() << "📹 Camera already running for Capture page";

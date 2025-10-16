@@ -6144,18 +6144,25 @@ void Capture::disableProcessingModes()
 // Loading camera label management methods
 void Capture::showLoadingCameraLabel()
 {
+    // Clear the video label to show black screen instead of previous frame
+    if (ui->videoLabel) {
+        ui->videoLabel->clear();
+        ui->videoLabel->setText(""); // Ensure no text is displayed
+        qDebug() << "📹 Video label cleared to black screen";
+    }
+    
     if (loadingCameraLabel) {
         // Set basic size and position for visibility
         loadingCameraLabel->setFixedSize(500, 120); // Increased height from 100 to 120
 
-        // Center the label with the capture button (which is positioned more to the right)
-        int x = (width() - 500) / 2 + 350; // Move right to align with capture button
-        int y = (height() - 120) / 2; // Adjusted for new height
+        // Center the label properly in the middle of the screen
+        int x = (width() - 500) / 2; // Center horizontally
+        int y = (height() - 120) / 2; // Center vertically
         loadingCameraLabel->move(x, y);
 
         loadingCameraLabel->show();
         loadingCameraLabel->raise(); // Bring to front
-        qDebug() << "📹 Loading camera label shown at position:" << x << "," << y;
+        qDebug() << "📹 Loading camera label shown centered at position:" << x << "," << y;
     }
 }
 
