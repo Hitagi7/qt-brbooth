@@ -62,6 +62,12 @@ public:
     void updateHandState(bool isClosed); // New method for tracking hand state over time
     bool isHandClosedTimerValid() const;
     bool isHandClosedFast(const std::vector<cv::Point>& contour); // Fast detection for poor camera quality
+    
+    // ASL-style shape matching for fist detection
+    bool loadReferenceFistShape(const QString& imagePath);
+    void createGenericFistReference();
+    bool isFistByShapeMatching(const std::vector<cv::Point>& contour);
+    double calculateShapeSimilarity(const std::vector<cv::Point>& contour1, const std::vector<cv::Point>& contour2);
 
     // ROI tracking (for continuous hand tracking)
     bool hasLock() const;
@@ -259,6 +265,11 @@ private:
     int m_totalFramesProcessed;
     QList<double> m_processingTimes;
     QList<HandDetection> m_lastDetections;
+    
+    // ASL-style shape matching reference
+    std::vector<cv::Point> m_referenceFistContour;
+    bool m_hasReferenceFist;
+    double m_shapeSimilarityThreshold; // Lower = more strict matching
 };
 
 #endif // HAND_DETECTOR_H

@@ -40,6 +40,8 @@ HandDetector::HandDetector(QObject *parent)
     , m_averageProcessingTime(0.0)
     , m_currentFPS(0.0)
     , m_totalFramesProcessed(0)
+    , m_hasReferenceFist(false)
+    , m_shapeSimilarityThreshold(0.30)  // ASL-style: Moderate threshold with spatial filtering (was 0.40)
 {
     qDebug() << "HandDetector: Specialized hand gesture detector constructor called";
 }
@@ -98,6 +100,17 @@ bool HandDetector::initialize()
         
         m_initialized = true;
         emit detectorTypeChanged(m_detectorType);
+        
+        // Load reference fist shape for ASL-style matching
+        QString fistRefPath = "templates/hand_gestures/fist_reference.png";
+        if (loadReferenceFistShape(fistRefPath)) {
+            qDebug() << "✊ ASL-STYLE SHAPE MATCHING ENABLED with reference fist image!";
+        } else {
+            qDebug() << "⚠️ No reference fist found - creating generic fist contour";
+            // Create a simple generic fist contour (circle-ish shape)
+            createGenericFistReference();
+        }
+        
         qDebug() << "HandDetector: Hand gesture detection initialized successfully";
         qDebug() << "🎯 Hand detector ready - using" << m_detectorType << "processing!";
         return true;
@@ -340,6 +353,150 @@ bool HandDetector::isHandClosed(const std::vector<cv::Point>& contour)
     }
     
     return isFist;
+}
+
+// ===================================================================
+// ASL-STYLE SHAPE MATCHING ALGORITHM (Industry Standard)
+// Based on: https://stackoverflow.com/questions/26991094/asl-hand-sign-detection-opencv
+// Uses Hu Moments and matchShapes() for robust fist detection
+// ===================================================================
+
+bool HandDetector::loadReferenceFistShape(const QString& imagePath)
+{
+    qDebug() << "📁 Loading reference fist from:" << imagePath;
+    
+    // Load the reference image
+    cv::Mat refImage = cv::imread(imagePath.toStdString(), cv::IMREAD_GRAYSCALE);
+    
+    if (refImage.empty()) {
+        qDebug() << "⚠️ Could not load reference fist image from:" << imagePath;
+        return false;
+    }
+    
+    // Threshold to get binary image
+    cv::Mat binary;
+    cv::threshold(refImage, binary, 127, 255, cv::THRESH_BINARY);
+    
+    // Find the largest contour (should be the fist)
+    std::vector<std::vector<cv::Point>> contours;
+    cv::findContours(binary, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+    
+    if (contours.empty()) {
+        qDebug() << "⚠️ No contours found in reference fist image";
+        return false;
+    }
+    
+    // Find the largest contour
+    double maxArea = 0;
+    size_t maxIdx = 0;
+    for (size_t i = 0; i < contours.size(); i++) {
+        double area = cv::contourArea(contours[i]);
+        if (area > maxArea) {
+            maxArea = area;
+            maxIdx = i;
+        }
+    }
+    
+    m_referenceFistContour = contours[maxIdx];
+    m_hasReferenceFist = true;
+    
+    qDebug() << "✅ Reference fist loaded! Contour points:" << m_referenceFistContour.size() 
+             << "Area:" << maxArea;
+    
+    return true;
+}
+
+void HandDetector::createGenericFistReference()
+{
+    // Create a simple circular contour to represent a fist
+    // This is a fallback if no custom reference image is provided
+    
+    qDebug() << "🔧 Creating generic fist reference contour...";
+    
+    m_referenceFistContour.clear();
+    
+    // Create a circle with some irregularity (like a fist)
+    cv::Point center(50, 50);
+    double radius = 40;
+    
+    for (int angle = 0; angle < 360; angle += 5) {
+        double rad = angle * M_PI / 180.0;
+        // Add some variation to make it less perfect (fists aren't perfect circles)
+        double r = radius + (sin(rad * 3) * 5); // Add some bumps
+        int x = center.x + static_cast<int>(r * cos(rad));
+        int y = center.y + static_cast<int>(r * sin(rad));
+        m_referenceFistContour.push_back(cv::Point(x, y));
+    }
+    
+    m_hasReferenceFist = true;
+    
+    qDebug() << "✅ Generic fist reference created with" << m_referenceFistContour.size() << "points";
+}
+
+bool HandDetector::isFistByShapeMatching(const std::vector<cv::Point>& contour)
+{
+    if (!m_hasReferenceFist || m_referenceFistContour.empty()) {
+        static int noRefWarning = 0;
+        if (++noRefWarning % 30 == 0) {
+            qDebug() << "⚠️ No reference fist loaded - cannot use shape matching!";
+        }
+        return false;
+    }
+    
+    if (contour.size() < 10) {
+        return false;
+    }
+    
+    // Calculate similarity using Hu Moments (OpenCV's matchShapes)
+    double similarity = calculateShapeSimilarity(contour, m_referenceFistContour);
+    
+    // ASL-STYLE SHAPE MATCHING THRESHOLD (VERY LENIENT):
+    // 0.00 = Identical shapes
+    // 0.01-0.40 = Similar enough (ANY FIST) ✊ ← VERY LENIENT!
+    // 0.41-0.60 = Somewhat similar (other hand gestures)
+    // 0.61-0.80 = Different shapes (open hand, pointing)
+    // 0.81+ = Completely different (face, body, objects)
+    bool isFist = (similarity < m_shapeSimilarityThreshold);
+    
+    // ALWAYS log when testing shapes with detailed results
+    QString result;
+    if (similarity < 0.10) {
+        result = "✅ PERFECT MATCH! ✊";
+    } else if (similarity < m_shapeSimilarityThreshold) {
+        result = "✅ YES (fist detected) ✊";
+    } else if (similarity < 0.60) {
+        result = "❌ NO (similarity too high - not a fist)";
+    } else if (similarity < 0.85) {
+        result = "❌ NO (very different - likely open hand)";
+    } else {
+        result = "❌ NO (completely different - likely face/body)";
+    }
+    
+    qDebug() << "🔍 ASL Shape Match - Similarity:" << QString::number(similarity, 'f', 4)
+             << "| Threshold:" << m_shapeSimilarityThreshold
+             << "|" << result;
+    
+    return isFist;
+}
+
+double HandDetector::calculateShapeSimilarity(const std::vector<cv::Point>& contour1, 
+                                               const std::vector<cv::Point>& contour2)
+{
+    // Use OpenCV's matchShapes with Hu Moments
+    // Method: cv::CONTOURS_MATCH_I1 (recommended for shape matching)
+    // Returns: similarity score (0 = identical, higher = more different)
+    
+    if (contour1.size() < 5 || contour2.size() < 5) {
+        return 999.9; // Very high value = not similar at all
+    }
+    
+    try {
+        double similarity = cv::matchShapes(contour1, contour2, cv::CONTOURS_MATCH_I1, 0);
+        return similarity;
+    } catch (const cv::Exception& e) {
+        qWarning() << "⚠️ Shape matching error:" << e.what();
+        return 999.9;
+    }
 }
 
 bool HandDetector::isHandOpen(const std::vector<cv::Point>& contour)
@@ -625,13 +782,13 @@ QList<HandDetection> HandDetector::detectHandGestures(const cv::Mat& image)
     // Create skin color mask (SIMPLE AND WORKING)
     cv::Mat skinMask = createSkinMask(resized);
     
-    // Debug: Show skin mask statistics
+    // Debug: Show skin mask statistics (throttled)
     int skinPixels = cv::countNonZero(skinMask);
     double skinRatio = (double)skinPixels / (skinMask.rows * skinMask.cols);
     
     static int skinDebugCount = 0;
     if (++skinDebugCount % 30 == 0) {
-        qDebug() << "🔍 Skin detection - Pixels:" << skinPixels << "Ratio:" << skinRatio;
+        qDebug() << "🔍 Skin detection - Pixels:" << skinPixels << "Ratio:" << QString::number(skinRatio, 'f', 3);
     }
     
     // If no skin detected, try more lenient detection
@@ -664,8 +821,12 @@ QList<HandDetection> HandDetector::detectHandGestures(const cv::Mat& image)
     
     // Debug: Show detection count (throttled)
     static int contourDebugCount = 0;
-    if (!contours.empty() && ++contourDebugCount % 30 == 0) {
-        qDebug() << "🔍 Found" << contours.size() << "potential hand(s)";
+    if (++contourDebugCount % 30 == 0) {
+        if (!contours.empty()) {
+            qDebug() << "🔍 Found" << contours.size() << "potential hand contour(s)";
+        } else {
+            qDebug() << "⚠️ NO contours found!";
+        }
     }
     
     // ===================================================================
@@ -704,39 +865,33 @@ QList<HandDetection> HandDetector::detectHandGestures(const cv::Mat& image)
         double centerX = (bbox.x + bbox.width / 2.0) / resized.cols;
         
         // ===================================================================
-        // CRITICAL FILTER: RAISED FIST ZONE!
-        // When you raise your fist, it's ABOVE your head (top of frame)
-        // OR to the sides of your head
-        // REJECT the face zone (center of upper frame where face is)
+        // PURE ASL-STYLE DETECTION - NO SPATIAL FILTERING!
+        // Let Hu Moments do the work - face shape ≠ fist shape
+        // This is the CORRECT way to use shape matching algorithms
         // ===================================================================
         
-        // FACE ZONE = Large object in upper-center (where your face is)
-        bool isFaceZone = (centerY < 0.40) &&                    // Upper 40% of frame
-                          (centerX > 0.30 && centerX < 0.70) &&  // Center horizontally (wider tolerance)
-                          (area > 2000);                          // Very large (face is bigger than fist)
+        // BASIC FACE REJECTION: Reject very large objects in center-upper region
+        // This helps reduce false triggers without being too restrictive
+        bool likelyFace = (area > 3500) &&                         // Very large
+                          (centerX > 0.30 && centerX < 0.70) &&   // Center horizontally
+                          (centerY < 0.45);                        // Upper portion
         
-        if (isFaceZone) {
-            // This is likely the FACE - REJECT!
+        if (likelyFace) {
             rejectedByZone++;
-            static int faceZoneReject = 0;
-            if (++faceZoneReject % 30 == 0) {
-                qDebug() << "🚫 FACE ZONE! Pos:(" << (centerX*100) << "%," << (centerY*100) << "%) Area:" << area;
+            static int faceRejectLog = 0;
+            if (++faceRejectLog % 30 == 0) {
+                qDebug() << "🚫 LIKELY FACE (large + center-upper) - Area:" << area << "- REJECTED";
             }
             continue;
         }
         
-        // ACCEPT: Just not in the face zone!
-        // Fists can be anywhere else (above, sides, even slightly below face)
-        qDebug() << "✅ POSITION OK! Pos:(" << (centerX*100) << "%," << (centerY*100) << "%) Area:" << area;
-        
-        // ✊ ONLY DETECT FIST GESTURES (not all hand shapes)
-        // First check if this is a FIST
-        qDebug() << "🔍 TESTING FOR FIST... Area:" << area;
-        bool isFist = isHandClosed(contour);
+        // ✊ ASL-STYLE SHAPE MATCHING for FIST DETECTION
+        // Uses Hu Moments to compare shape against reference fist
+        bool isFist = isFistByShapeMatching(contour);
         
         if (!isFist) {
             rejectedByFistCheck++;
-            qDebug() << "   ❌ NOT A FIST! (failed finger count test)";
+            qDebug() << "   ❌ NOT A FIST! (failed shape matching)";
             continue; // Skip anything that's not a fist
         }
         
@@ -1327,8 +1482,7 @@ std::vector<cv::Point> HandDetector::findCudaFingerTips(const std::vector<cv::Po
             // Check if this point is likely a finger tip
             bool isFingerTip = true;
             for (const auto& defect : defects) {
-                cv::Point start = contour[defect[0]];
-                cv::Point end = contour[defect[1]];
+                // Only need the far point (defect valley)
                 cv::Point far = contour[defect[2]];
                 
                 // If this point is near a defect, it's not a finger tip

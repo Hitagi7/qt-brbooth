@@ -56,7 +56,7 @@ static cv::Mat applyEdgeBlurringAlternative(const cv::Mat &segmentedObject, cons
 // Fixed segmentation rectangle configuration
 // Adjust kFixedRectX and kFixedRectY to reposition the rectangle on screen.
 // Size of the rectanglez
-static const int kFixedRectWidth = 960;   // constant width in pixels
+static const int kFixedRectWidth = 1440;   // constant width in pixels
 static const int kFixedRectHeight = 720;  // constant height in pixels
 // Move left to right
 static const int kFixedRectX = 0;       // left offset in pixels (adjustable)
@@ -987,9 +987,9 @@ void Capture::captureRecordingFrame()
         if (m_displayMode == SegmentationMode || m_displayMode == RectangleMode) {
             QMutexLocker locker(&m_personDetectionMutex);
             if (!m_lastSegmentedFrame.empty()) {
-            frameToRecord = m_lastSegmentedFrame.clone();
+                frameToRecord = m_lastSegmentedFrame.clone();
                 locker.unlock();
-            qDebug() << "🚀 DIRECT CAPTURE: Fallback - using segmented frame";
+                qDebug() << "🚀 DIRECT CAPTURE: Fallback - using segmented frame";
             } else {
                 locker.unlock();
                 if (!m_originalCameraImage.isNull()) {
@@ -2238,38 +2238,38 @@ void Capture::performImageCapture()
             
             // 🌟 THEN: Show loading UI with original image background
             qDebug() << "🌟 STATIC: Showing loading UI with original image background";
-            emit showLoadingPage();
-            
-            // 🌟 START: Progress simulation for static processing
-            emit videoProcessingProgress(0);
-            
-            // 🌟 PROGRESS: Simulate processing stages with realistic timing
-            QTimer::singleShot(200, [this]() {
-                emit videoProcessingProgress(25);
+        emit showLoadingPage();
+        
+        // 🌟 START: Progress simulation for static processing
+        emit videoProcessingProgress(0);
+        
+        // 🌟 PROGRESS: Simulate processing stages with realistic timing
+        QTimer::singleShot(200, [this]() {
+            emit videoProcessingProgress(25);
                 qDebug() << "🌟 STATIC: Processing progress 25%";
-            });
-            
-            QTimer::singleShot(600, [this]() {
-                emit videoProcessingProgress(50);
+        });
+        
+        QTimer::singleShot(600, [this]() {
+            emit videoProcessingProgress(50);
                 qDebug() << "🌟 STATIC: Processing progress 50%";
-            });
-            
-            QTimer::singleShot(1000, [this]() {
-                emit videoProcessingProgress(75);
+        });
+        
+        QTimer::singleShot(1000, [this]() {
+            emit videoProcessingProgress(75);
                 qDebug() << "🌟 STATIC: Processing progress 75%";
-            });
-            
-            QTimer::singleShot(1400, [this]() {
-                emit videoProcessingProgress(90);
+        });
+        
+        QTimer::singleShot(1400, [this]() {
+            emit videoProcessingProgress(90);
                 qDebug() << "🌟 STATIC: Processing progress 90%";
-            });
-            
+        });
+        
             // 🌟 FINALLY: Send processed image to final output page (after processing simulation)
             QTimer::singleShot(1800, [this, scaledOriginalPixmap]() {
-                emit videoProcessingProgress(100);
+            emit videoProcessingProgress(100);
                 qDebug() << "🌟 STATIC: Processing complete - sending to final output";
                 emit imageCapturedWithComparison(m_capturedImage, scaledOriginalPixmap);
-                emit showFinalOutputPage();
+                    emit showFinalOutputPage();
             });
             
             qDebug() << "🎯 Emitted static image with loading UI flow - corrected and original versions";
@@ -3547,7 +3547,7 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
                 QMutexLocker locker(&m_dynamicVideoMutex);
                 if (!m_dynamicVideoFrame.empty() && m_dynamicVideoFrame.cols > 0 && m_dynamicVideoFrame.rows > 0) {
                     try {
-                cv::resize(m_dynamicVideoFrame, segmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
+                        cv::resize(m_dynamicVideoFrame, segmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
                         qDebug() << "🚀 RECORDING: Using dynamic video frame as background";
                     } catch (const cv::Exception &e) {
                         qWarning() << "🚀 RECORDING: Failed to resize dynamic video frame:" << e.what();
@@ -3693,8 +3693,8 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
             // Store raw person data for post-processing (lighting will be applied after capture)
             {
                 QMutexLocker locker(&m_personDetectionMutex);
-            m_lastRawPersonRegion = personRegion.clone();
-            m_lastRawPersonMask = personMask.clone();
+                m_lastRawPersonRegion = personRegion.clone();
+                m_lastRawPersonMask = personMask.clone();
             }
 
             // Store template background if using background template
@@ -3824,8 +3824,8 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
                     // Store raw person data for post-processing (lighting will be applied after capture)
                     {
                         QMutexLocker locker(&m_personDetectionMutex);
-                    m_lastRawPersonRegion = personRegion.clone();
-                    m_lastRawPersonMask = personMask.clone();
+                        m_lastRawPersonRegion = personRegion.clone();
+                        m_lastRawPersonMask = personMask.clone();
                     }
                 } catch (const cv::Exception &e) {
                     qWarning() << "🎯 ❌ CPU segmentation failed for detection" << i << ":" << e.what();
@@ -6071,9 +6071,9 @@ void Capture::onHandDetectionFinished()
         closedFistFrameCount++;
         qDebug() << "📊 Fist frame count:" << closedFistFrameCount << "/ 2 required";
         
-        // Trigger capture after 2 consecutive fist frames
+        // Trigger capture after 2 frames (prevents false triggers while still fast)
         if (closedFistFrameCount >= 2 && !alreadyTriggered) {
-            qDebug() << "🎯✊ FIST TRIGGER! 2 consecutive frames detected - starting capture!";
+            qDebug() << "🎯✊ FIST TRIGGER! 2 consecutive frames - starting capture!";
             alreadyTriggered = true;
             emit handTriggeredCapture();
         }
@@ -7307,24 +7307,24 @@ cv::Mat Capture::applyLightingToRawPersonRegion(const cv::Mat &personRegion, con
             personRegion.copyTo(maskedResult, ~personMask);
             result = maskedResult;
         }
-        
-        // Save debug images (safely)
-        try {
-            cv::imwrite("debug_raw_person_original.png", personRegion);
-            cv::imwrite("debug_raw_person_mask.png", personMask);
-            cv::imwrite("debug_raw_person_result.png", result);
+                
+                // Save debug images (safely)
+                try {
+                    cv::imwrite("debug_raw_person_original.png", personRegion);
+                    cv::imwrite("debug_raw_person_mask.png", personMask);
+                    cv::imwrite("debug_raw_person_result.png", result);
             qDebug() << "🎯 RAW PERSON APPROACH: Applied lighting to person region only";
-            qDebug() << "🎯 Debug images saved: raw_person_original, raw_person_mask, raw_person_result";
-        } catch (const std::exception& e) {
-            qWarning() << "🎯 Failed to save debug images:" << e.what();
-        }
-        
+                    qDebug() << "🎯 Debug images saved: raw_person_original, raw_person_mask, raw_person_result";
+                } catch (const std::exception& e) {
+                    qWarning() << "🎯 Failed to save debug images:" << e.what();
+                }
+                
     } catch (const std::exception& e) {
         qWarning() << "🎯 Exception in lighting correction:" << e.what() << "- returning original";
-        return personRegion.clone();
+                return personRegion.clone();
     }
     
-    return result;
+                return result;
 }
 
 cv::Mat Capture::createPersonMaskFromSegmentedFrame(const cv::Mat &segmentedFrame)
