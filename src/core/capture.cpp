@@ -987,9 +987,9 @@ void Capture::captureRecordingFrame()
         if (m_displayMode == SegmentationMode || m_displayMode == RectangleMode) {
             QMutexLocker locker(&m_personDetectionMutex);
             if (!m_lastSegmentedFrame.empty()) {
-                frameToRecord = m_lastSegmentedFrame.clone();
+            frameToRecord = m_lastSegmentedFrame.clone();
                 locker.unlock();
-                qDebug() << "🚀 DIRECT CAPTURE: Fallback - using segmented frame";
+            qDebug() << "🚀 DIRECT CAPTURE: Fallback - using segmented frame";
             } else {
                 locker.unlock();
                 if (!m_originalCameraImage.isNull()) {
@@ -2111,118 +2111,214 @@ void Capture::startPostProcessing()
 
 void Capture::performImageCapture()
 {
-    // 🎯 FIX: Capture exactly what's displayed on screen (same as video recording)
-    // This ensures the user's scaling is perfectly preserved
-    if (ui->videoLabel) {
-        QPixmap currentDisplayPixmap = ui->videoLabel->pixmap();
-        
-        if (currentDisplayPixmap.isNull()) {
-            qWarning() << "🎯 CAPTURE: Video label pixmap is null - cannot capture";
-            QMessageBox::warning(this, "Capture Failed", "No camera feed available to capture an image.");
-            return;
+    // Capture the processed frame that includes background template and segmentation
+    if (!m_originalCameraImage.isNull()) {
+        QPixmap cameraPixmap;
+        QSize labelSize = ui->videoLabel->size();
+
+        // Check if we have a processed segmented frame to capture
+        if ((m_displayMode == SegmentationMode || m_displayMode == RectangleMode) && !m_lastSegmentedFrame.empty()) {
+            // Store original segmented frame for comparison
+            cv::Mat originalSegmentedFrame = m_lastSegmentedFrame.clone();
+            
+            // Apply person-only lighting correction using template reference
+            cv::Mat lightingCorrectedFrame;
+            qDebug() << "🌟 LIGHTING DEBUG - Segmentation mode detected";
+            qDebug() << "🌟 LIGHTING DEBUG - Lighting enabled:" << isLightingCorrectionEnabled();
+            qDebug() << "🌟 LIGHTING DEBUG - Background template enabled:" << m_useBackgroundTemplate;
+            qDebug() << "🌟 LIGHTING DEBUG - Template path:" << m_selectedBackgroundTemplate;
+            qDebug() << "🌟 LIGHTING DEBUG - Lighting corrector exists:" << (m_lightingCorrector != nullptr);
+            
+            // POST-PROCESSING: Apply lighting to raw person data and re-composite
+            qDebug() << "🎯 POST-PROCESSING: Apply lighting to raw person data";
+            lightingCorrectedFrame = applyPostProcessingLighting();
+            qDebug() << "🎯 Post-processing lighting applied";
+            
+            // Store both versions for saving
+            m_originalCapturedImage = originalSegmentedFrame;
+            m_lightingCorrectedImage = lightingCorrectedFrame;
+            m_hasLightingComparison = true;
+            
+            qDebug() << "🔥 FORCED: Stored both original and lighting-corrected versions for comparison";
+            
+            // Convert the processed OpenCV frame to QImage for capture
+            QImage processedImage = cvMatToQImage(lightingCorrectedFrame);
+            cameraPixmap = QPixmap::fromImage(processedImage);
+            qDebug() << "🎯 Capturing processed segmented frame with background template and person lighting correction";
+        } else {
+            // For normal mode, apply global lighting correction if enabled
+            cv::Mat originalFrame = qImageToCvMat(m_originalCameraImage);
+            cv::Mat lightingCorrectedFrame;
+            qDebug() << "🌟 LIGHTING DEBUG - Normal mode detected";
+            qDebug() << "🌟 LIGHTING DEBUG - Lighting enabled:" << isLightingCorrectionEnabled();
+            qDebug() << "🌟 LIGHTING DEBUG - Lighting corrector exists:" << (m_lightingCorrector != nullptr);
+            
+            if (isLightingCorrectionEnabled() && m_lightingCorrector) {
+                lightingCorrectedFrame = m_lightingCorrector->applyGlobalLightingCorrection(originalFrame);
+                qDebug() << "🎯 Applied global lighting correction (normal mode)";
+            } else {
+                lightingCorrectedFrame = originalFrame;
+                qDebug() << "🎯 No lighting correction applied (normal mode)";
+            }
+            
+            // Convert back to QImage
+            QImage correctedImage = cvMatToQImage(lightingCorrectedFrame);
+            cameraPixmap = QPixmap::fromImage(correctedImage);
+            qDebug() << "🎯 Capturing original camera frame with lighting correction (normal mode)";
         }
+
+        // Apply the same scaling logic as the live display
+        // First scale to fit the label - use FastTransformation for better performance
+        QPixmap scaledPixmap = cameraPixmap.scaled(
+            labelSize,
+            Qt::KeepAspectRatioByExpanding,
+            Qt::FastTransformation
+        );
+
+        // Apply person-only scaling for background template/dynamic video mode, frame scaling for other modes
+        if (qAbs(m_personScaleFactor - 1.0) > 0.01) {
+            // Check if we're in segmentation mode with background template or dynamic video background
+            if (m_displayMode == SegmentationMode && ((m_useBackgroundTemplate &&
+                !m_selectedBackgroundTemplate.isEmpty()) || m_useDynamicVideoBackground)) {
+                // For background template mode or dynamic video mode, don't scale the entire frame
+                // Person scaling is already applied in createSegmentedFrame
+                qDebug() << "🎯 Person-only scaling preserved in final output (background template or dynamic video mode)";
+            } else {
+                // Apply frame scaling for other modes (normal, rectangle, black background)
+                QSize originalSize = scaledPixmap.size();
+                int newWidth = qRound(originalSize.width() * m_personScaleFactor);
+                int newHeight = qRound(originalSize.height() * m_personScaleFactor);
+
+                scaledPixmap = scaledPixmap.scaled(
+                    newWidth, newHeight,
+                    Qt::KeepAspectRatio,
+                    Qt::FastTransformation
+                );
+
+                qDebug() << "🎯 Frame scaled in final output to" << newWidth << "x" << newHeight
+                         << "with factor" << m_personScaleFactor;
+            }
+        }
+
+        m_capturedImage = scaledPixmap;
         
-        qDebug() << "🎯 CAPTURE: Capturing exactly what's displayed on screen";
-        qDebug() << "🎯 CAPTURE: Display size:" << currentDisplayPixmap.size();
-        qDebug() << "🎯 CAPTURE: Scale factor:" << m_personScaleFactor;
-        
-        // Store the displayed image as the captured image (with user's scaling preserved)
-        m_capturedImage = currentDisplayPixmap;
-        
-        // 🎯 SIMPLIFIED: Send to loading page first, then to final output
-        qDebug() << "🎯 CAPTURE: Sending captured image to loading page";
+        // 🌟 LOADING UI INTEGRATION: Show loading page with original frame background
+        if (m_hasLightingComparison && !m_originalCapturedImage.empty()) {
+            // Convert original image to QPixmap for preview and comparison
+            QImage originalQImage = cvMatToQImage(m_originalCapturedImage);
+            QPixmap originalPixmap = QPixmap::fromImage(originalQImage);
+            
+            // Apply same scaling to original image
+            QPixmap scaledOriginalPixmap = originalPixmap.scaled(
+                labelSize,
+                Qt::KeepAspectRatioByExpanding,
+                Qt::FastTransformation
+            );
+            
+            // Apply person scaling if needed
+            if (qAbs(m_personScaleFactor - 1.0) > 0.01) {
+                if (m_displayMode == SegmentationMode && ((m_useBackgroundTemplate &&
+                    !m_selectedBackgroundTemplate.isEmpty()) || m_useDynamicVideoBackground)) {
+                    qDebug() << "🎯 Person-only scaling preserved in original output";
+                } else {
+                    QSize originalSize = scaledOriginalPixmap.size();
+                    int newWidth = qRound(originalSize.width() * m_personScaleFactor);
+                    int newHeight = qRound(originalSize.height() * m_personScaleFactor);
+                    scaledOriginalPixmap = scaledOriginalPixmap.scaled(
+                        newWidth, newHeight,
+                        Qt::KeepAspectRatio,
+                        Qt::FastTransformation
+                    );
+                }
+            }
+            
+            // 🌟 FIRST: Send original image to loading page for background preview
+            qDebug() << "🌟 STATIC: Sending original image to loading page for background";
+            emit imageCapturedForLoading(scaledOriginalPixmap);
+            
+            // 🌟 THEN: Show loading UI with original image background
+            qDebug() << "🌟 STATIC: Showing loading UI with original image background";
+            emit showLoadingPage();
+            
+            // 🌟 START: Progress simulation for static processing
+            emit videoProcessingProgress(0);
+            
+            // 🌟 PROGRESS: Simulate processing stages with realistic timing
+            QTimer::singleShot(200, [this]() {
+                emit videoProcessingProgress(25);
+                qDebug() << "🌟 STATIC: Processing progress 25%";
+            });
+            
+            QTimer::singleShot(600, [this]() {
+                emit videoProcessingProgress(50);
+                qDebug() << "🌟 STATIC: Processing progress 50%";
+            });
+            
+            QTimer::singleShot(1000, [this]() {
+                emit videoProcessingProgress(75);
+                qDebug() << "🌟 STATIC: Processing progress 75%";
+            });
+            
+            QTimer::singleShot(1400, [this]() {
+                emit videoProcessingProgress(90);
+                qDebug() << "🌟 STATIC: Processing progress 90%";
+            });
+            
+            // 🌟 FINALLY: Send processed image to final output page (after processing simulation)
+            QTimer::singleShot(1800, [this, scaledOriginalPixmap]() {
+                emit videoProcessingProgress(100);
+                qDebug() << "🌟 STATIC: Processing complete - sending to final output";
+                emit imageCapturedWithComparison(m_capturedImage, scaledOriginalPixmap);
+                emit showFinalOutputPage();
+            });
+            
+            qDebug() << "🎯 Emitted static image with loading UI flow - corrected and original versions";
+        } else {
+            // No comparison available - send to loading page first, then final page
+            qDebug() << "🌟 STATIC: Sending single image to loading page";
         emit imageCapturedForLoading(m_capturedImage);
         
-        qDebug() << "🎯 CAPTURE: Showing loading UI";
+            qDebug() << "🌟 STATIC: Showing loading UI";
         emit showLoadingPage();
         
+            // Send to final output page with progress simulation
         // 🌟 START: Progress simulation for static processing
         emit videoProcessingProgress(0);
         
         // 🌟 PROGRESS: Simulate processing stages with realistic timing
         QTimer::singleShot(200, [this]() {
             emit videoProcessingProgress(25);
-            qDebug() << "🎯 CAPTURE: Processing progress 25%";
+                qDebug() << "🌟 STATIC: Processing progress 25%";
         });
         
         QTimer::singleShot(600, [this]() {
             emit videoProcessingProgress(50);
-            qDebug() << "🎯 CAPTURE: Processing progress 50%";
+                qDebug() << "🌟 STATIC: Processing progress 50%";
         });
         
         QTimer::singleShot(1000, [this]() {
             emit videoProcessingProgress(75);
-            qDebug() << "🎯 CAPTURE: Processing progress 75%";
+                qDebug() << "🌟 STATIC: Processing progress 75%";
         });
         
         QTimer::singleShot(1400, [this]() {
             emit videoProcessingProgress(90);
-            qDebug() << "🎯 CAPTURE: Processing progress 90%";
+                qDebug() << "🌟 STATIC: Processing progress 90%";
         });
         
         // Send to final output page after processing simulation
         QTimer::singleShot(1800, [this]() {
             emit videoProcessingProgress(100);
-            qDebug() << "🎯 CAPTURE: Starting post-processing with lighting and edge blending";
-            
-            // 🚀 APPLY POST-PROCESSING: Apply lighting correction and edge blending to static image
-            try {
-                // Convert captured QPixmap to cv::Mat for processing
-                QImage capturedQImage = m_capturedImage.toImage().convertToFormat(QImage::Format_BGR888);
-                if (capturedQImage.isNull()) {
-                    qWarning() << "🎯 CAPTURE: Failed to convert captured image to processable format";
-                    emit imageCaptured(m_capturedImage);
-                    emit showFinalOutputPage();
-                    return;
-                }
-                
-                cv::Mat capturedMat(capturedQImage.height(), capturedQImage.width(), CV_8UC3,
-                                   const_cast<uchar*>(capturedQImage.bits()), capturedQImage.bytesPerLine());
-                cv::Mat capturedMatCopy = capturedMat.clone();
-                
-                qDebug() << "🎯 CAPTURE: Captured image converted to cv::Mat, size:" << capturedMatCopy.cols << "x" << capturedMatCopy.rows;
-                
-                // Apply post-processing
-                cv::Mat processedImage;
-                
-                // Try full post-processing first (with raw person data)
-                if (!m_lastRawPersonRegion.empty() && !m_lastRawPersonMask.empty()) {
-                    qDebug() << "🎯 CAPTURE: Applying full post-processing pipeline (lighting + edge blending)";
-                    processedImage = applyPostProcessingLighting();
-                } else {
-                    qDebug() << "🎯 CAPTURE: No raw person data - applying global lighting correction to captured image";
-                    // Fallback: apply global lighting correction directly to captured image
-                    if (m_lightingCorrector && m_lightingCorrector->isEnabled()) {
-                        processedImage = m_lightingCorrector->applyGlobalLightingCorrection(capturedMatCopy);
-                    } else {
-                        qWarning() << "🎯 CAPTURE: No lighting corrector available";
-                        processedImage = capturedMatCopy;
-                    }
-                }
-                
-                if (!processedImage.empty()) {
-                    // Convert processed image back to QPixmap
-                    QImage qimg = cvMatToQImage(processedImage);
-                    if (!qimg.isNull()) {
-                        m_capturedImage = QPixmap::fromImage(qimg);
-                        qDebug() << "🎯 CAPTURE: ✅ Successfully applied post-processing (lighting + edge blending)";
-                    } else {
-                        qWarning() << "🎯 CAPTURE: Failed to convert processed image to QImage - using original";
-                    }
-                } else {
-                    qWarning() << "🎯 CAPTURE: Post-processing returned empty image - using original";
-                }
-            } catch (const std::exception& e) {
-                qWarning() << "🎯 CAPTURE: Post-processing exception:" << e.what() << "- using original image";
-            }
-            
-            qDebug() << "🎯 CAPTURE: Processing complete - sending to final output";
+                qDebug() << "🌟 STATIC: Processing complete - sending single image to final output";
             emit imageCaptured(m_capturedImage);
             emit showFinalOutputPage();
         });
         
-        qDebug() << "🎯 CAPTURE: Image captured with preserved scaling from display";
-        qDebug() << "🎯 CAPTURE: Captured image size:" << m_capturedImage.size();
+            qDebug() << "🎯 Emitted single image with loading UI flow";
+        }
+        
+        qDebug() << "Image captured (includes background template and segmentation).";
+        qDebug() << "Captured image size:" << m_capturedImage.size() << "Original size:" << cameraPixmap.size();
     } else {
         qWarning() << "Failed to capture image: original camera image is empty.";
         QMessageBox::warning(this, "Capture Failed", "No camera feed available to capture an image.");
@@ -3451,7 +3547,7 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
                 QMutexLocker locker(&m_dynamicVideoMutex);
                 if (!m_dynamicVideoFrame.empty() && m_dynamicVideoFrame.cols > 0 && m_dynamicVideoFrame.rows > 0) {
                     try {
-                        cv::resize(m_dynamicVideoFrame, segmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
+                cv::resize(m_dynamicVideoFrame, segmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
                         qDebug() << "🚀 RECORDING: Using dynamic video frame as background";
                     } catch (const cv::Exception &e) {
                         qWarning() << "🚀 RECORDING: Failed to resize dynamic video frame:" << e.what();
@@ -3597,8 +3693,8 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
             // Store raw person data for post-processing (lighting will be applied after capture)
             {
                 QMutexLocker locker(&m_personDetectionMutex);
-                m_lastRawPersonRegion = personRegion.clone();
-                m_lastRawPersonMask = personMask.clone();
+            m_lastRawPersonRegion = personRegion.clone();
+            m_lastRawPersonMask = personMask.clone();
             }
 
             // Store template background if using background template
@@ -3728,8 +3824,8 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
                     // Store raw person data for post-processing (lighting will be applied after capture)
                     {
                         QMutexLocker locker(&m_personDetectionMutex);
-                        m_lastRawPersonRegion = personRegion.clone();
-                        m_lastRawPersonMask = personMask.clone();
+                    m_lastRawPersonRegion = personRegion.clone();
+                    m_lastRawPersonMask = personMask.clone();
                     }
                 } catch (const cv::Exception &e) {
                     qWarning() << "🎯 ❌ CPU segmentation failed for detection" << i << ":" << e.what();
@@ -6958,44 +7054,10 @@ static cv::Mat guidedFilterGrayAlpha(const cv::Mat &guideBGR, const cv::Mat &har
 cv::Mat Capture::applyPostProcessingLighting()
 {
     qDebug() << "🎯 POST-PROCESSING: Apply lighting to raw person data and re-composite";
-    qDebug() << "🎯 POST-PROCESSING: Checking raw person data availability...";
-    qDebug() << "🎯 POST-PROCESSING: m_lastRawPersonRegion empty:" << m_lastRawPersonRegion.empty();
-    qDebug() << "🎯 POST-PROCESSING: m_lastRawPersonMask empty:" << m_lastRawPersonMask.empty();
-    qDebug() << "🎯 POST-PROCESSING: m_lastSegmentedFrame empty:" << m_lastSegmentedFrame.empty();
-    qDebug() << "🎯 POST-PROCESSING: m_lightingCorrector exists:" << (m_lightingCorrector != nullptr);
-    if (m_lightingCorrector) {
-        qDebug() << "🎯 POST-PROCESSING: m_lightingCorrector enabled:" << m_lightingCorrector->isEnabled();
-        qDebug() << "🎯 POST-PROCESSING: Reference template empty:" << m_lightingCorrector->getReferenceTemplate().empty();
-    }
     
     // Check if we have raw person data
     if (m_lastRawPersonRegion.empty() || m_lastRawPersonMask.empty()) {
-        qWarning() << "🎯❌ POST-PROCESSING: No raw person data available!";
-        qWarning() << "🎯❌ POST-PROCESSING: This means segmentation wasn't running or data wasn't stored!";
-        
-        // 🚀 FALLBACK: If we don't have raw person data, apply global lighting correction to the captured image
-        if (m_lightingCorrector && m_lightingCorrector->isEnabled() && !m_lastSegmentedFrame.empty()) {
-            qWarning() << "🎯 POST-PROCESSING: Applying fallback global lighting correction to entire frame";
-            try {
-                cv::Mat result = m_lightingCorrector->applyGlobalLightingCorrection(m_lastSegmentedFrame);
-                if (!result.empty()) {
-                    qDebug() << "🎯 POST-PROCESSING: Successfully applied global lighting correction as fallback";
-                    return result;
-                } else {
-                    qWarning() << "🎯 POST-PROCESSING: Global correction failed, returning original";
-                    return m_lastSegmentedFrame.clone();
-                }
-            } catch (const std::exception& e) {
-                qWarning() << "🎯 POST-PROCESSING: Global correction exception:" << e.what();
-                return m_lastSegmentedFrame.clone();
-            }
-        }
-        
-        if (m_lastSegmentedFrame.empty()) {
-            qWarning() << "🎯❌ No segmented frame either - returning empty Mat!";
-            return cv::Mat();
-        }
-        qWarning() << "🎯❌ Returning original segmented frame without any processing!";
+        qWarning() << "🎯 No raw person data available, returning original segmented frame";
         return m_lastSegmentedFrame.clone();
     }
     
@@ -7209,17 +7271,17 @@ cv::Mat Capture::applyLightingToRawPersonRegion(const cv::Mat &personRegion, con
             if (!result.empty()) {
                 qDebug() << "🎯✅✅✅ Successfully applied person lighting correction (CLAHE + color balance + gamma)";
                 qDebug() << "🎯 Result size:" << result.cols << "x" << result.rows;
-                
-                // Save debug images (safely)
-                try {
-                    cv::imwrite("debug_raw_person_original.png", personRegion);
-                    cv::imwrite("debug_raw_person_mask.png", personMask);
-                    cv::imwrite("debug_raw_person_result.png", result);
-                    qDebug() << "🎯 Debug images saved: raw_person_original, raw_person_mask, raw_person_result";
-                } catch (const std::exception& e) {
-                    qWarning() << "🎯 Failed to save debug images:" << e.what();
-                }
-                
+        
+        // Save debug images (safely)
+        try {
+            cv::imwrite("debug_raw_person_original.png", personRegion);
+            cv::imwrite("debug_raw_person_mask.png", personMask);
+            cv::imwrite("debug_raw_person_result.png", result);
+            qDebug() << "🎯 Debug images saved: raw_person_original, raw_person_mask, raw_person_result";
+        } catch (const std::exception& e) {
+            qWarning() << "🎯 Failed to save debug images:" << e.what();
+        }
+        
                 return result;
             } else {
                 qWarning() << "🎯❌ Person lighting correction returned empty - trying global correction as fallback";
@@ -7230,7 +7292,7 @@ cv::Mat Capture::applyLightingToRawPersonRegion(const cv::Mat &personRegion, con
                     return result;
                 }
                 qWarning() << "🎯❌ All lighting correction failed - returning original";
-                return personRegion.clone();
+        return personRegion.clone();
             }
         }
         
@@ -7240,7 +7302,7 @@ cv::Mat Capture::applyLightingToRawPersonRegion(const cv::Mat &personRegion, con
             cv::Mat result = m_lightingCorrector->applyGlobalLightingCorrection(personRegion);
             if (!result.empty()) {
                 qDebug() << "🎯✅ Applied global lighting correction after exception";
-                return result;
+    return result;
             }
         } catch (...) {
             qWarning() << "🎯❌ Global correction also failed - returning original";
@@ -7528,12 +7590,10 @@ cv::Mat Capture::applyDynamicFrameEdgeBlending(const cv::Mat &composedFrame,
             } catch (const cv::Exception& e) {
                 qWarning() << "🎯 SCALING PRESERVATION: Compositing failed:" << e.what() << "- using fallback";
                 // Fallback: composite at origin if scaling makes person too large
-                cv::erode(binMask, interiorMask, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(2*2+1, 2*2+1)));
                 scaledPerson.copyTo(result, interiorMask);
             }
         } else {
             // Fallback: composite at origin if scaling makes person too large
-            cv::erode(binMask, interiorMask, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(2*2+1, 2*2+1)));
             scaledPerson.copyTo(result, interiorMask);
             qDebug() << "🎯 SCALING PRESERVATION: Using fallback compositing due to bounds check";
         }

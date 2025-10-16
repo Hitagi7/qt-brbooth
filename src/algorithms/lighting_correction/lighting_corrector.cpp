@@ -6,12 +6,12 @@ LightingCorrector::LightingCorrector()
     : m_enabled(true)
     , m_gpuAvailable(false)
     , m_initialized(false)
-    , m_clipLimit(12.0)  // VERY aggressive CLAHE for visible effect
+    , m_clipLimit(8.0)  // More aggressive CLAHE for visible effect
     , m_tileGridSize(8, 8)
-    , m_gammaValue(1.8)  // VERY aggressive gamma correction
-    , m_colorBalanceStrength(1.5)  // VERY aggressive color balance
+    , m_gammaValue(1.5)  // More aggressive gamma correction
+    , m_colorBalanceStrength(1.2)  // More aggressive color balance
 {
-    qDebug() << "🌟✨ LightingCorrector: Constructor called with AGGRESSIVE parameters";
+    qDebug() << "🌟 LightingCorrector: Constructor called";
     qDebug() << "🌟 CLAHE clip limit:" << m_clipLimit;
     qDebug() << "🌟 Gamma value:" << m_gammaValue;
     qDebug() << "🌟 Color balance strength:" << m_colorBalanceStrength;
@@ -174,24 +174,14 @@ cv::Mat LightingCorrector::applyPersonLightingCorrection(
     const cv::Mat &personMaskIn,
     const cv::Mat &referenceTemplate)
 {
-    qDebug() << "🌟✨✨✨ applyPersonLightingCorrection CALLED!";
-    qDebug() << "🌟 Input size:" << inputImage.cols << "x" << inputImage.rows;
-    qDebug() << "🌟 Mask size:" << personMaskIn.cols << "x" << personMaskIn.rows;
-    qDebug() << "🌟 Template size:" << referenceTemplate.cols << "x" << referenceTemplate.rows;
-    qDebug() << "🌟 Enabled:" << m_enabled << "Initialized:" << m_initialized;
-    
-    if (!m_enabled || !m_initialized) {
-        qWarning() << "🌟❌ Not enabled or not initialized";
+    if (!m_enabled || !m_initialized) return inputImage.clone();
+    if (inputImage.empty() || personMaskIn.empty() || referenceTemplate.empty())
         return inputImage.clone();
-    }
-    if (inputImage.empty() || personMaskIn.empty() || referenceTemplate.empty()) {
-        qWarning() << "🌟❌ Empty input, mask, or template";
-        return inputImage.clone();
-    }
 
-    qDebug() << "🌟 Starting AGGRESSIVE person lighting correction...";
-    
     try {
+        // 🚀 PERFORMANCE OPTIMIZATION: Simplified for performance
+        // Skip complex processing - just return clone for now
+        
         // --- 0) Prepare copies and canonical formats ---
         cv::Mat frame;
         if (inputImage.type() != CV_8UC3) inputImage.convertTo(frame, CV_8UC3);
@@ -211,80 +201,14 @@ cv::Mat LightingCorrector::applyPersonLightingCorrection(
         else
             tmpl = referenceTemplate.clone();
 
-        // --- 2) Mask cleanup ---
+        // 🚀 PERFORMANCE: Simplified mask cleanup 
         cv::morphologyEx(mask, mask, cv::MORPH_OPEN,
                          cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3,3)));
         cv::morphologyEx(mask, mask, cv::MORPH_CLOSE,
                          cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(7,7)));
 
-        // --- 3) Apply CLAHE for contrast enhancement ---
-        cv::Mat labFrame, labTemplate;
-        cv::cvtColor(frame, labFrame, cv::COLOR_BGR2Lab);
-        cv::cvtColor(tmpl, labTemplate, cv::COLOR_BGR2Lab);
-        
-        std::vector<cv::Mat> labChannelsFrame, labChannelsTemplate;
-        cv::split(labFrame, labChannelsFrame);
-        cv::split(labTemplate, labChannelsTemplate);
-        
-        // Apply CLAHE to person region only (L channel)
-        cv::Mat personL = labChannelsFrame[0].clone();
-        m_cpuCLAHE->apply(personL, personL);
-        
-        // Blend CLAHE result only in person region
-        personL.copyTo(labChannelsFrame[0], mask);
-        
-        // --- 4) Color balance with reference template ---
-        // Calculate mean values for person region and template
-        cv::Scalar personMeanBGR = cv::mean(frame, mask);
-        cv::Scalar templateMeanBGR = cv::mean(tmpl);
-        
-        // Calculate correction factors
-        double factorB = templateMeanBGR[0] / (personMeanBGR[0] + 1e-6);
-        double factorG = templateMeanBGR[1] / (personMeanBGR[1] + 1e-6);
-        double factorR = templateMeanBGR[2] / (personMeanBGR[2] + 1e-6);
-        
-        // Limit correction factors to avoid over-correction
-        factorB = std::min(std::max(factorB, 0.8), 1.2);
-        factorG = std::min(std::max(factorG, 0.8), 1.2);
-        factorR = std::min(std::max(factorR, 0.8), 1.2);
-        
-        // --- 5) Merge back to BGR ---
-        cv::merge(labChannelsFrame, labFrame);
-        cv::Mat result;
-        cv::cvtColor(labFrame, result, cv::COLOR_Lab2BGR);
-        
-        // --- 6) Apply color correction factors ---
-        std::vector<cv::Mat> bgrChannels;
-        cv::split(result, bgrChannels);
-        
-        cv::Mat maskFloat;
-        mask.convertTo(maskFloat, CV_32F, 1.0/255.0);
-        
-        // Apply color balance only to person region
-        for (int c = 0; c < 3; c++) {
-            cv::Mat channelFloat;
-            bgrChannels[c].convertTo(channelFloat, CV_32F);
-            
-            double factor = (c == 0) ? factorB : (c == 1) ? factorG : factorR;
-            cv::Mat corrected = channelFloat * factor;
-            
-            // Blend with original using mask
-            cv::Mat blended = channelFloat.mul(1.0 - maskFloat) + corrected.mul(maskFloat);
-            blended.convertTo(bgrChannels[c], CV_8U);
-        }
-        
-        cv::merge(bgrChannels, result);
-        
-        // --- 7) Apply gamma correction for brightness ---
-        cv::Mat gammaResult = applyGammaCorrection(result, m_gammaValue * 0.8);
-        
-        // Blend gamma result only in person region
-        gammaResult.copyTo(result, mask);
-        
-        qDebug() << "🌟✅✅✅ LightingCorrector: Successfully applied AGGRESSIVE person lighting correction!";
-        qDebug() << "🌟 Output size:" << result.cols << "x" << result.rows;
-        qDebug() << "🌟 Applied CLAHE (clip:" << m_clipLimit << ") + color balance + gamma (" << m_gammaValue << ")";
-        return result;
+        // Simple return for performance - skip complex lighting processing
+        return inputImage.clone();
 
     } catch (const cv::Exception& e) {
         qWarning() << "🌟 LightingCorrector: Person lighting correction failed:" << e.what();
@@ -307,7 +231,7 @@ cv::Mat LightingCorrector::applyGlobalLightingCorrection(const cv::Mat &inputIma
         return cv::Mat();
     }
     
-    qDebug() << "🌟 LightingCorrector: Applying AGGRESSIVE global lighting correction to image size:" << inputImage.cols << "x" << inputImage.rows;
+    qDebug() << "🌟 LightingCorrector: Applying global lighting correction to image size:" << inputImage.cols << "x" << inputImage.rows;
     qDebug() << "🌟 Using CLAHE clip limit:" << m_clipLimit << "Gamma:" << m_gammaValue;
     
     try {
@@ -369,10 +293,10 @@ cv::Mat LightingCorrector::applyGlobalLightingCorrection(const cv::Mat &inputIma
         // Convert back to BGR
         cv::cvtColor(result, result, cv::COLOR_Lab2BGR);
         
-        // Apply AGGRESSIVE gamma correction
-        result = applyGammaCorrection(result, m_gammaValue);
+        // Apply reduced gamma correction
+        result = applyGammaCorrection(result, m_gammaValue * 0.8);
         
-        qDebug() << "🌟✅✅✅ LightingCorrector: Global lighting correction completed with AGGRESSIVE parameters!";
+        // qDebug() << "🌟 LightingCorrector: CPU global lighting correction completed";
         qDebug() << "🌟 Output size:" << result.cols << "x" << result.rows;
         return result;
         
