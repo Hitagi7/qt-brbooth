@@ -3701,19 +3701,26 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
             if (m_useBackgroundTemplate && !m_selectedBackgroundTemplate.isEmpty()) {
                 // Use cached template background if available, otherwise load it
                 if (m_lastTemplateBackground.empty() || lastBackgroundPath != m_selectedBackgroundTemplate) {
-                    QString resolvedPath = resolveTemplatePath(m_selectedBackgroundTemplate);
-                    if (!resolvedPath.isEmpty()) {
-                        cv::Mat templateBg = cv::imread(resolvedPath.toStdString());
-                        if (!templateBg.empty()) {
-                            cv::resize(templateBg, m_lastTemplateBackground, frame.size());
-                            qDebug() << "🎯 Template background cached for post-processing from:" << resolvedPath;
+                    // Check if this is bg6.png (white background special case)
+                    if (m_selectedBackgroundTemplate.contains("bg6.png")) {
+                        // Create white background instead of loading a file
+                        m_lastTemplateBackground = cv::Mat(frame.size(), frame.type(), cv::Scalar(255, 255, 255));
+                        qDebug() << "🎯 White template background cached for post-processing (bg6.png)";
+                    } else {
+                        QString resolvedPath = resolveTemplatePath(m_selectedBackgroundTemplate);
+                        if (!resolvedPath.isEmpty()) {
+                            cv::Mat templateBg = cv::imread(resolvedPath.toStdString());
+                            if (!templateBg.empty()) {
+                                cv::resize(templateBg, m_lastTemplateBackground, frame.size());
+                                qDebug() << "🎯 Template background cached for post-processing from:" << resolvedPath;
+                            } else {
+                                qWarning() << "🎯 Failed to load template background from resolved path:" << resolvedPath;
+                                m_lastTemplateBackground = cv::Mat();
+                            }
                         } else {
-                            qWarning() << "🎯 Failed to load template background from resolved path:" << resolvedPath;
+                            qWarning() << "🎯 Could not resolve template background path:" << m_selectedBackgroundTemplate;
                             m_lastTemplateBackground = cv::Mat();
                         }
-                    } else {
-                        qWarning() << "🎯 Could not resolve template background path:" << m_selectedBackgroundTemplate;
-                        m_lastTemplateBackground = cv::Mat();
                     }
                 }
             }
@@ -3847,19 +3854,26 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
                 if (m_useBackgroundTemplate && !m_selectedBackgroundTemplate.isEmpty()) {
                     // Use cached template background if available, otherwise load it
                     if (m_lastTemplateBackground.empty() || lastBackgroundPath != m_selectedBackgroundTemplate) {
-                        QString resolvedPath = resolveTemplatePath(m_selectedBackgroundTemplate);
-                        if (!resolvedPath.isEmpty()) {
-                            cv::Mat templateBg = cv::imread(resolvedPath.toStdString());
-                            if (!templateBg.empty()) {
-                                cv::resize(templateBg, m_lastTemplateBackground, frame.size());
-                            qDebug() << "🎯 Template background cached for post-processing from:" << resolvedPath;
+                        // Check if this is bg6.png (white background special case)
+                        if (m_selectedBackgroundTemplate.contains("bg6.png")) {
+                            // Create white background instead of loading a file
+                            m_lastTemplateBackground = cv::Mat(frame.size(), frame.type(), cv::Scalar(255, 255, 255));
+                            qDebug() << "🎯 White template background cached for post-processing (bg6.png)";
+                        } else {
+                            QString resolvedPath = resolveTemplatePath(m_selectedBackgroundTemplate);
+                            if (!resolvedPath.isEmpty()) {
+                                cv::Mat templateBg = cv::imread(resolvedPath.toStdString());
+                                if (!templateBg.empty()) {
+                                    cv::resize(templateBg, m_lastTemplateBackground, frame.size());
+                                qDebug() << "🎯 Template background cached for post-processing from:" << resolvedPath;
+                                } else {
+                                    qWarning() << "🎯 Failed to load template background from resolved path:" << resolvedPath;
+                                    m_lastTemplateBackground = cv::Mat(); // Clear cache
+                                }
                             } else {
-                                qWarning() << "🎯 Failed to load template background from resolved path:" << resolvedPath;
+                                qWarning() << "🎯 Could not resolve template background path:" << m_selectedBackgroundTemplate;
                                 m_lastTemplateBackground = cv::Mat(); // Clear cache
                             }
-                        } else {
-                            qWarning() << "🎯 Could not resolve template background path:" << m_selectedBackgroundTemplate;
-                            m_lastTemplateBackground = cv::Mat(); // Clear cache
                         }
                     }
                     // m_lastTemplateBackground is now ready to use (either from cache or freshly loaded)
@@ -6363,6 +6377,10 @@ void Capture::setSelectedBackgroundTemplate(const QString &path)
     m_useBackgroundTemplate = !path.isEmpty();
     qDebug() << "🎯🎯🎯 Background template set to:" << path << "Use template:" << m_useBackgroundTemplate;
     
+    // Clear cached template background to force reload with new template
+    m_lastTemplateBackground = cv::Mat();
+    qDebug() << "🎯 Cleared cached template background to force reload";
+    
     // Automatically set the reference template for lighting correction
     if (m_useBackgroundTemplate && !path.isEmpty()) {
         qDebug() << "🌟 Setting reference template for lighting correction...";
@@ -7073,37 +7091,108 @@ cv::Mat Capture::applyPostProcessingLighting()
     cv::Mat cleanBackground;
     if (!m_lastTemplateBackground.empty()) {
         cleanBackground = m_lastTemplateBackground.clone();
+        qDebug() << "🎯 POST-PROCESSING: Using cached template background";
     } else if (m_useBackgroundTemplate && !m_selectedBackgroundTemplate.isEmpty()) {
-        QString resolvedPath = resolveTemplatePath(m_selectedBackgroundTemplate);
-        cv::Mat bg = cv::imread(resolvedPath.toStdString());
-        if (!bg.empty()) {
-            cv::resize(bg, cleanBackground, m_lastSegmentedFrame.size());
+        // Check if this is bg6.png (white background special case)
+        if (m_selectedBackgroundTemplate.contains("bg6.png")) {
+            // Create white background instead of loading a file
+            cleanBackground = cv::Mat(m_lastSegmentedFrame.size(), m_lastSegmentedFrame.type(), cv::Scalar(255, 255, 255));
+            qDebug() << "🎯 POST-PROCESSING: Created white background for bg6.png";
+        } else {
+            QString resolvedPath = resolveTemplatePath(m_selectedBackgroundTemplate);
+            cv::Mat bg = cv::imread(resolvedPath.toStdString());
+            if (!bg.empty()) {
+                cv::resize(bg, cleanBackground, m_lastSegmentedFrame.size());
+                qDebug() << "🎯 POST-PROCESSING: Loaded background template from" << resolvedPath;
+            } else {
+                qWarning() << "🎯 POST-PROCESSING: Failed to load background from" << resolvedPath;
+            }
         }
     }
     if (cleanBackground.empty()) {
         // Fallback to a blank frame matching the output size if no cached template available
         cleanBackground = cv::Mat::zeros(m_lastSegmentedFrame.size(), m_lastSegmentedFrame.type());
+        qDebug() << "🎯 POST-PROCESSING: Using black background (fallback)";
     }
     result = cleanBackground.clone();
     
     // Apply lighting to the raw person region (post-processing as in original)
     cv::Mat lightingCorrectedPerson = applyLightingToRawPersonRegion(m_lastRawPersonRegion, m_lastRawPersonMask);
     
-    // Scale the lighting-corrected person to match the segmented frame size for blending
+    // Scale the lighting-corrected person respecting the person scale factor (same as original segmentation)
     cv::Mat scaledPerson, scaledMask;
-    cv::resize(lightingCorrectedPerson, scaledPerson, result.size());
-    cv::resize(m_lastRawPersonMask, scaledMask, result.size());
+    cv::Size backgroundSize = result.size();
+    cv::Size scaledPersonSize;
+    
+    if (qAbs(m_personScaleFactor - 1.0) > 0.01) {
+        int scaledWidth = static_cast<int>(backgroundSize.width * m_personScaleFactor + 0.5);
+        int scaledHeight = static_cast<int>(backgroundSize.height * m_personScaleFactor + 0.5);
+        scaledWidth = qMax(1, scaledWidth);
+        scaledHeight = qMax(1, scaledHeight);
+        scaledPersonSize = cv::Size(scaledWidth, scaledHeight);
+        qDebug() << "🎯 POST-PROCESSING: Scaling person to" << scaledWidth << "x" << scaledHeight << "with factor" << m_personScaleFactor;
+    } else {
+        scaledPersonSize = backgroundSize;
+    }
+    
+    cv::resize(lightingCorrectedPerson, scaledPerson, scaledPersonSize, 0, 0, cv::INTER_LINEAR);
+    cv::resize(m_lastRawPersonMask, scaledMask, scaledPersonSize, 0, 0, cv::INTER_LINEAR);
+    
+    // Calculate centered offset for placing the scaled person
+    cv::Size actualScaledSize(scaledPerson.cols, scaledPerson.rows);
+    int xOffset = (backgroundSize.width - actualScaledSize.width) / 2;
+    int yOffset = (backgroundSize.height - actualScaledSize.height) / 2;
+    
+    // If person is scaled down, we need to place it on a full-size canvas at the centered position
+    cv::Mat fullSizePerson, fullSizeMask;
+    if (actualScaledSize != backgroundSize) {
+        // Create full-size images initialized to zeros
+        fullSizePerson = cv::Mat::zeros(backgroundSize, scaledPerson.type());
+        fullSizeMask = cv::Mat::zeros(backgroundSize, CV_8UC1);
+        
+        // Ensure offsets are valid
+        if (xOffset >= 0 && yOffset >= 0 &&
+            xOffset + actualScaledSize.width <= backgroundSize.width &&
+            yOffset + actualScaledSize.height <= backgroundSize.height) {
+            
+            // Place scaled person at centered position
+            cv::Rect roi(xOffset, yOffset, actualScaledSize.width, actualScaledSize.height);
+            scaledPerson.copyTo(fullSizePerson(roi));
+            
+            // Convert mask to grayscale if needed, then copy to ROI
+            if (scaledMask.type() != CV_8UC1) {
+                cv::Mat grayMask;
+                cv::cvtColor(scaledMask, grayMask, cv::COLOR_BGR2GRAY);
+                grayMask.copyTo(fullSizeMask(roi));
+            } else {
+                scaledMask.copyTo(fullSizeMask(roi));
+            }
+            
+            qDebug() << "🎯 POST-PROCESSING: Placed scaled person at offset" << xOffset << "," << yOffset;
+        } else {
+            qWarning() << "🎯 POST-PROCESSING: Invalid offset, using direct copy";
+            cv::resize(scaledPerson, fullSizePerson, backgroundSize);
+            cv::resize(scaledMask, fullSizeMask, backgroundSize);
+        }
+    } else {
+        // Person is full size, use as is
+        fullSizePerson = scaledPerson;
+        if (scaledMask.type() != CV_8UC1) {
+            cv::cvtColor(scaledMask, fullSizeMask, cv::COLOR_BGR2GRAY);
+        } else {
+            fullSizeMask = scaledMask;
+        }
+    }
+    
+    // Now use fullSizePerson and fullSizeMask for blending
+    scaledPerson = fullSizePerson;
+    scaledMask = fullSizeMask;
     
     // Soft-edge alpha blend only around the person (robust feather, background untouched)
     try {
         // Ensure binary mask 0/255
         cv::Mat binMask;
-        if (scaledMask.type() != CV_8UC1) {
-            cv::cvtColor(scaledMask, binMask, cv::COLOR_BGR2GRAY);
-        } else {
-            binMask = scaledMask.clone();
-        }
-        cv::threshold(binMask, binMask, 127, 255, cv::THRESH_BINARY);
+        cv::threshold(scaledMask, binMask, 127, 255, cv::THRESH_BINARY);
 
         // First: shrink mask slightly to avoid fringe, then hard-copy interior
         cv::Mat interiorMask;
