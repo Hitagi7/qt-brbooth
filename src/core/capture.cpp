@@ -7203,115 +7203,128 @@ cv::Mat Capture::applyPostProcessingLighting()
 }
 cv::Mat Capture::applyLightingToRawPersonRegion(const cv::Mat &personRegion, const cv::Mat &personMask)
 {
-    qDebug() << "🎯✨ RAW PERSON APPROACH: Apply lighting to extracted person region using LightingCorrector";
-    qDebug() << "🎯 Input person region size:" << personRegion.cols << "x" << personRegion.rows;
-    qDebug() << "🎯 Input person mask size:" << personMask.cols << "x" << personMask.rows;
+    qDebug() << "🎯 RAW PERSON APPROACH: Apply lighting to extracted person region only";
     
     // 🚀 CRASH PREVENTION: Validate inputs
     if (personRegion.empty() || personMask.empty()) {
-        qWarning() << "🎯❌ Invalid inputs - returning empty mat";
+        qWarning() << "🎯 Invalid inputs - returning empty mat";
         return cv::Mat();
     }
     
     if (personRegion.size() != personMask.size()) {
-        qWarning() << "🎯❌ Size mismatch between person region and mask - returning original";
+        qWarning() << "🎯 Size mismatch between person region and mask - returning original";
         return personRegion.clone();
     }
     
     if (personRegion.type() != CV_8UC3) {
-        qWarning() << "🎯❌ Invalid person region format - returning original";
+        qWarning() << "🎯 Invalid person region format - returning original";
         return personRegion.clone();
     }
     
     if (personMask.type() != CV_8UC1) {
-        qWarning() << "🎯❌ Invalid mask format - returning original";
+        qWarning() << "🎯 Invalid mask format - returning original";
         return personRegion.clone();
+    }
+    
+    // Start with exact copy of person region
+    cv::Mat result;
+    try {
+        result = personRegion.clone();
+    } catch (const std::exception& e) {
+        qWarning() << "🎯 Failed to clone person region:" << e.what();
+        return cv::Mat();
     }
     
     // 🚀 CRASH PREVENTION: Check lighting corrector availability
-    if (!m_lightingCorrector) {
-        qWarning() << "🎯❌ LIGHTING CORRECTOR IS NULL - returning original";
-        return personRegion.clone();
+    if (!m_lightingCorrector || !m_lightingCorrector->isEnabled()) {
+        qWarning() << "🎯 No lighting corrector available - returning original";
+        return result;
     }
-    
-    if (!m_lightingCorrector->isEnabled()) {
-        qWarning() << "🎯❌ LIGHTING CORRECTOR IS DISABLED - returning original";
-        return personRegion.clone();
-    }
-    
-    qDebug() << "🎯✅ Lighting corrector exists and is enabled";
     
     try {
         // Get template reference for color matching
         cv::Mat templateRef = m_lightingCorrector->getReferenceTemplate();
-        qDebug() << "🎯 Template reference size:" << templateRef.cols << "x" << templateRef.rows;
-        qDebug() << "🎯 Template reference empty:" << templateRef.empty();
-        
-        cv::Mat result;
-        
         if (templateRef.empty()) {
-            qWarning() << "🎯⚠️ No template reference - applying global lighting correction instead";
-            // Apply global lighting correction if no template available
-            result = m_lightingCorrector->applyGlobalLightingCorrection(personRegion);
-            if (!result.empty()) {
-                qDebug() << "🎯✅ Applied global lighting correction to person region";
-                qDebug() << "🎯 Result size:" << result.cols << "x" << result.rows;
-                return result;
-            } else {
-                qWarning() << "🎯❌ Global lighting correction failed - returning original";
-                return personRegion.clone();
+            qWarning() << "🎯 No template reference, applying subtle lighting correction";
+            // Apply subtle lighting correction to make person blend better
+            for (int y = 0; y < result.rows; y++) {
+                for (int x = 0; x < result.cols; x++) {
+                    if (y < personMask.rows && x < personMask.cols && 
+                        personMask.at<uchar>(y, x) > 0) {  // Person pixel
+                        cv::Vec3b& pixel = result.at<cv::Vec3b>(y, x);
+                        // SUBTLE CHANGES FOR NATURAL BLENDING:
+                        pixel[0] = cv::saturate_cast<uchar>(pixel[0] * 1.1);  // Slightly brighter blue
+                        pixel[1] = cv::saturate_cast<uchar>(pixel[1] * 1.05); // Slightly brighter green
+                        pixel[2] = cv::saturate_cast<uchar>(pixel[2] * 1.08); // Slightly brighter red
+                    }
+                }
             }
         } else {
-            // 🚀 USE ACTUAL LIGHTING CORRECTOR: Apply the full lighting correction pipeline
-            qDebug() << "🎯✨ Applying LightingCorrector::applyPersonLightingCorrection with template reference";
-            qDebug() << "🎯 Template size:" << templateRef.cols << "x" << templateRef.rows;
+            // Apply template-based color matching
+            cv::resize(templateRef, templateRef, personRegion.size());
             
-            result = m_lightingCorrector->applyPersonLightingCorrection(personRegion, personMask, templateRef);
+            // Convert to LAB for color matching
+            cv::Mat personLab, templateLab;
+            cv::cvtColor(personRegion, personLab, cv::COLOR_BGR2Lab);
+            cv::cvtColor(templateRef, templateLab, cv::COLOR_BGR2Lab);
             
-            if (!result.empty()) {
-                qDebug() << "🎯✅✅✅ Successfully applied person lighting correction (CLAHE + color balance + gamma)";
-                qDebug() << "🎯 Result size:" << result.cols << "x" << result.rows;
+            // Calculate template statistics
+            cv::Scalar templateMean, templateStd;
+            cv::meanStdDev(templateLab, templateMean, templateStd);
+            
+            // Apply color matching to person region
+            cv::Mat resultLab = personLab.clone();
+            std::vector<cv::Mat> channels;
+            cv::split(resultLab, channels);
+            
+            // Apply template color matching for natural blending
+            // Calculate person statistics for comparison
+            cv::Scalar personMean, personStd;
+            cv::meanStdDev(personLab, personMean, personStd);
+            
+            // Adjust person lighting to match template characteristics
+            for (int c = 0; c < 3; c++) {
+                // Calculate the difference between template and person
+                double lightingDiff = templateMean[c] - personMean[c];
+                
+                // Apply subtle adjustment (only 15% of the difference for natural blending)
+                channels[c] = channels[c] + lightingDiff * 0.15;
+            }
+            
+            // Additional brightness adjustment for better blending
+            // If template is brighter, slightly brighten the person
+            double brightnessDiff = templateMean[0] - personMean[0]; // L channel
+            if (brightnessDiff > 0) {
+                channels[0] = channels[0] + brightnessDiff * 0.1; // Slight brightness boost
+            }
+            
+            cv::merge(channels, resultLab);
+            cv::cvtColor(resultLab, result, cv::COLOR_Lab2BGR);
+            
+            // Apply mask to ensure only person pixels are affected
+            cv::Mat maskedResult;
+            result.copyTo(maskedResult, personMask);
+            personRegion.copyTo(maskedResult, ~personMask);
+            result = maskedResult;
+        }
         
         // Save debug images (safely)
         try {
             cv::imwrite("debug_raw_person_original.png", personRegion);
             cv::imwrite("debug_raw_person_mask.png", personMask);
             cv::imwrite("debug_raw_person_result.png", result);
+            qDebug() << "🎯 RAW PERSON APPROACH: Applied lighting to person region only";
             qDebug() << "🎯 Debug images saved: raw_person_original, raw_person_mask, raw_person_result";
         } catch (const std::exception& e) {
             qWarning() << "🎯 Failed to save debug images:" << e.what();
         }
         
-                return result;
-            } else {
-                qWarning() << "🎯❌ Person lighting correction returned empty - trying global correction as fallback";
-                // Try global correction as fallback
-                result = m_lightingCorrector->applyGlobalLightingCorrection(personRegion);
-                if (!result.empty()) {
-                    qDebug() << "🎯✅ Applied global lighting correction as fallback";
-                    return result;
-                }
-                qWarning() << "🎯❌ All lighting correction failed - returning original";
-        return personRegion.clone();
-            }
-        }
-        
     } catch (const std::exception& e) {
-        qWarning() << "🎯❌ Exception in lighting correction:" << e.what() << "- trying global correction";
-        try {
-            cv::Mat result = m_lightingCorrector->applyGlobalLightingCorrection(personRegion);
-            if (!result.empty()) {
-                qDebug() << "🎯✅ Applied global lighting correction after exception";
-    return result;
-            }
-        } catch (...) {
-            qWarning() << "🎯❌ Global correction also failed - returning original";
-        }
+        qWarning() << "🎯 Exception in lighting correction:" << e.what() << "- returning original";
         return personRegion.clone();
     }
     
-    // Should never reach here, but return original as fallback
-    return personRegion.clone();
+    return result;
 }
 
 cv::Mat Capture::createPersonMaskFromSegmentedFrame(const cv::Mat &segmentedFrame)
