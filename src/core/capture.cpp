@@ -7619,24 +7619,9 @@ cv::Mat Capture::applyDynamicFrameEdgeBlending(const cv::Mat &composedFrame,
         }
         result = cleanBackground.clone();
         
-        // Apply lighting correction to the raw person region PLUS full lighting pipeline
+        // Apply lighting correction to the raw person region (same as static mode - single lighting pass)
         cv::Mat lightingCorrectedPerson = applyLightingToRawPersonRegion(rawPersonRegion, rawPersonMask);
-        
-        // 🚀 ENHANCED: Apply additional global lighting correction for comprehensive processing
-        if (m_lightingCorrector && m_lightingCorrector->isEnabled()) {
-            try {
-                // Apply the same global lighting correction as used in static mode
-                cv::Mat enhancedPerson = m_lightingCorrector->applyGlobalLightingCorrection(lightingCorrectedPerson);
-                if (!enhancedPerson.empty()) {
-                    lightingCorrectedPerson = enhancedPerson;
-                    qDebug() << "🎯 DYNAMIC ENHANCED: Applied full lighting pipeline (raw + global correction)";
-                } else {
-                    qDebug() << "🎯 DYNAMIC: Global lighting correction returned empty, using raw person correction only";
-                }
-            } catch (const std::exception& e) {
-                qWarning() << "🎯 DYNAMIC: Global lighting correction failed:" << e.what() << "- using raw person correction only";
-            }
-        }
+        qDebug() << "🎯 DYNAMIC: Applied raw person lighting correction (matching static mode)";
         
         // 🎯 SCALING PRESERVATION: Scale the lighting-corrected person using the recorded scaling factor
         cv::Mat scaledPerson, scaledMask;
@@ -7665,47 +7650,64 @@ cv::Mat Capture::applyDynamicFrameEdgeBlending(const cv::Mat &composedFrame,
         cv::resize(lightingCorrectedPerson, scaledPerson, scaledPersonSize);
         cv::resize(rawPersonMask, scaledMask, scaledPersonSize);
         
-        // Apply guided filter edge blending (same algorithm as static mode)
-        cv::Mat binMask;
-        if (scaledMask.type() != CV_8UC1) {
-            cv::cvtColor(scaledMask, binMask, cv::COLOR_BGR2GRAY);
-        } else {
-            binMask = scaledMask.clone();
-        }
-        cv::threshold(binMask, binMask, 127, 255, cv::THRESH_BINARY);
+        // Calculate centered offset for placing the scaled person (same as static mode)
+        cv::Size actualScaledSize(scaledPerson.cols, scaledPerson.rows);
+        int xOffset = (backgroundSize.width - actualScaledSize.width) / 2;
+        int yOffset = (backgroundSize.height - actualScaledSize.height) / 2;
         
-        // 🎯 SCOPE FIX: Declare interiorMask at broader scope for later use
-        cv::Mat interiorMask;
-
-        // 🎯 SCALING PRESERVATION: Center the scaled person on the background
-        int xOffset = (backgroundSize.width - scaledPersonSize.width) / 2;
-        int yOffset = (backgroundSize.height - scaledPersonSize.height) / 2;
-        
-        // Ensure ROI is within background bounds
-        if (xOffset >= 0 && yOffset >= 0 &&
-            xOffset + scaledPersonSize.width <= backgroundSize.width &&
-            yOffset + scaledPersonSize.height <= backgroundSize.height) {
+        // If person is scaled down, place it on a full-size canvas at the centered position (same as static mode)
+        cv::Mat fullSizePerson, fullSizeMask;
+        if (actualScaledSize != backgroundSize) {
+            // Create full-size images initialized to zeros
+            fullSizePerson = cv::Mat::zeros(backgroundSize, scaledPerson.type());
+            fullSizeMask = cv::Mat::zeros(backgroundSize, CV_8UC1);
             
-            try {
-                // Create ROI for compositing using actual scaled size
-                cv::Rect backgroundRect(cv::Point(xOffset, yOffset), scaledPersonSize);
-                cv::Mat backgroundROI = result(backgroundRect);
+            // Ensure offsets are valid
+            if (xOffset >= 0 && yOffset >= 0 &&
+                xOffset + actualScaledSize.width <= backgroundSize.width &&
+                yOffset + actualScaledSize.height <= backgroundSize.height) {
                 
-                // First: shrink mask slightly to avoid fringe, then hard-copy interior
-                cv::erode(binMask, interiorMask, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(2*2+1, 2*2+1))); // ~2px shrink
-                scaledPerson.copyTo(backgroundROI, interiorMask);
+                // Place scaled person at centered position
+                cv::Rect roi(xOffset, yOffset, actualScaledSize.width, actualScaledSize.height);
+                scaledPerson.copyTo(fullSizePerson(roi));
                 
-                qDebug() << "🎯 SCALING PRESERVATION: Successfully composited scaled person at offset" << xOffset << "," << yOffset;
-            } catch (const cv::Exception& e) {
-                qWarning() << "🎯 SCALING PRESERVATION: Compositing failed:" << e.what() << "- using fallback";
-                // Fallback: composite at origin if scaling makes person too large
-                scaledPerson.copyTo(result, interiorMask);
+                // Convert mask to grayscale if needed, then copy to ROI
+                if (scaledMask.type() != CV_8UC1) {
+                    cv::Mat grayMask;
+                    cv::cvtColor(scaledMask, grayMask, cv::COLOR_BGR2GRAY);
+                    grayMask.copyTo(fullSizeMask(roi));
+                } else {
+                    scaledMask.copyTo(fullSizeMask(roi));
+                }
+                
+                qDebug() << "🎯 DYNAMIC: Placed scaled person at offset" << xOffset << "," << yOffset;
+            } else {
+                qWarning() << "🎯 DYNAMIC: Invalid offset, using direct copy";
+                cv::resize(scaledPerson, fullSizePerson, backgroundSize);
+                cv::resize(scaledMask, fullSizeMask, backgroundSize);
             }
         } else {
-            // Fallback: composite at origin if scaling makes person too large
-            scaledPerson.copyTo(result, interiorMask);
-            qDebug() << "🎯 SCALING PRESERVATION: Using fallback compositing due to bounds check";
+            // Person is full size, use as is
+            fullSizePerson = scaledPerson;
+            if (scaledMask.type() != CV_8UC1) {
+                cv::cvtColor(scaledMask, fullSizeMask, cv::COLOR_BGR2GRAY);
+            } else {
+                fullSizeMask = scaledMask;
+            }
         }
+        
+        // Now use fullSizePerson and fullSizeMask for blending (same as static mode)
+        scaledPerson = fullSizePerson;
+        scaledMask = fullSizeMask;
+        
+        // Apply guided filter edge blending (same algorithm as static mode)
+        cv::Mat binMask;
+        cv::threshold(scaledMask, binMask, 127, 255, cv::THRESH_BINARY);
+        
+        // First: shrink mask slightly to avoid fringe, then hard-copy interior
+        cv::Mat interiorMask;
+        cv::erode(binMask, interiorMask, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(2*2+1, 2*2+1))); // ~2px shrink
+        scaledPerson.copyTo(result, interiorMask);
 
         // 🚀 CUDA-Accelerated Guided image filtering to refine a soft alpha only on a thin edge ring
         const int gfRadius = 8; // window size (reduced for better performance)
