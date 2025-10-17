@@ -406,12 +406,7 @@ BRBooth::BRBooth(QWidget *parent)
             qDebug() << "🔙 User clicked back - returning to capture from confirm page";
             confirmPage->clearPreview();
             
-            // Reset capture page (including slider) when returning from confirm
-            if (capturePage) {
-                capturePage->resetCapturePage();
-                qDebug() << "🔙 Capture page reset (slider returned to default)";
-            }
-            
+            // Note: resetCapturePage() is now handled centrally in showCapturePage()
             showCapturePage();
         });
         
@@ -438,12 +433,7 @@ BRBooth::BRBooth(QWidget *parent)
             // so we can go back to the correct page (background or dynamic)
             qDebug() << "🎯 Going back from final output to capture page";
             
-            // Reset capture page (including slider) when returning from final output
-            if (capturePage) {
-                capturePage->resetCapturePage();
-                qDebug() << "🎯 Capture page reset (slider returned to default)";
-            }
-            
+            // Note: resetCapturePage() is now handled centrally in showCapturePage()
             showCapturePage();
         });
         connect(finalOutputPage, &Final::backToLandingPage, this, &BRBooth::showLandingPage);
@@ -707,6 +697,13 @@ void BRBooth::showCapturePage()
         
         // Dynamic video background will be restored by showEvent() if a path was stored
         qDebug() << "🎯 Dynamic template mode: Video background will be restored by showEvent()";
+    }
+
+    // 🔄 CRITICAL FIX: Always reset capture page slider when navigating to capture page
+    // This ensures the slider is reset to default (0 = 100% scale) regardless of navigation path
+    if (capturePage) {
+        capturePage->resetCapturePage();
+        qDebug() << "🔄 Capture page reset (slider returned to default) - navigation path handled";
     }
 
     ui->stackedWidget->setCurrentIndex(capturePageIndex);
