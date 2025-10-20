@@ -195,7 +195,6 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     , overlayImageLabel(nullptr)
     , m_personScaleFactor(1.0) // Initialize to 1.0 (normal size) - matches slider at 0
     // Unified Person Detection and Segmentation
-    , m_displayMode(NormalMode)  // Start with normal mode to prevent freezing
     , m_personDetectionFPS(0)
     , m_lastPersonDetectionTime(0.0)
     , m_currentFrame()
@@ -223,7 +222,6 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     , m_handDetectionFuture()
     , m_handDetectionWatcher(nullptr)
     , m_captureReady(false)
-    , m_lastSegmentationMode(NormalMode)
     , m_segmentationEnabledInCapture(false)
     , m_selectedBackgroundTemplate()
     , m_useBackgroundTemplate(false)
@@ -255,15 +253,7 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     , debugLabel(nullptr)
     , m_recordingThreadActive(false)
     , m_recordingStream()
-    , fpsLabel(nullptr)
-    , gpuStatusLabel(nullptr)
-    , cudaStatusLabel(nullptr)
-    , personDetectionLabel(nullptr)
-    , personDetectionButton(nullptr)
-    , personSegmentationLabel(nullptr)
-    , personSegmentationButton(nullptr)
     , handDetectionLabel(nullptr)
-    , handDetectionButton(nullptr)
     , debugUpdateTimer(nullptr)
     , m_currentFPS(0)
     , m_recordingGpuBuffer()
@@ -332,9 +322,6 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     // Setup Debug Display
     setupDebugDisplay();
 
-    // Update button states
-    updatePersonDetectionButton();
-    // updateHandDetectionButton();
 
     // Ensure video label fills the entire window
     if (ui->videoLabel) {
@@ -471,9 +458,16 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     // Initialize Enhanced Person Detection and Segmentation
     initializePersonDetection();
 
-    // Initialize Hand Detection (enabled by default)
+    // Initialize Hand Detection (disabled by default)
+    qDebug() << "🔍 Constructor: Setting m_handDetectionEnabled = false";
+    m_handDetectionEnabled = false;
+    qDebug() << "🔍 Constructor: Before initializeHandDetection(), m_handDetectionEnabled = " << m_handDetectionEnabled;
     initializeHandDetection();
-    m_handDetectionEnabled = true;
+    qDebug() << "🔍 Constructor: After initializeHandDetection(), m_handDetectionEnabled = " << m_handDetectionEnabled;
+    // Ensure it stays disabled after initialization
+    m_handDetectionEnabled = false;
+    qDebug() << "🔍 Constructor: Final setting, m_handDetectionEnabled = " << m_handDetectionEnabled;
+    qDebug() << "🔍 Constructor: Hand detection is DISABLED by default as requested";
     m_captureReady = true;  // Start with capture ready
     // Initialize MediaPipe-like tracker
     // TODO: Initialize hand tracker when available
@@ -577,10 +571,7 @@ Capture::~Capture()
     // Clean up debug widgets
     if (debugWidget){ delete debugWidget; debugWidget = nullptr; }
     if (debugLabel){ delete debugLabel; debugLabel = nullptr; }
-    if (fpsLabel){ delete fpsLabel; fpsLabel = nullptr; }
-
     if (handDetectionLabel){ delete handDetectionLabel; handDetectionLabel = nullptr; }
-    if (handDetectionButton){ delete handDetectionButton; handDetectionButton = nullptr; }
 
     // Clean up hand detector
     if (m_handDetector){ delete m_handDetector; m_handDetector = nullptr; }
@@ -681,7 +672,7 @@ void Capture::updateCameraFeed(const QImage &image)
     QImage displayImage = image;
 
     // Check if we have processed segmentation results to display
-    if ((m_displayMode == RectangleMode || m_displayMode == SegmentationMode) && !m_lastSegmentedFrame.empty()) {
+    if (m_segmentationEnabledInCapture && !m_lastSegmentedFrame.empty()) {
         // Convert the processed OpenCV frame back to QImage for display
         displayImage = cvMatToQImage(m_lastSegmentedFrame);
         qDebug() << "🎯 Displaying processed segmentation frame";
@@ -703,7 +694,7 @@ void Capture::updateCameraFeed(const QImage &image)
         // Apply person-only scaling for background template/dynamic video mode, frame scaling for other modes
         if (qAbs(m_personScaleFactor - 1.0) > 0.01) {
             // Check if we're in segmentation mode with background template or dynamic video background
-            if (m_displayMode == SegmentationMode && ((m_useBackgroundTemplate &&
+            if (m_segmentationEnabledInCapture && ((m_useBackgroundTemplate &&
                 !m_selectedBackgroundTemplate.isEmpty()) || m_useDynamicVideoBackground)) {
                 // For background template mode or dynamic video mode, don't scale the entire frame
                 // Person scaling is handled in createSegmentedFrame
@@ -736,11 +727,11 @@ void Capture::updateCameraFeed(const QImage &image)
 
     // BACKGROUND PROCESSING: Move heavy work to separate threads (non-blocking)
     // For dynamic video backgrounds, throttle processing to reduce load while keeping video smooth
-    int processInterval = (m_useDynamicVideoBackground && m_displayMode == SegmentationMode) ? 6 : 3;
+    int processInterval = (m_useDynamicVideoBackground && m_segmentationEnabledInCapture) ? 6 : 3;
     if (frameCount > 5 && frameCount % processInterval == 0) {
         // Process person detection in background (non-blocking) - only if segmentation is enabled
-        if ((m_displayMode == RectangleMode || m_displayMode == SegmentationMode) && m_segmentationEnabledInCapture) {
-            qDebug() << "🎯 Starting person detection processing - frame:" << frameCount << "mode:" << m_displayMode << "interval:" << processInterval;
+        if (m_segmentationEnabledInCapture) {
+            qDebug() << "🎯 Starting person detection processing - frame:" << frameCount << "segmentation enabled:" << m_segmentationEnabledInCapture << "interval:" << processInterval;
             QMutexLocker locker(&m_personDetectionMutex);
             m_currentFrame = qImageToCvMat(image);
 
@@ -935,14 +926,14 @@ void Capture::printPerformanceStats() {
     qDebug() << "Avg loop time per frame (measured over " << frameCount << " frames):" << avgLoopTime << "ms";
     qDebug() << "Camera/Display FPS (measured over " << frameCount << " frames):" << measuredFPS << "FPS";
     qDebug() << "Frame processing efficiency:" << (avgLoopTime < 16.67 ? "GOOD" : "NEEDS OPTIMIZATION");
-    qDebug() << "Person Detection Enabled:" << ((m_displayMode == RectangleMode || m_displayMode == SegmentationMode) ? "YES (ENABLED)" : "NO (DISABLED)");
-    qDebug() << "Unified Detection Enabled:" << ((m_displayMode == RectangleMode || m_displayMode == SegmentationMode) ? "YES (ENABLED)" : "NO (DISABLED)");
+    qDebug() << "Person Detection Enabled:" << (m_segmentationEnabledInCapture ? "YES (ENABLED)" : "NO (DISABLED)");
+    qDebug() << "Unified Detection Enabled:" << (m_segmentationEnabledInCapture ? "YES (ENABLED)" : "NO (DISABLED)");
     qDebug() << "GPU Acceleration:" << (m_useGPU ? "YES (OpenCL)" : "NO (CPU)");
     qDebug() << "GPU Utilized:" << (m_gpuUtilized ? "ACTIVE" : "IDLE");
     qDebug() << "CUDA Acceleration:" << (m_useCUDA ? "YES (CUDA)" : "NO (CPU)");
     qDebug() << "CUDA Utilized:" << (m_cudaUtilized ? "ACTIVE" : "IDLE");
-    qDebug() << "Person Detection FPS:" << ((m_displayMode == RectangleMode || m_displayMode == SegmentationMode) ? QString::number(m_personDetectionFPS, 'f', 1) : "N/A (DISABLED)");
-    qDebug() << "Unified Detection FPS:" << ((m_displayMode == RectangleMode || m_displayMode == SegmentationMode) ? QString::number(m_personDetectionFPS, 'f', 1) : "N/A (DISABLED)");
+    qDebug() << "Person Detection FPS:" << (m_segmentationEnabledInCapture ? QString::number(m_personDetectionFPS, 'f', 1) : "N/A (DISABLED)");
+    qDebug() << "Unified Detection FPS:" << (m_segmentationEnabledInCapture ? QString::number(m_personDetectionFPS, 'f', 1) : "N/A (DISABLED)");
     qDebug() << "Hand Detection FPS: N/A (DISABLED)";
     qDebug() << "Person Scale Factor:" << QString::number(m_personScaleFactor * 100, 'f', 0) << "%";
     qDebug() << "----------------------------------------";
@@ -984,7 +975,7 @@ void Capture::captureRecordingFrame()
         cv::Mat frameToRecord;
 
         // 🛡️ CRITICAL FIX: Use mutex when reading segmented frame from background thread
-        if (m_displayMode == SegmentationMode || m_displayMode == RectangleMode) {
+        if (m_segmentationEnabledInCapture) {
             QMutexLocker locker(&m_personDetectionMutex);
             if (!m_lastSegmentedFrame.empty()) {
                 frameToRecord = m_lastSegmentedFrame.clone();
@@ -1042,7 +1033,7 @@ void Capture::captureRecordingFrame()
     }
 
     // 🚀 CRASH PREVENTION: Safe raw person data recording for post-processing
-    if ((m_displayMode == SegmentationMode || m_displayMode == RectangleMode)) {
+    if (m_segmentationEnabledInCapture) {
         try {
             // 🛡️ CRITICAL FIX: Use mutex to protect shared person data from race conditions
             // These variables are written by background segmentation thread and read by recording thread
@@ -1133,14 +1124,9 @@ void Capture::on_capture_clicked()
         return;
     }
 
-    // Re-enable hand detection when recapture button is pressed
-    if (!m_handDetectionEnabled) {
-        m_handDetectionEnabled = true;
+    // Keep hand detection state as set by user
         if (m_handDetector) {
             m_handDetector->resetGestureState();
-        }
-        qDebug() << "✊ FIST DETECTION RE-ENABLED by recapture button press - Make a FIST to trigger!";
-        return; // Don't start countdown, just enable hand detection
     }
 
     // If hand detection is already enabled, then start the countdown
@@ -1184,9 +1170,10 @@ void Capture::updateCountdown()
         if (m_currentCaptureMode == ImageCaptureMode) {
             performImageCapture();
 
-            // Reset capture button for next capture (hand detection stays disabled until button press)
+            // Reset capture button for next capture and re-enable hand detection
             ui->capture->setEnabled(true);
-            qDebug() << "🎯 Capture completed - hand detection disabled until recapture button is pressed";
+            enableHandDetection(true);
+            qDebug() << "🎯 Capture completed - hand detection re-enabled for next capture";
         } else if (m_currentCaptureMode == VideoRecordMode) {
             startRecording();
         }
@@ -1296,6 +1283,8 @@ cv::Mat Capture::qImageToCvMat(const QImage &image)
 }
 void Capture::setupDebugDisplay()
 {
+    qDebug() << "🔍 setupDebugDisplay called - m_handDetectionEnabled:" << m_handDetectionEnabled;
+    
     // Create debug widget
     debugWidget = new QWidget(this);
     debugWidget->setStyleSheet("QWidget { background-color: rgba(0, 0, 0, 0.8); color: white; border-radius: 5px; }");
@@ -1307,42 +1296,7 @@ void Capture::setupDebugDisplay()
     debugLabel->setStyleSheet("QLabel { color: white; font-size: 12px; font-weight: bold; }");
     debugLayout->addWidget(debugLabel);
 
-    // FPS label
-    fpsLabel = new QLabel("FPS: 0", debugWidget);
-    fpsLabel->setStyleSheet("QLabel { color: #00ff00; font-size: 12px; }");
-    debugLayout->addWidget(fpsLabel);
 
-    // GPU Status label
-    gpuStatusLabel = new QLabel("GPU: Checking...", debugWidget);
-    gpuStatusLabel->setStyleSheet("QLabel { color: #00aaff; font-size: 12px; }");
-    debugLayout->addWidget(gpuStatusLabel);
-
-    // CUDA Status label
-    cudaStatusLabel = new QLabel("CUDA: Checking...", debugWidget);
-    cudaStatusLabel->setStyleSheet("QLabel { color: #ff00ff; font-size: 12px; }");
-    debugLayout->addWidget(cudaStatusLabel);
-
-    // Unified Detection label
-    personDetectionLabel = new QLabel("Unified Detection: OFF", debugWidget);
-    personDetectionLabel->setStyleSheet("QLabel { color: #ffaa00; font-size: 12px; }");
-    debugLayout->addWidget(personDetectionLabel);
-
-    // Unified Detection button
-    personDetectionButton = new QPushButton("Enable Unified Detection", debugWidget);
-    personDetectionButton->setStyleSheet("QPushButton { color: white; font-size: 12px; background-color: #388e3c; border: 1px solid white; padding: 5px; border-radius: 3px; }");
-    connect(personDetectionButton, &QPushButton::clicked, this, &Capture::togglePersonDetection);
-    debugLayout->addWidget(personDetectionButton);
-
-    // Unified Detection Status label
-    personSegmentationLabel = new QLabel("Detection & Segmentation: OFF", debugWidget);
-    personSegmentationLabel->setStyleSheet("QLabel { color: #ff8800; font-size: 12px; }");
-    debugLayout->addWidget(personSegmentationLabel);
-
-    // Unified Detection Status button
-    personSegmentationButton = new QPushButton("Toggle Unified Detection", debugWidget);
-    personSegmentationButton->setStyleSheet("QPushButton { color: white; font-size: 12px; background-color: #1976d2; border: 1px solid white; padding: 5px; border-radius: 3px; }");
-    connect(personSegmentationButton, &QPushButton::clicked, this, &Capture::togglePersonDetection);
-    debugLayout->addWidget(personSegmentationButton);
 
     // 🚀 PERFORMANCE OPTIMIZATION: Remove lighting mode toggle button (post-processing only)
     // QPushButton *lightingModeButton = new QPushButton("Toggle Lighting Mode", debugWidget);
@@ -1350,36 +1304,35 @@ void Capture::setupDebugDisplay()
     // connect(lightingModeButton, &QPushButton::clicked, this, &Capture::toggleLightingMode);
     // debugLayout->addWidget(lightingModeButton);
 
-    // Performance mode toggle button (simplified - only controls debug logging)
-    QPushButton *performanceButton = new QPushButton("Toggle Debug Mode", debugWidget);
-    performanceButton->setStyleSheet("QPushButton { color: white; font-size: 12px; background-color: #9c27b0; border: 1px solid white; padding: 5px; border-radius: 3px; }");
-    connect(performanceButton, &QPushButton::clicked, this, [this]() {
-        static bool debugMode = true;
-        debugMode = !debugMode;
-        qDebug() << "🚀 Debug mode:" << (debugMode ? "ENABLED (verbose logging)" : "DISABLED (quiet mode)");
-    });
-    debugLayout->addWidget(performanceButton);
 
-    // Performance tips label
-    QLabel *tipsLabel = new QLabel("Press 'S' to toggle detection\nPress 'G' to toggle segmentation/rectangles\nPress 'D' to hide/show\nPress 'P' for stats\nPress 'L' for lighting toggle\n\nLIGHTING: POST-PROCESSING ONLY", debugWidget);
-    tipsLabel->setStyleSheet("QLabel { color: #cccccc; font-size: 10px; font-style: italic; }");
-    debugLayout->addWidget(tipsLabel);
 
     // Add debug widget to the main widget instead of videoLabel's layout
     debugWidget->setParent(this);
     debugWidget->move(10, 10); // Position in top-left corner
-    debugWidget->resize(280, 400); // Larger size for new buttons
+    debugWidget->resize(350, 80); // Compact size without keybind instructions
     debugWidget->raise(); // Ensure it's on top
     debugWidget->setVisible(true); // Make sure it's visible
 
     debugWidget->show(); // Show debug widget so user can enable segmentation and hand detection
 
+    // Force debug display update to show correct initial state
+    updateDebugDisplay();
+    
+    // Force another update after a short delay to ensure correct display
+    QTimer::singleShot(100, [this]() {
+        qDebug() << "🔍 Force refresh - m_handDetectionEnabled:" << m_handDetectionEnabled;
+        updateDebugDisplay();
+    });
+
     qDebug() << "Debug display setup complete - FPS, GPU, and CUDA status should be visible";
+    qDebug() << "Final hand detection state:" << m_handDetectionEnabled;
 }
 
 void Capture::enableHandDetectionForCapture()
 {
-    enableHandDetection(true);
+    // Don't force hand detection to be enabled - respect user preference
+    // enableHandDetection(true);  // Removed - let user control hand detection
+    qDebug() << "🔍 enableHandDetectionForCapture called - hand detection state:" << m_handDetectionEnabled;
     enableSegmentationInCapture();
 }
 
@@ -1422,12 +1375,11 @@ void Capture::resetCapturePage()
     ui->capture->setEnabled(true);
     qDebug() << "🔘 Capture button reset to enabled";
 
-    // Reset hand detection completely
-    m_handDetectionEnabled = true;
+    // Reset hand detection state (keep user preference)
     m_captureReady = true;
     if (m_handDetector) {
         m_handDetector->resetGestureState();
-        qDebug() << "🖐️ Hand detection completely reset";
+        qDebug() << "🖐️ Hand detection state reset";
     }
 
     // Reset segmentation state for capture interface
@@ -1529,14 +1481,6 @@ void Capture::keyPressEvent(QKeyEvent *event)
                 }
             }
             break;
-        case Qt::Key_L:
-            // Toggle lighting correction (for post-processing only)
-            setLightingCorrectionEnabled(!isLightingCorrectionEnabled());
-            qDebug() << "🌟 Lighting correction toggled:" << (isLightingCorrectionEnabled() ? "ON (post-processing only)" : "OFF");
-            qDebug() << "🌟 Current display mode:" << m_displayMode;
-            qDebug() << "🌟 Background template enabled:" << m_useBackgroundTemplate;
-            qDebug() << "🌟 Template path:" << m_selectedBackgroundTemplate;
-            break;
         // 🚀 REMOVED: F and T keys since we only use post-processing lighting
         /*
         case Qt::Key_F:
@@ -1547,203 +1491,54 @@ void Capture::keyPressEvent(QKeyEvent *event)
             break;
         */
         case Qt::Key_S:
-            // Only allow segmentation toggle if enabled in capture interface
+            // Toggle segmentation on/off
             if (m_segmentationEnabledInCapture) {
-                // Three-way toggle: Normal -> Rectangles -> Segmentation -> Normal
-                switch (m_displayMode) {
-                    case NormalMode:
-                        setSegmentationMode(1); // RectangleMode
-                        qDebug() << "Switched to RECTANGLE MODE (Original frame + Green rectangles)";
-                        break;
-                    case RectangleMode:
-                        setSegmentationMode(2); // SegmentationMode
-                        qDebug() << "Switched to SEGMENTATION MODE (Black background + Edge-based silhouettes)";
-                        break;
-                    case SegmentationMode:
-                        setSegmentationMode(0); // NormalMode
-                        qDebug() << "Switched to NORMAL MODE (Original camera view)";
-                        break;
-                }
-            } else {
-                qDebug() << "🎯 Segmentation toggle ignored - not enabled in capture interface";
-                // Show status overlay to inform user
-                if (statusOverlay) {
-                    statusOverlay->setText("SEGMENTATION: DISABLED (Only available in capture interface)");
-                    statusOverlay->resize(statusOverlay->sizeHint());
-                    int x = (width() - statusOverlay->width()) / 2;
-                    int y = (height() - statusOverlay->height()) / 2;
-                    statusOverlay->move(x, y);
-                    statusOverlay->show();
-                    statusOverlay->raise();
-                    QTimer::singleShot(2000, [this]() {
-                        if (statusOverlay) {
-                            statusOverlay->hide();
-                        }
-                    });
-                }
-            }
-
-            // Force immediate update
-            qDebug() << "🎯 Current display mode:" << m_displayMode << "(0=Normal, 1=Rectangle, 2=Segmentation)";
-
-            // Reset utilization when switching to normal mode
-            if (m_displayMode == NormalMode) {
+                m_segmentationEnabledInCapture = false;
+                qDebug() << "🎯 Segmentation DISABLED";
+                
+                // Clear any cached segmentation data
+                m_lastSegmentedFrame = cv::Mat();
+                m_lastDetections.clear();
+                
+                // Reset GPU utilization flags
                 m_gpuUtilized = false;
                 m_cudaUtilized = false;
-            }
-
-            // Show prominent status overlay
-            if (statusOverlay) {
-                QString statusText;
-                switch (m_displayMode) {
-                    case NormalMode:
-                        statusText = "NORMAL CAMERA VIEW: ENABLED";
-                        break;
-                    case RectangleMode:
-                        statusText = "ORIGINAL FRAME + GREEN RECTANGLES: ENABLED";
-                        break;
-                    case SegmentationMode:
-                        statusText = "BLACK BACKGROUND + EDGE-BASED SILHOUETTES: ENABLED";
-                        break;
-                }
-
-                // Add segmentation state to status
-                if (m_segmentationEnabledInCapture) {
-                    statusText += " (Capture Interface)";
                 } else {
-                    statusText += " (Disabled - Capture Only)";
+                m_segmentationEnabledInCapture = true;
+                qDebug() << "🎯 Segmentation ENABLED";
                 }
 
-                statusOverlay->setText(statusText);
-
-                // Center the overlay
-                statusOverlay->resize(statusOverlay->sizeHint());
-                int x = (width() - statusOverlay->width()) / 2;
-                int y = (height() - statusOverlay->height()) / 2;
-                statusOverlay->move(x, y);
-
-                statusOverlay->show();
-                statusOverlay->raise();
-
-                // Auto-hide after 2 seconds
-                QTimer::singleShot(2000, [this]() {
-                    if (statusOverlay) {
-                        statusOverlay->hide();
-                    }
-                });
-            }
-            break;
-
-
-            // Update button states
-            updatePersonDetectionButton();
-
-
-            // Force update debug display immediately
-            updateDebugDisplay();
-
-            // Show debug widget prominently when toggling
-            if (debugWidget) {
-                debugWidget->show();
-                debugWidget->raise();
-                debugWidget->setStyleSheet("QWidget { background-color: rgba(0, 0, 0, 0.95); color: white; border-radius: 10px; border: 3px solid #00ff00; padding: 5px; }");
-
-                // Show comprehensive status message
-                if (debugLabel) {
-                    QString status;
-                    switch (m_displayMode) {
-                        case NormalMode:
-                            status = "NORMAL VIEW: ENABLED";
-                            break;
-                        case RectangleMode:
-                            status = "ORIGINAL + GREEN RECTANGLES: ENABLED";
-                            break;
-                        case SegmentationMode:
-                            status = "BLACK BG + EDGE SILHOUETTES: ENABLED";
-                            break;
-                    }
-                    debugLabel->setText(status);
-                    debugLabel->setStyleSheet("QLabel { color: #00ff00; font-size: 16px; font-weight: bold; }");
-                }
-
-                // Make FPS label more prominent
-                if (fpsLabel) {
-                    fpsLabel->setStyleSheet("QLabel { color: #00ff00; font-size: 14px; font-weight: bold; }");
-                }
-
-                // Make GPU status more prominent
-                if (gpuStatusLabel) {
-                    gpuStatusLabel->setStyleSheet("QLabel { color: #00aaff; font-size: 14px; font-weight: bold; }");
-                }
-
-                // Make CUDA status more prominent
-                if (cudaStatusLabel) {
-                    cudaStatusLabel->setStyleSheet("QLabel { color: #ff00ff; font-size: 14px; font-weight: bold; }");
-                }
-
-                // Make person detection label more prominent
-                if (personDetectionLabel) {
-                    personDetectionLabel->setStyleSheet("QLabel { color: #ffaa00; font-size: 14px; font-weight: bold; }");
-                }
-
-                // Make person segmentation label more prominent
-                if (personSegmentationLabel) {
-                    personSegmentationLabel->setStyleSheet("QLabel { color: #ff8800; font-size: 14px; font-weight: bold; }");
-                }
-
-                // Auto-hide the enhanced styling after 5 seconds (longer for better visibility)
-                QTimer::singleShot(5000, [this]() {
-                    if (debugWidget) {
-                        debugWidget->setStyleSheet("QWidget { background-color: rgba(0, 0, 0, 0.8); color: white; border-radius: 5px; }");
-                        if (debugLabel) {
-                            debugLabel->setStyleSheet("QLabel { color: white; font-size: 12px; font-weight: bold; }");
-                        }
-                        if (fpsLabel) {
-                            fpsLabel->setStyleSheet("QLabel { color: #00ff00; font-size: 12px; }");
-                        }
-                        if (gpuStatusLabel) {
-                            gpuStatusLabel->setStyleSheet("QLabel { color: #00aaff; font-size: 12px; }");
-                        }
-                        if (cudaStatusLabel) {
-                            cudaStatusLabel->setStyleSheet("QLabel { color: #ff00ff; font-size: 12px; }");
-                        }
-                        if (personDetectionLabel) {
-                            personDetectionLabel->setStyleSheet("QLabel { color: #ffaa00; font-size: 12px; }");
-                        }
-                        if (personSegmentationLabel) {
-                            personSegmentationLabel->setStyleSheet("QLabel { color: #ff8800; font-size: 12px; }");
-                        }
-                    }
-                });
-            }
-
-            // Show prominent status overlay
+            // Show status overlay
             if (statusOverlay) {
-                QString statusText = ((m_displayMode == RectangleMode || m_displayMode == SegmentationMode) ?
-                    "PERSON DETECTION: ENABLED" :
-                    "PERSON DETECTION: DISABLED");
+                QString statusText = m_segmentationEnabledInCapture ? 
+                    "SEGMENTATION: ENABLED" : "SEGMENTATION: DISABLED";
                 statusOverlay->setText(statusText);
-
-                // Center the overlay
                 statusOverlay->resize(statusOverlay->sizeHint());
                 int x = (width() - statusOverlay->width()) / 2;
                 int y = (height() - statusOverlay->height()) / 2;
                 statusOverlay->move(x, y);
-
                 statusOverlay->show();
                 statusOverlay->raise();
-
-                // Auto-hide after 2 seconds
                 QTimer::singleShot(2000, [this]() {
                     if (statusOverlay) {
                         statusOverlay->hide();
                     }
                 });
             }
-            break;
+
+            // Update debug display
+            updateDebugDisplay();
+                            break;
         case Qt::Key_H:
-            // Temporarily disabled hand detection toggle
-            qDebug() << "Hand detection toggle disabled";
+            // Toggle hand detection
+            if (m_handDetectionEnabled) {
+                enableHandDetection(false);
+                qDebug() << "✊ Hand Detection DISABLED via 'H' key";
+            } else {
+                enableHandDetection(true);
+                qDebug() << "✊ Hand Detection ENABLED via 'H' key";
+            }
+            updateDebugDisplay();
             break;
         case Qt::Key_F12:
             // Temporarily disabled debug frame save
@@ -1760,15 +1555,14 @@ void Capture::showEvent(QShowEvent *event)
     qDebug() << "Capture widget shown - camera should already be running continuously";
 
     // Camera is now managed continuously by brbooth.cpp, no need to start it here
-    // Just enable hand detection and segmentation after a short delay
+    // Just enable segmentation after a short delay (hand detection is user-controlled)
     QTimer::singleShot(100, [this]() {
-        m_handDetectionEnabled = true;
         if (m_handDetector) {
             m_handDetector->resetGestureState();
         }
         enableSegmentationInCapture();
-        qDebug() << "✊ FIST DETECTION ENABLED - Make a FIST gesture to trigger capture automatically!";
         qDebug() << "🎯 Segmentation ENABLED for capture interface";
+        qDebug() << "✊ Hand detection is DISABLED by default - use debug menu to enable";
 
         // Restore dynamic video background if a path was previously set
         if (!m_dynamicVideoPath.isEmpty() && !m_useDynamicVideoBackground) {
@@ -1783,9 +1577,8 @@ void Capture::hideEvent(QHideEvent *event)
     QWidget::hideEvent(event);
     qDebug() << "Capture widget hidden - OPTIMIZED camera and hand detection shutdown";
 
-    // Disable hand detection when page is hidden (but keep camera running for faster return)
-    enableHandDetection(false);
-    qDebug() << "✊ FIST DETECTION DISABLED";
+    // Keep hand detection state as set by user (don't auto-disable)
+    qDebug() << "✊ Hand detection state preserved during page transition";
 
     // Disable segmentation when leaving capture page
     disableSegmentationOutsideCapture();
@@ -1804,7 +1597,7 @@ void Capture::drawHandBoundingBoxes(cv::Mat &/*frame*/, const QList<HandDetectio
             // Check if capture should be triggered - automatically start countdown when hand closed
             if (m_handDetector->shouldTriggerCapture()) {
                 qDebug() << "🎯 HAND CLOSED DETECTED! Automatically triggering capture...";
-                qDebug() << "🎯 Current display mode:" << m_displayMode << "(0=Normal, 1=Rectangle, 2=Segmentation)";
+                qDebug() << "🎯 Segmentation enabled:" << m_segmentationEnabledInCapture;
 
                 // Emit signal to trigger capture in main thread (thread-safe)
                 emit handTriggeredCapture();
@@ -1835,109 +1628,46 @@ void Capture::updateDebugDisplay()
     // Debug output to verify the method is being called
     static int updateCount = 0;
     updateCount++;
+    
+    // Always log hand detection state for debugging
+    qDebug() << "🔍 updateDebugDisplay #" << updateCount << "- m_handDetectionEnabled:" << m_handDetectionEnabled;
+    
     if (updateCount % 10 == 0) { // Log every 5 seconds (10 updates * 500ms)
         qDebug() << "Debug display update #" << updateCount << "FPS:" << m_currentFPS << "GPU:" << m_useGPU << "CUDA:" << m_useCUDA;
     }
 
     if (debugLabel) {
         QString peopleDetected = QString::number(m_lastDetections.size());
-        QString modeText;
-        QString segmentationStatus = m_segmentationEnabledInCapture ? "ENABLED" : "DISABLED";
-
-        QString backgroundStatus = m_useBackgroundTemplate ? "TEMPLATE" : "BLACK";
-
-        switch (m_displayMode) {
-            case NormalMode:
-                modeText = "NORMAL VIEW";
-                break;
-            case RectangleMode:
-                modeText = "ORIGINAL + RECTANGLES";
-                break;
-            case SegmentationMode:
-                modeText = QString("SEGMENTATION (%1 BG)").arg(backgroundStatus);
-                break;
+        QString segmentationStatus = m_segmentationEnabledInCapture ? "ON" : "OFF";
+        QString handStatus = m_handDetectionEnabled ? "ON" : "OFF";
+        QString aiFPS = m_segmentationEnabledInCapture ? QString::number(m_personDetectionFPS, 'f', 1) : "0.0";
+        
+        // Debug: Log the exact values being used
+        static int debugCount = 0;
+        if (debugCount < 5) {
+            qDebug() << "🔍 DEBUG DISPLAY VALUES:";
+            qDebug() << "  - m_handDetectionEnabled:" << m_handDetectionEnabled;
+            qDebug() << "  - handStatus string:" << handStatus;
+            qDebug() << "  - segmentationStatus:" << segmentationStatus;
+            debugCount++;
         }
-        QString lightingStatus = isLightingCorrectionEnabled() ? 
-            (isGPULightingAvailable() ? "GPU" : "CPU") : "OFF";
-        QString debugInfo = QString("FPS: %1 | %2 | People: %3 | Segmentation: %4 | BG: %5 | Lighting: %6")
-                           .arg(m_currentFPS)
-                           .arg(modeText)
+        
+        QString debugInfo = QString("FPS: %1 | People: %2 | Seg: %3 | Hand: %4 | Person FPS: %5")
+                           .arg(QString::number(m_currentFPS, 'f', 1))
                            .arg(peopleDetected)
                            .arg(segmentationStatus)
-                           .arg(backgroundStatus)
-                           .arg(lightingStatus);
+                           .arg(handStatus)
+                           .arg(aiFPS);
         debugLabel->setText(debugInfo);
-    }
-
-    if (fpsLabel) {
-        fpsLabel->setText(QString("FPS: %1").arg(m_currentFPS));
-    }
-
-    if (gpuStatusLabel) {
-        QString gpuStatus;
-        if (m_gpuUtilized) {
-            gpuStatus = "ACTIVE (OpenCL)";
-        } else if (m_useGPU) {
-            gpuStatus = "AVAILABLE (OpenCL)";
-        } else {
-            gpuStatus = "OFF (CPU)";
-        }
-        gpuStatusLabel->setText(QString("GPU: %1").arg(gpuStatus));
-
-        // Change color based on utilization
-        if (m_gpuUtilized) {
-            gpuStatusLabel->setStyleSheet("QLabel { color: #00ff00; font-size: 12px; font-weight: bold; }");
-        } else if (m_useGPU) {
-            gpuStatusLabel->setStyleSheet("QLabel { color: #00aaff; font-size: 12px; }");
-        } else {
-            gpuStatusLabel->setStyleSheet("QLabel { color: #ff6666; font-size: 12px; }");
+        
+        // Debug output to verify hand detection state
+        static int debugCount2 = 0;
+        if (debugCount2 < 10) { // Log first 10 times to see startup behavior
+            qDebug() << "🔍 Debug display - m_handDetectionEnabled:" << m_handDetectionEnabled << "Display:" << handStatus;
+            debugCount2++;
         }
     }
 
-    if (handDetectionLabel) {
-        QString handStatus = m_showHandDetection ? "ON (Tracking)" : "OFF";
-        QString handTime = QString::number(m_lastHandDetectionTime * 1000, 'f', 1);
-        QString detectorType = m_handDetector ? m_handDetector->getDetectorType() : "Unknown";
-        QString avgTime = m_handDetector ? QString::number(m_handDetector->getAverageProcessingTime(), 'f', 1) : "0.0";
-        handDetectionLabel->setText(QString("Hand Detection: %1 (%2ms) [%3] Avg: %4ms").arg(handStatus).arg(handTime).arg(detectorType).arg(avgTime));
-    }
-
-    if (cudaStatusLabel) {
-        QString cudaStatus;
-        if (m_cudaUtilized) {
-            cudaStatus = "ACTIVE (CUDA GPU)";
-        } else if (m_useCUDA) {
-            cudaStatus = "AVAILABLE (CUDA)";
-        } else {
-            cudaStatus = "OFF (CPU)";
-        }
-        cudaStatusLabel->setText(QString("CUDA: %1").arg(cudaStatus));
-
-        // Change color based on utilization
-        if (m_cudaUtilized) {
-            cudaStatusLabel->setStyleSheet("QLabel { color: #00ff00; font-size: 12px; font-weight: bold; }");
-        } else if (m_useCUDA) {
-            cudaStatusLabel->setStyleSheet("QLabel { color: #ff00ff; font-size: 12px; }");
-        } else {
-            cudaStatusLabel->setStyleSheet("QLabel { color: #ff6666; font-size: 12px; }");
-        }
-    }
-
-    if (personDetectionLabel) {
-        QString personStatus = ((m_displayMode == RectangleMode || m_displayMode == SegmentationMode) ? "ON" : "OFF");
-        QString personTime = QString::number(m_lastPersonDetectionTime * 1000, 'f', 1);
-        QString personFPS = QString::number(m_personDetectionFPS, 'f', 1);
-        QString peopleCount = QString::number(m_lastDetections.size());
-        personDetectionLabel->setText(QString("Unified Detection: %1 (%2ms, %3 FPS, %4 people)").arg(personStatus).arg(personTime).arg(personFPS).arg(peopleCount));
-    }
-
-    if (personSegmentationLabel) {
-        QString segStatus = ((m_displayMode == RectangleMode || m_displayMode == SegmentationMode) ? "ON" : "OFF");
-        QString segTime = QString::number(m_lastPersonDetectionTime * 1000, 'f', 1);
-        QString segFPS = QString::number(m_personDetectionFPS, 'f', 1);
-        QString peopleCount = QString::number(m_lastDetections.size());
-        personSegmentationLabel->setText(QString("Detection & Segmentation: %1 (%2ms, %3 FPS, %4 people)").arg(segStatus).arg(segTime).arg(segFPS).arg(peopleCount));
-    }
 
 }
 void Capture::startRecording()
@@ -1949,7 +1679,7 @@ void Capture::startRecording()
     }
 
     // 🛡️ CRASH FIX: Ensure background subtractor is initialized before recording in segmentation mode
-    if ((m_displayMode == SegmentationMode || m_displayMode == RectangleMode) && !m_bgSubtractor) {
+    if (m_segmentationEnabledInCapture && !m_bgSubtractor) {
         qWarning() << "🎯 ⚠️ Background subtractor not initialized, initializing now...";
         m_bgSubtractor = cv::createBackgroundSubtractorMOG2(500, 16, false);
         if (!m_bgSubtractor) {
@@ -1961,7 +1691,7 @@ void Capture::startRecording()
     }
 
     // 🛡️ CRASH FIX: Validate dynamic video is ready if in dynamic mode
-    if (m_useDynamicVideoBackground && m_displayMode == SegmentationMode) {
+    if (m_useDynamicVideoBackground && m_segmentationEnabledInCapture) {
         if (!m_videoPlaybackActive) {
             qWarning() << "🎞️ ⚠️ Dynamic video playback not active, attempting to restart...";
             if (m_videoPlaybackTimer && m_videoFrameInterval > 0) {
@@ -2117,7 +1847,7 @@ void Capture::performImageCapture()
         QSize labelSize = ui->videoLabel->size();
 
         // Check if we have a processed segmented frame to capture
-        if ((m_displayMode == SegmentationMode || m_displayMode == RectangleMode) && !m_lastSegmentedFrame.empty()) {
+        if (m_segmentationEnabledInCapture && !m_lastSegmentedFrame.empty()) {
             // Store original segmented frame for comparison
             cv::Mat originalSegmentedFrame = m_lastSegmentedFrame.clone();
             
@@ -2178,7 +1908,7 @@ void Capture::performImageCapture()
         // Apply person-only scaling for background template/dynamic video mode, frame scaling for other modes
         if (qAbs(m_personScaleFactor - 1.0) > 0.01) {
             // Check if we're in segmentation mode with background template or dynamic video background
-            if (m_displayMode == SegmentationMode && ((m_useBackgroundTemplate &&
+            if (m_segmentationEnabledInCapture && ((m_useBackgroundTemplate &&
                 !m_selectedBackgroundTemplate.isEmpty()) || m_useDynamicVideoBackground)) {
                 // For background template mode or dynamic video mode, don't scale the entire frame
                 // Person scaling is already applied in createSegmentedFrame
@@ -2217,7 +1947,7 @@ void Capture::performImageCapture()
             
             // Apply person scaling if needed
             if (qAbs(m_personScaleFactor - 1.0) > 0.01) {
-                if (m_displayMode == SegmentationMode && ((m_useBackgroundTemplate &&
+                if (m_segmentationEnabledInCapture && ((m_useBackgroundTemplate &&
                     !m_selectedBackgroundTemplate.isEmpty()) || m_useDynamicVideoBackground)) {
                     qDebug() << "🎯 Person-only scaling preserved in original output";
                 } else {
@@ -2325,78 +2055,6 @@ void Capture::performImageCapture()
     }
 }
 
-QImage Capture::cvMatToQImage(const cv::Mat &mat)
-{
-    // 🚀 CRASH PREVENTION: Validate input
-    if (mat.empty()) {
-        qWarning() << "🎯 cvMatToQImage: Empty mat input";
-        return QImage();
-    }
-    
-    if (mat.data == nullptr) {
-        qWarning() << "🎯 cvMatToQImage: Null data pointer";
-        return QImage();
-    }
-    
-    if (mat.cols <= 0 || mat.rows <= 0) {
-        qWarning() << "🎯 cvMatToQImage: Invalid dimensions" << mat.cols << "x" << mat.rows;
-        return QImage();
-    }
-
-    try {
-        // Optimize for BGR format (most common from camera)
-        if (mat.type() == CV_8UC3) {
-            // Use faster conversion for BGR - create a copy to ensure memory safety
-            QImage qImage(mat.data, mat.cols, mat.rows, mat.step, QImage::Format_RGB888);
-            QImage safeCopy = qImage.rgbSwapped().copy(); // Convert BGR to RGB and copy
-            if (safeCopy.isNull()) {
-                qWarning() << "🎯 cvMatToQImage: Failed to create RGB copy";
-                return QImage();
-            }
-            return safeCopy;
-        }
-
-        // Fallback for other formats
-        switch (mat.type()) {
-            case CV_8UC1: {
-                QImage qImage(mat.data, mat.cols, mat.rows, mat.step, QImage::Format_Grayscale8);
-                QImage safeCopy = qImage.copy(); // Need to copy for grayscale
-                if (safeCopy.isNull()) {
-                    qWarning() << "🎯 cvMatToQImage: Failed to create grayscale copy";
-                    return QImage();
-                }
-                return safeCopy;
-            }
-            case CV_8UC4: {
-                QImage qImage(mat.data, mat.cols, mat.rows, mat.step, QImage::Format_RGBA8888);
-                QImage safeCopy = qImage.copy(); // Need to copy for RGBA
-                if (safeCopy.isNull()) {
-                    qWarning() << "🎯 cvMatToQImage: Failed to create RGBA copy";
-                    return QImage();
-                }
-                return safeCopy;
-            }
-            default: {
-                cv::Mat converted;
-                cv::cvtColor(mat, converted, cv::COLOR_BGR2RGB);
-                if (converted.empty()) {
-                    qWarning() << "🎯 cvMatToQImage: Color conversion failed";
-                    return QImage();
-                }
-                QImage qImage(converted.data, converted.cols, converted.rows, converted.step, QImage::Format_RGB888);
-                QImage safeCopy = qImage.copy();
-                if (safeCopy.isNull()) {
-                    qWarning() << "🎯 cvMatToQImage: Failed to create converted copy";
-                    return QImage();
-                }
-                return safeCopy;
-            }
-        }
-    } catch (const std::exception& e) {
-        qWarning() << "🎯 cvMatToQImage: Exception during conversion:" << e.what();
-        return QImage();
-    }
-}
 
 void Capture::setCaptureMode(CaptureMode mode)
 {
@@ -2414,10 +2072,9 @@ void Capture::setVideoTemplate(const VideoTemplate &templateData)
     // Reset frame counter to ensure smooth initial processing
     frameCount = 0;
 
-    // Ensure we start in normal mode to prevent freezing
-    if (m_displayMode != NormalMode) {
-        m_displayMode = NormalMode;
-        qDebug() << "Switched to normal mode to prevent freezing during template transition";
+    // Ensure segmentation is properly initialized
+    if (m_segmentationEnabledInCapture) {
+        qDebug() << "Segmentation enabled for template transition";
     }
 }
 
@@ -2872,7 +2529,7 @@ cv::Mat Capture::processFrameWithGPUOnlyPipeline(const cv::Mat &frame)
         m_gpuVideoFrame.upload(frame);
 
         // 🎨 GREEN SCREEN MODE: Use GPU-accelerated green screen masking
-        if (m_greenScreenEnabled && m_displayMode == SegmentationMode) {
+        if (m_greenScreenEnabled && m_segmentationEnabledInCapture) {
             qDebug() << "🎨 Processing green screen with GPU acceleration";
             
             // 🛡️ VALIDATION: Ensure GPU frame is valid
@@ -3454,7 +3111,7 @@ cv::Mat Capture::processFrameWithUnifiedDetection(const cv::Mat &frame)
     // Lighting is ONLY applied in post-processing after recording, just like static mode
 
     // If green-screen is enabled, bypass HOG and derive mask directly
-    if (m_greenScreenEnabled && m_displayMode == SegmentationMode) {
+    if (m_greenScreenEnabled && m_segmentationEnabledInCapture) {
         cv::Mat personMask = createGreenScreenPersonMask(frame);
         std::vector<cv::Rect> detections = deriveDetectionsFromMask(personMask);
         m_lastDetections = detections;
@@ -3502,7 +3159,7 @@ cv::Mat Capture::processFrameWithUnifiedDetection(const cv::Mat &frame)
 
             // For dynamic video backgrounds, always create a segmented frame even without people detection
             // This ensures the video background is always visible
-            if (m_displayMode == SegmentationMode && m_useDynamicVideoBackground) {
+            if (m_segmentationEnabledInCapture && m_useDynamicVideoBackground) {
                 qDebug() << "🎯 Dynamic video mode: Creating segmented frame without people detection to show video background";
                 // Don't add fake detection, just let createSegmentedFrame handle the background
             }
@@ -3526,7 +3183,7 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
     // Process only first 3 detections for better performance (matching peopledetect_v1.cpp)
     int maxDetections = std::min(3, (int)detections.size());
 
-    if (m_displayMode == SegmentationMode) {
+    if (m_segmentationEnabledInCapture) {
         qDebug() << "🎯 SEGMENTATION MODE (CPU): Creating background + edge-based silhouettes";
         qDebug() << "🎯 - m_useDynamicVideoBackground:" << m_useDynamicVideoBackground;
         qDebug() << "🎯 - m_videoPlaybackActive:" << m_videoPlaybackActive;
@@ -3980,7 +3637,7 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
         
         qDebug() << "🎯 Segmentation complete, returning segmented frame - size:" << segmentedFrame.cols << "x" << segmentedFrame.rows << "empty:" << segmentedFrame.empty();
         return segmentedFrame;
-    } else if (m_displayMode == RectangleMode) {
+    } else {
         // Show original frame with detection rectangles
         cv::Mat displayFrame = frame.clone();
 
@@ -3998,9 +3655,6 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
         }
 
         return displayFrame;
-    } else {
-        // Normal mode - return original frame
-        return frame.clone();
     }
 }
 // Phase 2A: GPU-Only Segmentation Frame Creation
@@ -4009,7 +3663,7 @@ cv::Mat Capture::createSegmentedFrameGPUOnly(const cv::Mat &frame, const std::ve
     // Process only first 3 detections for better performance
     int maxDetections = std::min(3, (int)detections.size());
 
-    if (m_displayMode == SegmentationMode) {
+    if (m_segmentationEnabledInCapture) {
         qDebug() << "🎮 SEGMENTATION MODE (GPU): GPU-only segmentation frame creation";
         qDebug() << "🎮 - m_useDynamicVideoBackground:" << m_useDynamicVideoBackground;
         qDebug() << "🎮 - m_videoPlaybackActive:" << m_videoPlaybackActive;
@@ -4149,17 +3803,13 @@ cv::Mat Capture::createSegmentedFrameGPUOnly(const cv::Mat &frame, const std::ve
         qDebug() << "🎮 GPU segmentation complete, returning segmented frame - size:" << segmentedFrame.cols << "x" << segmentedFrame.rows << "empty:" << segmentedFrame.empty();
         return segmentedFrame;
 
-    } else if (m_displayMode == RectangleMode) {
+    } else {
         // Rectangle mode - draw rectangles on original frame
         cv::Mat result = frame.clone();
         for (int i = 0; i < maxDetections; i++) {
             cv::rectangle(result, detections[i], cv::Scalar(0, 255, 0), 2);
         }
         return result;
-
-    } else {
-        // Normal mode - return original frame
-        return frame.clone();
     }
 }
 cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect &detection)
@@ -4800,18 +4450,13 @@ void Capture::onPersonDetectionFinished()
 // Enhanced Person Detection and Segmentation Control Methods
 void Capture::setShowPersonDetection(bool show)
 {
-    if (show) {
-        m_displayMode = SegmentationMode;  // Default to segmentation when enabling
-    } else {
-        m_displayMode = NormalMode;
-    }
-    updatePersonDetectionButton();
-    qDebug() << "Person detection display set to:" << show << "(mode:" << m_displayMode << ")";
+    m_segmentationEnabledInCapture = show;
+    qDebug() << "Person detection display set to:" << show << "(segmentation enabled:" << m_segmentationEnabledInCapture << ")";
 }
 
 bool Capture::getShowPersonDetection() const
 {
-    return (m_displayMode == RectangleMode || m_displayMode == SegmentationMode);
+    return m_segmentationEnabledInCapture;
 }
 
 void Capture::setPersonDetectionConfidenceThreshold(double threshold)
@@ -4827,59 +4472,27 @@ double Capture::getPersonDetectionConfidenceThreshold() const
 
 void Capture::togglePersonDetection()
 {
-    // Only allow toggling if segmentation is enabled in capture interface
+    // Toggle segmentation on/off
     if (m_segmentationEnabledInCapture) {
-        // Cycle through modes: Normal -> Rectangle -> Segmentation -> Normal
-        switch (m_displayMode) {
-            case NormalMode:
-                setSegmentationMode(1); // RectangleMode
-                break;
-            case RectangleMode:
-                setSegmentationMode(2); // SegmentationMode
-                break;
-            case SegmentationMode:
-                setSegmentationMode(0); // NormalMode
-                break;
-        }
-
-        qDebug() << "Person detection toggled to mode:" << m_displayMode;
-    } else {
-        qDebug() << "🎯 Person detection toggle ignored - segmentation not enabled in capture interface";
-    }
-}
-
-void Capture::updatePersonDetectionButton()
-{
-    if (personDetectionButton) {
-        QString buttonText;
-        QString buttonStyle;
-
-        if (m_segmentationEnabledInCapture) {
-            // Show current mode when segmentation is enabled
-            switch (m_displayMode) {
-                case NormalMode:
-                    buttonText = "Enable Detection (Press S)";
-                    buttonStyle = "QPushButton { color: white; font-size: 12px; background-color: #388e3c; border: 1px solid white; padding: 5px; }";
-                    break;
-                case RectangleMode:
-                    buttonText = "Switch to Segmentation (Press S)";
-                    buttonStyle = "QPushButton { color: white; font-size: 12px; background-color: #1976d2; border: 1px solid white; padding: 5px; }";
-                    break;
-                case SegmentationMode:
-                    buttonText = "Switch to Normal (Press S)";
-                    buttonStyle = "QPushButton { color: white; font-size: 12px; background-color: #d32f2f; border: 1px solid white; padding: 5px; }";
-                    break;
-            }
+        m_segmentationEnabledInCapture = false;
+        qDebug() << "🎯 Segmentation DISABLED via button";
+        
+        // Clear any cached segmentation data
+        m_lastSegmentedFrame = cv::Mat();
+        m_lastDetections.clear();
+        
+        // Reset GPU utilization flags
+        m_gpuUtilized = false;
+        m_cudaUtilized = false;
         } else {
-            // Show disabled state when segmentation is not enabled
-            buttonText = "Segmentation: DISABLED (Capture Only)";
-            buttonStyle = "QPushButton { color: #cccccc; font-size: 12px; background-color: #666666; border: 1px solid #999999; padding: 5px; }";
+        m_segmentationEnabledInCapture = true;
+        qDebug() << "🎯 Segmentation ENABLED via button";
         }
 
-        personDetectionButton->setText(buttonText);
-        personDetectionButton->setStyleSheet(buttonStyle);
-    }
+    updateDebugDisplay();
 }
+
+
 
 double Capture::getPersonDetectionProcessingTime() const
 {
@@ -5369,7 +4982,7 @@ cv::Mat Capture::refineGreenScreenMaskWithContours(const cv::Mat &mask, int minA
         std::vector<std::pair<int, double>> contourAreas;
         for (size_t i = 0; i < contours.size(); i++) {
             double area = cv::contourArea(contours[i]);
-            contourAreas.push_back({i, area});
+            contourAreas.push_back({static_cast<int>(i), area});
         }
         std::sort(contourAreas.begin(), contourAreas.end(), 
                   [](const std::pair<int, double>& a, const std::pair<int, double>& b) {
@@ -5947,7 +5560,7 @@ void Capture::processFrameWithHandDetection(const cv::Mat &frame)
             // Check if capture should be triggered - automatically start countdown when hand closed
             if (m_handDetector->shouldTriggerCapture()) {
                 qDebug() << "🎯 HAND CLOSED DETECTED! Automatically triggering capture...";
-                qDebug() << "🎯 Current display mode:" << m_displayMode << "(0=Normal, 1=Rectangle, 2=Segmentation)";
+                qDebug() << "🎯 Segmentation enabled:" << m_segmentationEnabledInCapture;
 
                 // Emit signal to trigger capture in main thread (thread-safe)
                 emit handTriggeredCapture();
@@ -5997,10 +5610,14 @@ void Capture::initializeHandDetection()
         bool success = m_handDetector->initialize();
         if (success) {
             qDebug() << "✅ Hand detection initialized successfully";
-            m_handDetectionEnabled = true;
+            qDebug() << "🔍 initializeHandDetection: Before setting false, m_handDetectionEnabled = " << m_handDetectionEnabled;
+            m_handDetectionEnabled = false; // Disabled by default
+            qDebug() << "🔍 initializeHandDetection: After setting false, m_handDetectionEnabled = " << m_handDetectionEnabled;
         } else {
             qDebug() << "❌ Failed to initialize hand detection";
+            qDebug() << "🔍 initializeHandDetection: Before setting false (failed), m_handDetectionEnabled = " << m_handDetectionEnabled;
             m_handDetectionEnabled = false;
+            qDebug() << "🔍 initializeHandDetection: After setting false (failed), m_handDetectionEnabled = " << m_handDetectionEnabled;
         }
     }
 }
@@ -6011,9 +5628,10 @@ void Capture::startHandTriggeredCountdown()
     if (!countdownTimer || !countdownTimer->isActive()) {
         qDebug() << "🎯 Starting countdown from hand detection signal...";
         
-        // CRITICAL: Disable hand detection to prevent loop!
+        // CRITICAL: Temporarily disable hand detection to prevent loop during countdown
+        // (will be re-enabled after countdown completes)
         enableHandDetection(false);
-        qDebug() << "🚫 Hand detection DISABLED during countdown";
+        qDebug() << "🚫 Hand detection temporarily DISABLED during countdown";
         
         // Start 5-second countdown for hand-triggered capture (same as button press)
         ui->capture->setEnabled(false);
@@ -6104,6 +5722,7 @@ void Capture::enableHandDetection(bool enable)
 {
     m_handDetectionEnabled = enable;
     qDebug() << "✊ FIST DETECTION" << (enable ? "ENABLED" : "DISABLED") << "- Only detecting FIST gestures!";
+    qDebug() << "🔍 enableHandDetection called with enable=" << enable << "from:" << Q_FUNC_INFO;
 
     if (enable) {
         // Enable hand detection
@@ -6273,30 +5892,22 @@ void Capture::enableSegmentationInCapture()
         }
     }
 
-    // Always default to normal mode - user can press 'S' to toggle to segmentation mode
-    m_displayMode = NormalMode;
-    qDebug() << "🎯 Using default normal mode for capture interface";
+    // Enable segmentation by default
+    m_segmentationEnabledInCapture = true;
+    qDebug() << "🎯 Segmentation enabled by default for capture interface";
 
     // Clear any previous segmentation results to force new processing
     m_lastSegmentedFrame = cv::Mat();
     m_lastDetections.clear();
 
     // Update UI to reflect the current state
-    updatePersonDetectionButton();
     updateDebugDisplay();
 }
 void Capture::disableSegmentationOutsideCapture()
 {
     qDebug() << "🎯 Disabling segmentation outside capture interface";
 
-    // Store the current segmentation mode before disabling
-    if (m_displayMode != NormalMode) {
-        m_lastSegmentationMode = m_displayMode;
-        qDebug() << "🎯 Stored segmentation mode:" << m_lastSegmentationMode << "for later restoration";
-    }
-
-    // Disable segmentation by switching to normal mode
-    m_displayMode = NormalMode;
+    // Disable segmentation
     m_segmentationEnabledInCapture = false;
 
     // Clear any cached segmentation data
@@ -6308,66 +5919,24 @@ void Capture::disableSegmentationOutsideCapture()
     m_cudaUtilized = false;
 
     // Update UI
-    updatePersonDetectionButton();
     updateDebugDisplay();
 
-    qDebug() << "🎯 Segmentation disabled - switched to normal mode";
+    qDebug() << "🎯 Segmentation disabled";
 }
 
 void Capture::restoreSegmentationState()
 {
     qDebug() << "🎯 Restoring segmentation state for capture interface";
 
-    if (m_segmentationEnabledInCapture) {
-        // If segmentation was enabled in capture, restore the last mode
-        if (m_lastSegmentationMode != NormalMode) {
-            m_displayMode = m_lastSegmentationMode;
-            qDebug() << "🎯 Restored segmentation mode:" << m_lastSegmentationMode;
-        } else {
-            m_displayMode = NormalMode;
-            qDebug() << "🎯 Using normal mode (no previous segmentation state)";
-        }
-    } else {
-        // If segmentation was not enabled, stay in normal mode
-        m_displayMode = NormalMode;
-        qDebug() << "🎯 Segmentation not enabled in capture - staying in normal mode";
-    }
+    // Enable segmentation by default when returning to capture interface
+    m_segmentationEnabledInCapture = true;
+    qDebug() << "🎯 Segmentation enabled by default";
 
-    updatePersonDetectionButton();
     updateDebugDisplay();
 }
 bool Capture::isSegmentationEnabledInCapture() const
 {
     return m_segmentationEnabledInCapture;
-}
-void Capture::setSegmentationMode(int mode)
-{
-    qDebug() << "🎯 Setting segmentation mode to:" << mode;
-
-    // Only allow mode changes if segmentation is enabled in capture
-    if (m_segmentationEnabledInCapture) {
-        // Convert int to DisplayMode enum
-        DisplayMode displayMode = static_cast<DisplayMode>(mode);
-        m_displayMode = displayMode;
-
-        // Store the mode for later restoration (if it's not normal mode)
-        if (displayMode != NormalMode) {
-            m_lastSegmentationMode = displayMode;
-        }
-
-        // Reset utilization when switching to normal mode
-        if (displayMode == NormalMode) {
-            m_gpuUtilized = false;
-            m_cudaUtilized = false;
-        }
-
-        this->updatePersonDetectionButton();
-        this->updateDebugDisplay();
-
-        qDebug() << "🎯 Segmentation mode set to:" << displayMode;
-    } else {
-        qDebug() << "🎯 Cannot set segmentation mode - segmentation not enabled in capture interface";
-    }
 }
 
 // Background Template Control Methods
@@ -6834,7 +6403,7 @@ QPixmap Capture::processFrameForRecordingGPU(const cv::Mat &frame)
         cv::cuda::GpuMat gpuScaled;
         if (qAbs(m_personScaleFactor - 1.0) > 0.01) {
             // Check if we're in segmentation mode with background template or dynamic video background
-            if (m_displayMode == SegmentationMode && ((m_useBackgroundTemplate &&
+            if (m_segmentationEnabledInCapture && ((m_useBackgroundTemplate &&
                 !m_selectedBackgroundTemplate.isEmpty()) || m_useDynamicVideoBackground)) {
                 // For background template mode, just fit to label
                 cv::cuda::resize(gpuFrame, gpuScaled, cv::Size(labelSize.width(), labelSize.height()), 0, 0, cv::INTER_LINEAR, m_recordingStream);
@@ -8382,3 +7951,4 @@ QString Capture::resolveTemplatePath(const QString &templatePath)
     
     return QString(); // Return empty string if no path found
 }
+

@@ -567,7 +567,6 @@ private:
     double m_recordedPersonScaleFactor; // Store scaling factor used during recording
     
     // Utility functions
-    QImage cvMatToQImage(const cv::Mat &mat);
     cv::Mat qImageToCvMat(const QImage &image);
     QString resolveTemplatePath(const QString &templatePath);
     std::array<double, 2> m_cudaHogScales;
