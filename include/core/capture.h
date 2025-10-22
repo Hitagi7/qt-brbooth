@@ -506,6 +506,11 @@ private:
     cv::Mat extractPersonWithAlphaMatting(const cv::Mat &frame, const cv::Mat &trimap) const;
     std::vector<cv::Rect> deriveDetectionsFromMask(const cv::Mat &mask) const;
     
+    // Enhanced segmentation helpers for hair and pants detection
+    cv::Mat detectHairRegions(const cv::Mat &frame, const cv::Mat &hsv, const cv::Mat &lab) const;
+    cv::Mat detectPantsRegions(const cv::Mat &frame, const cv::Mat &hsv, const cv::Mat &lab) const;
+    cv::Mat applyAdaptiveThresholding(const cv::Mat &frame, const cv::Mat &hsv, const cv::Mat &lab) const;
+    
     // Helper methods (implemented in .cpp)
     void updateDebugDisplay();
     void setupDebugDisplay();

@@ -1886,6 +1886,12 @@ void Capture::performImageCapture()
             if (isLightingCorrectionEnabled() && m_lightingCorrector) {
                 lightingCorrectedFrame = m_lightingCorrector->applyGlobalLightingCorrection(originalFrame);
                 qDebug() << "🎯 Applied global lighting correction (normal mode)";
+                
+                // Store both versions for saving (original and lighting-corrected)
+                m_originalCapturedImage = originalFrame;
+                m_lightingCorrectedImage = lightingCorrectedFrame;
+                m_hasLightingComparison = true;
+                qDebug() << "🔥 FORCED: Stored both original and lighting-corrected versions for comparison (normal mode)";
             } else {
                 lightingCorrectedFrame = originalFrame;
                 qDebug() << "🎯 No lighting correction applied (normal mode)";
@@ -2004,47 +2010,115 @@ void Capture::performImageCapture()
             
             qDebug() << "🎯 Emitted static image with loading UI flow - corrected and original versions";
         } else {
-            // No comparison available - send to loading page first, then final page
-            qDebug() << "🌟 STATIC: Sending single image to loading page";
-        emit imageCapturedForLoading(m_capturedImage);
-        
-            qDebug() << "🌟 STATIC: Showing loading UI";
-        emit showLoadingPage();
-        
-            // Send to final output page with progress simulation
-        // 🌟 START: Progress simulation for static processing
-        emit videoProcessingProgress(0);
-        
-        // 🌟 PROGRESS: Simulate processing stages with realistic timing
-        QTimer::singleShot(200, [this]() {
-            emit videoProcessingProgress(25);
-                qDebug() << "🌟 STATIC: Processing progress 25%";
-        });
-        
-        QTimer::singleShot(600, [this]() {
-            emit videoProcessingProgress(50);
-                qDebug() << "🌟 STATIC: Processing progress 50%";
-        });
-        
-        QTimer::singleShot(1000, [this]() {
-            emit videoProcessingProgress(75);
-                qDebug() << "🌟 STATIC: Processing progress 75%";
-        });
-        
-        QTimer::singleShot(1400, [this]() {
-            emit videoProcessingProgress(90);
-                qDebug() << "🌟 STATIC: Processing progress 90%";
-        });
-        
-        // Send to final output page after processing simulation
-        QTimer::singleShot(1800, [this]() {
-            emit videoProcessingProgress(100);
-                qDebug() << "🌟 STATIC: Processing complete - sending single image to final output";
-            emit imageCaptured(m_capturedImage);
-            emit showFinalOutputPage();
-        });
-        
-            qDebug() << "🎯 Emitted single image with loading UI flow";
+            // Check if we have comparison images from lighting correction (non-segmentation mode)
+            if (m_hasLightingComparison && !m_originalCapturedImage.empty()) {
+                // Convert original image to QPixmap for preview and comparison
+                QImage originalQImage = cvMatToQImage(m_originalCapturedImage);
+                QPixmap originalPixmap = QPixmap::fromImage(originalQImage);
+                
+                // Apply same scaling to original image
+                QPixmap scaledOriginalPixmap = originalPixmap.scaled(
+                    labelSize,
+                    Qt::KeepAspectRatioByExpanding,
+                    Qt::FastTransformation
+                );
+                
+                // Apply person scaling if needed
+                if (qAbs(m_personScaleFactor - 1.0) > 0.01) {
+                    QSize originalSize = scaledOriginalPixmap.size();
+                    int newWidth = qRound(originalSize.width() * m_personScaleFactor);
+                    int newHeight = qRound(originalSize.height() * m_personScaleFactor);
+                    scaledOriginalPixmap = scaledOriginalPixmap.scaled(
+                        newWidth, newHeight,
+                        Qt::KeepAspectRatio,
+                        Qt::FastTransformation
+                    );
+                }
+                
+                // 🌟 FIRST: Send original image to loading page for background preview
+                qDebug() << "🌟 STATIC: Sending original image to loading page for background (lighting correction mode)";
+                emit imageCapturedForLoading(scaledOriginalPixmap);
+                
+                // 🌟 THEN: Show loading UI with original image background
+                qDebug() << "🌟 STATIC: Showing loading UI with original image background (lighting correction mode)";
+                emit showLoadingPage();
+                
+                // 🌟 START: Progress simulation for static processing
+                emit videoProcessingProgress(0);
+                
+                // 🌟 PROGRESS: Simulate processing stages with realistic timing
+                QTimer::singleShot(200, [this]() {
+                    emit videoProcessingProgress(25);
+                        qDebug() << "🌟 STATIC: Processing progress 25%";
+                });
+                
+                QTimer::singleShot(600, [this]() {
+                    emit videoProcessingProgress(50);
+                        qDebug() << "🌟 STATIC: Processing progress 50%";
+                });
+                
+                QTimer::singleShot(1000, [this]() {
+                    emit videoProcessingProgress(75);
+                        qDebug() << "🌟 STATIC: Processing progress 75%";
+                });
+                
+                QTimer::singleShot(1400, [this]() {
+                    emit videoProcessingProgress(90);
+                        qDebug() << "🌟 STATIC: Processing progress 90%";
+                });
+                
+                // 🌟 FINALLY: Send processed image to final output page (after processing simulation)
+                QTimer::singleShot(1800, [this, scaledOriginalPixmap]() {
+                    emit videoProcessingProgress(100);
+                        qDebug() << "🌟 STATIC: Processing complete - sending to final output (lighting correction mode)";
+                        emit imageCapturedWithComparison(m_capturedImage, scaledOriginalPixmap);
+                        emit showFinalOutputPage();
+                });
+                
+                qDebug() << "🎯 Emitted lighting correction image with loading UI flow - corrected and original versions";
+            } else {
+                // No comparison available - send to loading page first, then final page
+                qDebug() << "🌟 STATIC: Sending single image to loading page";
+                emit imageCapturedForLoading(m_capturedImage);
+                
+                qDebug() << "🌟 STATIC: Showing loading UI";
+                emit showLoadingPage();
+                
+                // Send to final output page with progress simulation
+                // 🌟 START: Progress simulation for static processing
+                emit videoProcessingProgress(0);
+                
+                // 🌟 PROGRESS: Simulate processing stages with realistic timing
+                QTimer::singleShot(200, [this]() {
+                    emit videoProcessingProgress(25);
+                        qDebug() << "🌟 STATIC: Processing progress 25%";
+                });
+                
+                QTimer::singleShot(600, [this]() {
+                    emit videoProcessingProgress(50);
+                        qDebug() << "🌟 STATIC: Processing progress 50%";
+                });
+                
+                QTimer::singleShot(1000, [this]() {
+                    emit videoProcessingProgress(75);
+                        qDebug() << "🌟 STATIC: Processing progress 75%";
+                });
+                
+                QTimer::singleShot(1400, [this]() {
+                    emit videoProcessingProgress(90);
+                        qDebug() << "🌟 STATIC: Processing progress 90%";
+                });
+                
+                // Send to final output page after processing simulation
+                QTimer::singleShot(1800, [this]() {
+                    emit videoProcessingProgress(100);
+                        qDebug() << "🌟 STATIC: Processing complete - sending single image to final output";
+                    emit imageCaptured(m_capturedImage);
+                    emit showFinalOutputPage();
+                });
+                
+                qDebug() << "🎯 Emitted single image with loading UI flow";
+            }
         }
         
         qDebug() << "Image captured (includes background template and segmentation).";
@@ -3814,35 +3888,12 @@ cv::Mat Capture::createSegmentedFrameGPUOnly(const cv::Mat &frame, const std::ve
 }
 cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect &detection)
 {
-    // Optimized frame skipping for GPU-accelerated segmentation - process every 4th frame
+    // Process every frame for consistent and smooth segmentation
     static int frameCounter = 0;
     static double lastProcessingTime = 0.0;
     frameCounter++;
 
-    // 🎯 RECORDING: Disable frame skipping during recording for smooth capture
-    bool shouldProcess = m_isRecording; // Always process during recording
-    
-    if (!m_isRecording) {
-        // 🎯 OPTIMIZATION: More aggressive skipping during live preview to maintain video template speed
-        shouldProcess = (frameCounter % 5 == 0); // Process every 5th frame by default during preview
-
-        // If processing is taking too long, skip even more frames
-        if (lastProcessingTime > 20.0) {
-            shouldProcess = (frameCounter % 8 == 0); // Process every 8th frame
-        } else if (lastProcessingTime < 10.0) {
-            shouldProcess = (frameCounter % 3 == 0); // Process every 3rd frame
-        }
-    }
-
-    if (!shouldProcess) {
-        // Return cached result for skipped frames
-        static cv::Mat lastMask;
-        if (!lastMask.empty()) {
-            return lastMask.clone();
-        }
-    }
-
-    // Start timing for adaptive processing
+    // Start timing for performance monitoring
     auto startTime = std::chrono::high_resolution_clock::now();
 
     // qDebug() << "🎯 Starting enhanced silhouette segmentation for detection at" << detection.x << detection.y << detection.width << "x" << detection.height;
@@ -4225,11 +4276,7 @@ cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect 
     int finalNonZeroPixels = cv::countNonZero(finalMask);
     qDebug() << "🎯 Enhanced silhouette segmentation complete, final mask has" << finalNonZeroPixels << "non-zero pixels";
 
-    // Cache the result for frame skipping
-    static cv::Mat lastMask;
-    lastMask = finalMask.clone();
-
-    // End timing and update adaptive processing
+    // End timing for performance monitoring
     auto endTime = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::microseconds>(endTime - startTime);
     lastProcessingTime = duration.count() / 1000.0; // Convert to milliseconds
@@ -4588,85 +4635,112 @@ cv::Mat Capture::createGreenScreenPersonMask(const cv::Mat &frame) const
 {
     if (frame.empty()) return cv::Mat();
 
-    cv::Mat hsv, bgr;
+    cv::Mat hsv, lab, bgr;
     cv::cvtColor(frame, hsv, cv::COLOR_BGR2HSV);
+    cv::cvtColor(frame, lab, cv::COLOR_BGR2Lab);
     bgr = frame.clone();
 
     // Split channels for multi-stage filtering
-    std::vector<cv::Mat> hsvChannels(3);
+    std::vector<cv::Mat> hsvChannels(3), labChannels(3);
     cv::split(hsv, hsvChannels);
+    cv::split(lab, labChannels);
     std::vector<cv::Mat> bgrChannels(3);
     cv::split(bgr, bgrChannels);
 
-    // PRIMARY CHROMA KEY: Threshold for green background
+    // ENHANCED PRIMARY CHROMA KEY: Multi-space green detection
     cv::Scalar lower(m_greenHueMin, m_greenSatMin, m_greenValMin);
     cv::Scalar upper(m_greenHueMax, 255, 255);
+    cv::Mat greenMaskHSV;
+    cv::inRange(hsv, lower, upper, greenMaskHSV);
+    
+    // Additional LAB space green detection for better accuracy
+    cv::Mat greenMaskLAB;
+    cv::inRange(lab, cv::Scalar(0, 100, 100), cv::Scalar(255, 150, 150), greenMaskLAB);
+    
+    // Combine HSV and LAB green detection
     cv::Mat greenMask;
-    cv::inRange(hsv, lower, upper, greenMask);
+    cv::bitwise_or(greenMaskHSV, greenMaskLAB, greenMask);
 
     // Non-green = potential person
     cv::Mat personMask;
     cv::bitwise_not(greenMask, personMask);
 
-    // AGGRESSIVE GREEN FRAGMENT REMOVAL
-    // Stage 1: Remove high saturation pixels (likely green fragments)
+    // ADAPTIVE THRESHOLDING: Apply adaptive thresholds for varying lighting
+    cv::Mat adaptiveMask = applyAdaptiveThresholding(frame, hsv, lab);
+    cv::bitwise_and(personMask, adaptiveMask, personMask);
+
+    // ENHANCED HAIR SEGMENTATION: Detect dark hair using multiple color spaces
+    cv::Mat hairMask = detectHairRegions(frame, hsv, lab);
+    cv::bitwise_or(personMask, hairMask, personMask);
+
+    // ENHANCED PANTS SEGMENTATION: Better detection of dark clothing
+    cv::Mat pantsMask = detectPantsRegions(frame, hsv, lab);
+    cv::bitwise_or(personMask, pantsMask, personMask);
+
+    // IMPROVED GREEN FRAGMENT REMOVAL
+    // Stage 1: Enhanced saturation filtering
     cv::Mat highSatMask;
-    cv::threshold(hsvChannels[1], highSatMask, 80, 255, cv::THRESH_BINARY);  // Increased from 60 to 80
+    cv::threshold(hsvChannels[1], highSatMask, 85, 255, cv::THRESH_BINARY);  // Increased threshold
     cv::bitwise_not(highSatMask, highSatMask);
     cv::bitwise_and(personMask, highSatMask, personMask);
 
-    // Stage 2: Remove greenish hue pixels
+    // Stage 2: Improved greenish hue detection with adaptive thresholds
     cv::Mat nearGreenMask1, nearGreenMask2, nearGreenRange;
-    cv::threshold(hsvChannels[0], nearGreenMask1, m_greenHueMin - 5, 255, cv::THRESH_BINARY);  // Reduced margin from -10 to -5
-    cv::threshold(hsvChannels[0], nearGreenMask2, m_greenHueMax + 5, 255, cv::THRESH_BINARY_INV);  // Reduced margin from +10 to +5
+    int hueMargin = 8; // Increased margin for better detection
+    cv::threshold(hsvChannels[0], nearGreenMask1, m_greenHueMin - hueMargin, 255, cv::THRESH_BINARY);
+    cv::threshold(hsvChannels[0], nearGreenMask2, m_greenHueMax + hueMargin, 255, cv::THRESH_BINARY_INV);
     cv::bitwise_and(nearGreenMask1, nearGreenMask2, nearGreenRange);
+    
     cv::Mat satGreenMask;
-    cv::threshold(hsvChannels[1], satGreenMask, 60, 255, cv::THRESH_BINARY);  // Increased from 40 to 60
+    cv::threshold(hsvChannels[1], satGreenMask, 65, 255, cv::THRESH_BINARY);  // Increased threshold
     cv::Mat greenFragmentMask;
     cv::bitwise_and(nearGreenRange, satGreenMask, greenFragmentMask);
     cv::bitwise_not(greenFragmentMask, greenFragmentMask);
     cv::bitwise_and(personMask, greenFragmentMask, personMask);
 
-    // Stage 3: Remove high green channel pixels
+    // Stage 3: Enhanced green channel filtering
     cv::Mat greenChannelMask;
-    cv::threshold(bgrChannels[1], greenChannelMask, 150, 255, cv::THRESH_BINARY_INV);  // Increased from 120 to 150
+    cv::threshold(bgrChannels[1], greenChannelMask, 160, 255, cv::THRESH_BINARY_INV);  // Increased threshold
     cv::bitwise_and(personMask, greenChannelMask, personMask);
 
-    // AGGRESSIVE MORPHOLOGICAL CLEANUP
-    int openK = std::max(3, m_greenMaskOpen); // Increased for aggressive cleanup
-    int closeK = std::max(7, m_greenMaskClose); // Increased to fill holes
+    // ENHANCED MORPHOLOGICAL CLEANUP with adaptive kernel sizes
+    int openK = std::max(4, m_greenMaskOpen); // Increased for better cleanup
+    int closeK = std::max(8, m_greenMaskClose); // Increased to fill holes better
     cv::Mat kOpen = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(openK, openK));
     cv::Mat kClose = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(closeK, closeK));
-    cv::Mat kErode = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
+    cv::Mat kErode = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(4, 4)); // Increased erosion
     
-    // Multi-pass morphology
+    // Multi-pass morphology with improved sequence
     cv::morphologyEx(personMask, personMask, cv::MORPH_OPEN, kOpen);  // Remove fragments
     cv::morphologyEx(personMask, personMask, cv::MORPH_CLOSE, kClose); // Fill holes
     cv::erode(personMask, personMask, kErode); // Pull edges inward
     cv::morphologyEx(personMask, personMask, cv::MORPH_OPEN, kOpen);  // Final smoothing
+    
+    // Additional closing to ensure hair and pants continuity
+    cv::Mat kCloseFine = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
+    cv::morphologyEx(personMask, personMask, cv::MORPH_CLOSE, kCloseFine);
 
-    // Feather edges for natural compositing
-    cv::GaussianBlur(personMask, personMask, cv::Size(5, 5), 0);
-    cv::threshold(personMask, personMask, 127, 255, cv::THRESH_BINARY);
+    // Enhanced edge feathering for natural compositing
+    cv::GaussianBlur(personMask, personMask, cv::Size(7, 7), 0); // Increased blur for smoother edges
+    cv::threshold(personMask, personMask, 120, 255, cv::THRESH_BINARY); // Adjusted threshold
 
-    // 🎯 CONTOUR-BASED REFINEMENT: Remove ALL fragments, keep only person
+    // IMPROVED CONTOUR-BASED REFINEMENT: Better person detection
     try {
-        personMask = refineGreenScreenMaskWithContours(personMask, 5000); // Min 5000 pixels (~70x70 area)
+        personMask = refineGreenScreenMaskWithContours(personMask, 3000); // Reduced minimum area for better detection
     } catch (const std::exception &e) {
         qWarning() << "🛡️ Contour refinement failed:" << e.what() << "- using original mask";
     }
     
-    // 🎯🎯 GRABCUT REFINEMENT: Intelligently separate person from any remaining green
-    // Apply ONLY every 5th frame during preview for stability, or every frame during recording
+    // ENHANCED GRABCUT REFINEMENT: More frequent application for better quality
     static int grabCutCounter = 0;
     grabCutCounter++;
-    bool applyGrabCut = m_isRecording || (grabCutCounter % 5 == 0);
+    bool applyGrabCut = m_isRecording || (grabCutCounter % 3 == 0); // More frequent application
     if (applyGrabCut && !personMask.empty() && !frame.empty()) {
         try {
             cv::Mat refinedMask = refineWithGrabCut(frame, personMask);
             if (!refinedMask.empty() && cv::countNonZero(refinedMask) > 1000) {
                 personMask = refinedMask;
-                qDebug() << "🎯 GrabCut applied successfully";
+                qDebug() << "🎯 Enhanced GrabCut applied successfully";
             } else {
                 qDebug() << "⚠️ GrabCut produced empty/invalid mask - skipping";
             }
@@ -4677,7 +4751,7 @@ cv::Mat Capture::createGreenScreenPersonMask(const cv::Mat &frame) const
         }
     }
     
-    // 🎯🎯 DISTANCE-BASED REFINEMENT: Ensure NO green pixels near edges
+    // ENHANCED DISTANCE-BASED REFINEMENT: Better edge detection
     try {
         cv::Mat refinedMask = applyDistanceBasedRefinement(frame, personMask);
         if (!refinedMask.empty() && cv::countNonZero(refinedMask) > 1000) {
@@ -4714,6 +4788,121 @@ cv::Mat Capture::createGreenScreenPersonMask(const cv::Mat &frame) const
     }
 
     return personMask;
+}
+
+// Enhanced hair detection using multiple color spaces and texture analysis
+cv::Mat Capture::detectHairRegions(const cv::Mat &frame, const cv::Mat &hsv, const cv::Mat &lab) const
+{
+    cv::Mat hairMask = cv::Mat::zeros(frame.size(), CV_8UC1);
+    
+    // Split channels
+    std::vector<cv::Mat> hsvChannels(3), labChannels(3);
+    cv::split(hsv, hsvChannels);
+    cv::split(lab, labChannels);
+    
+    // Dark hair detection using multiple approaches
+    cv::Mat darkHairMask1, darkHairMask2, darkHairMask3;
+    
+    // Method 1: Low brightness in HSV
+    cv::threshold(hsvChannels[2], darkHairMask1, 60, 255, cv::THRESH_BINARY_INV);
+    
+    // Method 2: Low L channel in LAB (dark regions)
+    cv::threshold(labChannels[0], darkHairMask2, 80, 255, cv::THRESH_BINARY_INV);
+    
+    // Method 3: Low saturation but not too low (hair has some color)
+    cv::Mat lowSatMask, highSatMask;
+    cv::threshold(hsvChannels[1], lowSatMask, 20, 255, cv::THRESH_BINARY_INV);
+    cv::threshold(hsvChannels[1], highSatMask, 10, 255, cv::THRESH_BINARY);
+    cv::bitwise_and(lowSatMask, highSatMask, darkHairMask3);
+    
+    // Combine methods
+    cv::bitwise_or(darkHairMask1, darkHairMask2, hairMask);
+    cv::bitwise_or(hairMask, darkHairMask3, hairMask);
+    
+    // Remove green regions (hair shouldn't be green)
+    cv::Mat greenMask;
+    cv::inRange(hsv, cv::Scalar(m_greenHueMin, m_greenSatMin, m_greenValMin), 
+                cv::Scalar(m_greenHueMax, 255, 255), greenMask);
+    cv::bitwise_and(hairMask, greenMask, hairMask);
+    cv::bitwise_not(greenMask, greenMask);
+    cv::bitwise_and(hairMask, greenMask, hairMask);
+    
+    // Morphological cleanup for hair
+    cv::Mat kHair = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
+    cv::morphologyEx(hairMask, hairMask, cv::MORPH_CLOSE, kHair);
+    cv::morphologyEx(hairMask, hairMask, cv::MORPH_OPEN, kHair);
+    
+    return hairMask;
+}
+
+// Enhanced pants detection focusing on dark clothing regions
+cv::Mat Capture::detectPantsRegions(const cv::Mat &frame, const cv::Mat &hsv, const cv::Mat &lab) const
+{
+    cv::Mat pantsMask = cv::Mat::zeros(frame.size(), CV_8UC1);
+    
+    // Split channels
+    std::vector<cv::Mat> hsvChannels(3), labChannels(3);
+    cv::split(hsv, hsvChannels);
+    cv::split(lab, labChannels);
+    
+    // Dark clothing detection
+    cv::Mat darkClothingMask1, darkClothingMask2;
+    
+    // Method 1: Very low brightness (black pants)
+    cv::threshold(hsvChannels[2], darkClothingMask1, 50, 255, cv::THRESH_BINARY_INV);
+    
+    // Method 2: Low L channel in LAB
+    cv::threshold(labChannels[0], darkClothingMask2, 70, 255, cv::THRESH_BINARY_INV);
+    
+    // Combine methods
+    cv::bitwise_or(darkClothingMask1, darkClothingMask2, pantsMask);
+    
+    // Remove green regions
+    cv::Mat greenMask;
+    cv::inRange(hsv, cv::Scalar(m_greenHueMin, m_greenSatMin, m_greenValMin), 
+                cv::Scalar(m_greenHueMax, 255, 255), greenMask);
+    cv::bitwise_not(greenMask, greenMask);
+    cv::bitwise_and(pantsMask, greenMask, pantsMask);
+    
+    // Focus on lower portion of frame (where pants typically are)
+    int lowerStart = frame.rows * 0.4; // Start from 40% down the frame
+    cv::Rect lowerRegion(0, lowerStart, frame.cols, frame.rows - lowerStart);
+    cv::Mat lowerMask = cv::Mat::zeros(frame.size(), CV_8UC1);
+    pantsMask(lowerRegion).copyTo(lowerMask(lowerRegion));
+    pantsMask = lowerMask;
+    
+    // Morphological cleanup for pants
+    cv::Mat kPants = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
+    cv::morphologyEx(pantsMask, pantsMask, cv::MORPH_CLOSE, kPants);
+    cv::morphologyEx(pantsMask, pantsMask, cv::MORPH_OPEN, kPants);
+    
+    return pantsMask;
+}
+
+// Adaptive thresholding for better segmentation in varying lighting conditions
+cv::Mat Capture::applyAdaptiveThresholding(const cv::Mat &frame, const cv::Mat &hsv, const cv::Mat &lab) const
+{
+    cv::Mat adaptiveMask = cv::Mat::zeros(frame.size(), CV_8UC1);
+    
+    // Calculate adaptive thresholds based on image statistics
+    cv::Scalar meanHSV, stdHSV;
+    cv::meanStdDev(hsv, meanHSV, stdHSV);
+    
+    // Adaptive green detection thresholds
+    int adaptiveHueMin = std::max(0, static_cast<int>(meanHSV[0] - 2 * stdHSV[0]));
+    int adaptiveHueMax = std::min(179, static_cast<int>(meanHSV[0] + 2 * stdHSV[0]));
+    int adaptiveSatMin = std::max(0, static_cast<int>(meanHSV[1] - 1.5 * stdHSV[1]));
+    int adaptiveValMin = std::max(0, static_cast<int>(meanHSV[2] - 1.5 * stdHSV[2]));
+    
+    // Create adaptive green mask
+    cv::Scalar adaptiveLower(adaptiveHueMin, adaptiveSatMin, adaptiveValMin);
+    cv::Scalar adaptiveUpper(adaptiveHueMax, 255, 255);
+    cv::inRange(hsv, adaptiveLower, adaptiveUpper, adaptiveMask);
+    
+    // Invert to get person mask
+    cv::bitwise_not(adaptiveMask, adaptiveMask);
+    
+    return adaptiveMask;
 }
 
 // 🚀 GPU-ACCELERATED GREEN SCREEN MASKING with Optimized Memory Management
