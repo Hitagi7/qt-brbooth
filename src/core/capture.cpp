@@ -297,8 +297,8 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     m_videoPlaybackTimer = new QTimer(this);
     m_videoPlaybackTimer->setSingleShot(false); // Continuous timer
     m_videoPlaybackTimer->setTimerType(Qt::PreciseTimer);
-    m_videoFrameRate = 30.0; // Default to 30 FPS
-    m_videoFrameInterval = 33; // Default interval (1000ms / 30fps ≈ 33ms)
+    m_videoFrameRate = 20.0; // Further reduced to 20 FPS for better performance
+    m_videoFrameInterval = 50; // Default interval (1000ms / 20fps = 50ms)
     m_videoPlaybackActive = false;
 
     // Connect video playback timer to slot
@@ -2119,13 +2119,14 @@ void Capture::enableDynamicVideoBackground(const QString &videoPath)
         }
     }
 
-    // CPU fallback using multiple backends
+    // CPU fallback using optimized backends for better performance
     if (!opened) {
+        // 🚀 PERFORMANCE: Prioritize faster backends for better FPS
         std::vector<int> backends = {
-            cv::CAP_MSMF,
-            cv::CAP_FFMPEG,
-            cv::CAP_DSHOW,
-            cv::CAP_ANY
+            cv::CAP_MSMF,    // Windows Media Foundation - fastest on Windows
+            cv::CAP_DSHOW,   // DirectShow - good performance
+            cv::CAP_FFMPEG,  // FFMPEG - reliable but slower
+            cv::CAP_ANY      // Fallback
         };
 
         for (int backend : backends) {
@@ -2134,6 +2135,13 @@ void Capture::enableDynamicVideoBackground(const QString &videoPath)
             if (m_dynamicVideoCap.isOpened()) {
                 opened = true;
                 qDebug() << "🎞️ Successfully opened video with CPU backend:" << backend;
+                
+                // 🚀 PERFORMANCE: Set video properties for better performance
+                m_dynamicVideoCap.set(cv::CAP_PROP_BUFFERSIZE, 1); // Reduce buffer size
+                m_dynamicVideoCap.set(cv::CAP_PROP_FPS, 20); // Limit to 20 FPS
+                m_dynamicVideoCap.set(cv::CAP_PROP_FRAME_WIDTH, 960); // Limit width
+                m_dynamicVideoCap.set(cv::CAP_PROP_FRAME_HEIGHT, 540); // Limit height
+                qDebug() << "🎞️ Video properties optimized for performance - 960x540 @ 20fps";
                 break;
             }
         }
@@ -2329,11 +2337,37 @@ void Capture::onVideoPlaybackTimer()
     if (!m_useDynamicVideoBackground || !m_videoPlaybackActive) {
         return;
     }
+    
+    // 🚀 PERFORMANCE: Adaptive frame skipping based on processing load
+    static int frameSkipCounter = 0;
+    static double lastProcessingTime = 0.0;
+    static QElapsedTimer performanceTimer;
+    
+    frameSkipCounter++;
+    
+    // Measure processing time to adapt skipping
+    if (frameSkipCounter % 10 == 0) { // Check every 10 frames
+        lastProcessingTime = performanceTimer.elapsed() / 1000.0;
+        performanceTimer.restart();
+        
+        // Adaptive skipping based on performance
+        if (lastProcessingTime > 15.0) {
+            // Heavy load - skip more frames
+            if (frameSkipCounter % 3 != 0) return;
+        } else if (lastProcessingTime > 8.0) {
+            // Medium load - skip some frames
+            if (frameSkipCounter % 2 != 0) return;
+        }
+        // Light load - process all frames
+    } else {
+        // Use current skipping strategy
+        if (frameSkipCounter % 2 == 0) return;
+    }
 
-    // 🔒 THREAD SAFETY: Use tryLock to avoid blocking if processing is still ongoing
-    if (!m_dynamicVideoMutex.tryLock()) {
-        qDebug() << "🎞️ ⚠️ Skipping frame advance - previous frame still processing";
-        return; // Skip this frame to maintain timing
+    // 🚀 PERFORMANCE: Use tryLock with shorter timeout to reduce blocking
+    if (!m_dynamicVideoMutex.tryLock(5)) { // 5ms timeout instead of blocking
+        // Skip frame silently to maintain performance
+        return;
     }
 
     cv::Mat nextFrame;
@@ -2347,8 +2381,10 @@ void Capture::onVideoPlaybackTimer()
                 if (gpu.type() == CV_8UC4) {
                     cv::cuda::cvtColor(gpu, gpu, cv::COLOR_BGRA2BGR);
                 }
+                // 🚀 PERFORMANCE: Keep GPU frame on GPU, avoid unnecessary downloads
                 m_dynamicGpuFrame = gpu; // keep latest GPU frame
                 if (!isGPUOnlyProcessingAvailable()) {
+                    // Only download if we need CPU copy for processing
                     gpu.download(nextFrame);
                     frameRead = !nextFrame.empty();
                 } else {
@@ -2408,7 +2444,16 @@ void Capture::onVideoPlaybackTimer()
     }
 
     if (frameRead && !nextFrame.empty()) {
-        m_dynamicVideoFrame = nextFrame.clone();
+        // 🚀 PERFORMANCE: Aggressive video frame resizing for better FPS
+        if (nextFrame.cols > 960) { // Reduced from 1280 to 960 for better performance
+            cv::Mat resizedFrame;
+            double scale = 960.0 / nextFrame.cols; // Reduced target resolution
+            cv::resize(nextFrame, resizedFrame, cv::Size(), scale, scale, cv::INTER_LINEAR);
+            m_dynamicVideoFrame = resizedFrame;
+            qDebug() << "🎞️ Video frame resized from" << nextFrame.cols << "x" << nextFrame.rows << "to" << resizedFrame.cols << "x" << resizedFrame.rows;
+        } else {
+            m_dynamicVideoFrame = nextFrame.clone();
+        }
     }
     
     // 🔒 THREAD SAFETY: Unlock mutex before returning
@@ -3129,11 +3174,20 @@ cv::Mat Capture::processFrameWithUnifiedDetection(const cv::Mat &frame)
     m_personDetectionTimer.start();
 
     try {
-        // Optimized processing for 30 FPS with GPU (matching peopledetect_v1.cpp)
+        // 🚀 AGGRESSIVE FPS OPTIMIZATION: Dynamic mode gets priority for performance
         cv::Mat processFrame = frame;
-        if (frame.cols > 640) {
+        if (m_useDynamicVideoBackground) {
+            // Dynamic mode: More aggressive resolution reduction for better FPS
+            if (frame.cols > 480) { // Reduced to 480 for dynamic mode
+                double scale = 480.0 / frame.cols;
+                cv::resize(frame, processFrame, cv::Size(), scale, scale, cv::INTER_LINEAR);
+                qDebug() << "🚀 DYNAMIC MODE: Aggressive resolution reduction to" << processFrame.cols << "x" << processFrame.rows;
+            }
+        } else if (frame.cols > 640) {
+            // Static mode: Keep higher resolution
             double scale = 640.0 / frame.cols;
             cv::resize(frame, processFrame, cv::Size(), scale, scale, cv::INTER_LINEAR);
+            qDebug() << "🚀 STATIC MODE: Moderate resolution reduction to" << processFrame.cols << "x" << processFrame.rows;
         }
 
         // Use a fixed, bounded segmentation rectangle instead of person detection
