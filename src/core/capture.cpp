@@ -4586,375 +4586,495 @@ cv::Mat Capture::getMotionMask(const cv::Mat &frame)
 // Create a person mask from non-green areas using HSV thresholding
 cv::Mat Capture::createGreenScreenPersonMask(const cv::Mat &frame) const
 {
-    if (frame.empty()) return cv::Mat();
+    if (frame.empty()) {
+        qWarning() << "🎨 GREEN SCREEN: Empty frame received";
+        return cv::Mat();
+    }
 
+    qDebug() << "🎨 GREEN SCREEN: Starting robust YCrCb-based masking";
+
+    // === STEP 1: Adaptive Green Sampling from Frame Corners and Mid-Edges ===
+    // Sample pixels from 8 locations: 4 corners + 4 mid-edges to estimate background green
+    const int sampleSize = 20; // Sample 20x20 pixel regions
+    std::vector<cv::Point> sampleLocations;
+    
+    // Add corner samples (with margin to avoid edge artifacts)
+    const int margin = 10;
+    sampleLocations.push_back(cv::Point(margin, margin)); // Top-left
+    sampleLocations.push_back(cv::Point(frame.cols - margin - sampleSize, margin)); // Top-right
+    sampleLocations.push_back(cv::Point(margin, frame.rows - margin - sampleSize)); // Bottom-left
+    sampleLocations.push_back(cv::Point(frame.cols - margin - sampleSize, frame.rows - margin - sampleSize)); // Bottom-right
+    
+    // Add mid-edge samples
+    sampleLocations.push_back(cv::Point(frame.cols/2 - sampleSize/2, margin)); // Top-mid
+    sampleLocations.push_back(cv::Point(frame.cols/2 - sampleSize/2, frame.rows - margin - sampleSize)); // Bottom-mid
+    sampleLocations.push_back(cv::Point(margin, frame.rows/2 - sampleSize/2)); // Left-mid
+    sampleLocations.push_back(cv::Point(frame.cols - margin - sampleSize, frame.rows/2 - sampleSize/2)); // Right-mid
+    
+    // Convert frame to YCrCb color space
+    cv::Mat ycrcb;
+    cv::cvtColor(frame, ycrcb, cv::COLOR_BGR2YCrCb);
+    
+    // Sample green background and compute mean Cr/Cb
+    std::vector<uchar> crSamples, cbSamples, ySamples;
+    for (const auto& loc : sampleLocations) {
+        cv::Rect roi(loc.x, loc.y, sampleSize, sampleSize);
+        // Ensure ROI is within frame bounds
+        roi = roi & cv::Rect(0, 0, frame.cols, frame.rows);
+        if (roi.width > 0 && roi.height > 0) {
+            cv::Mat sample = ycrcb(roi);
+            std::vector<cv::Mat> channels;
+            cv::split(sample, channels);
+            
+            for (int y = 0; y < sample.rows; y++) {
+                for (int x = 0; x < sample.cols; x++) {
+                    ySamples.push_back(channels[0].at<uchar>(y, x));
+                    crSamples.push_back(channels[1].at<uchar>(y, x));
+                    cbSamples.push_back(channels[2].at<uchar>(y, x));
+                }
+            }
+        }
+    }
+    
+    // Compute mean and standard deviation
+    double meanCr = 0, meanCb = 0, meanY = 0;
+    if (!crSamples.empty()) {
+        for (uchar val : crSamples) meanCr += val;
+        for (uchar val : cbSamples) meanCb += val;
+        for (uchar val : ySamples) meanY += val;
+        meanCr /= crSamples.size();
+        meanCb /= cbSamples.size();
+        meanY /= ySamples.size();
+    } else {
+        qWarning() << "🎨 GREEN SCREEN: No valid samples - using default green values";
+        meanCr = 90;  // Typical green Cr
+        meanCb = 70;  // Typical green Cb
+        meanY = 128;  // Mid luminance
+    }
+    
+    // Set tight thresholds around sampled green mean
+    const double dCr = 15.0;  // Tight Cr margin
+    const double dCb = 15.0;  // Tight Cb margin
+    const double dY = 40.0;   // Moderate Y margin for shadows
+    
+    qDebug() << "🎨 GREEN SCREEN: Sampled green - Cr:" << meanCr << "Cb:" << meanCb << "Y:" << meanY;
+    qDebug() << "🎨 GREEN SCREEN: Thresholds - dCr:" << dCr << "dCb:" << dCb << "dY:" << dY;
+    
+    // === STEP 2: Create Green Mask in YCrCb ===
+    std::vector<cv::Mat> ycrcbChannels;
+    cv::split(ycrcb, ycrcbChannels);
+    
+    // Green detection: pixels matching Cr and Cb ranges
+    cv::Mat greenMaskCr, greenMaskCb, greenMaskY, greenMask;
+    cv::inRange(ycrcbChannels[1], meanCr - dCr, meanCr + dCr, greenMaskCr);
+    cv::inRange(ycrcbChannels[2], meanCb - dCb, meanCb + dCb, greenMaskCb);
+    cv::inRange(ycrcbChannels[0], meanY - dY, meanY + dY, greenMaskY);
+    
+    // Combine: pixel is green if Cr AND Cb AND Y match
+    cv::bitwise_and(greenMaskCr, greenMaskCb, greenMask);
+    cv::bitwise_and(greenMask, greenMaskY, greenMask);
+    
+    // Invert to get person mask candidate
+    cv::Mat personMaskCandidate;
+    cv::bitwise_not(greenMask, personMaskCandidate);
+    
+    int pixelsBeforeProtection = cv::countNonZero(personMaskCandidate);
+    qDebug() << "🎨 GREEN SCREEN: Initial person pixels:" << pixelsBeforeProtection;
+    
+    // === STEP 3: Secondary HSV/BGR Checks for Skin and Dark Color Protection ===
     cv::Mat hsv, bgr;
     cv::cvtColor(frame, hsv, cv::COLOR_BGR2HSV);
     bgr = frame.clone();
-
-    // Split channels for multi-stage filtering
-    std::vector<cv::Mat> hsvChannels(3);
+    
+    std::vector<cv::Mat> hsvChannels, bgrChannels;
     cv::split(hsv, hsvChannels);
-    std::vector<cv::Mat> bgrChannels(3);
     cv::split(bgr, bgrChannels);
-
-    // PRIMARY CHROMA KEY: Threshold for green background
-    cv::Scalar lower(m_greenHueMin, m_greenSatMin, m_greenValMin);
-    cv::Scalar upper(m_greenHueMax, 255, 255);
-    cv::Mat greenMask;
-    cv::inRange(hsv, lower, upper, greenMask);
-
-    // Non-green = potential person
-    cv::Mat personMask;
-    cv::bitwise_not(greenMask, personMask);
-
-    // AGGRESSIVE GREEN FRAGMENT REMOVAL
-    // Stage 1: Remove high saturation pixels (likely green fragments)
-    cv::Mat highSatMask;
-    cv::threshold(hsvChannels[1], highSatMask, 80, 255, cv::THRESH_BINARY);  // Increased from 60 to 80
-    cv::bitwise_not(highSatMask, highSatMask);
-    cv::bitwise_and(personMask, highSatMask, personMask);
-
-    // Stage 2: Remove greenish hue pixels
-    cv::Mat nearGreenMask1, nearGreenMask2, nearGreenRange;
-    cv::threshold(hsvChannels[0], nearGreenMask1, m_greenHueMin - 5, 255, cv::THRESH_BINARY);  // Reduced margin from -10 to -5
-    cv::threshold(hsvChannels[0], nearGreenMask2, m_greenHueMax + 5, 255, cv::THRESH_BINARY_INV);  // Reduced margin from +10 to +5
-    cv::bitwise_and(nearGreenMask1, nearGreenMask2, nearGreenRange);
-    cv::Mat satGreenMask;
-    cv::threshold(hsvChannels[1], satGreenMask, 60, 255, cv::THRESH_BINARY);  // Increased from 40 to 60
-    cv::Mat greenFragmentMask;
-    cv::bitwise_and(nearGreenRange, satGreenMask, greenFragmentMask);
-    cv::bitwise_not(greenFragmentMask, greenFragmentMask);
-    cv::bitwise_and(personMask, greenFragmentMask, personMask);
-
-    // Stage 3: Remove high green channel pixels
-    cv::Mat greenChannelMask;
-    cv::threshold(bgrChannels[1], greenChannelMask, 150, 255, cv::THRESH_BINARY_INV);  // Increased from 120 to 150
-    cv::bitwise_and(personMask, greenChannelMask, personMask);
-
-    // AGGRESSIVE MORPHOLOGICAL CLEANUP
-    int openK = std::max(3, m_greenMaskOpen); // Increased for aggressive cleanup
-    int closeK = std::max(7, m_greenMaskClose); // Increased to fill holes
+    
+    // === STEP 4: Skin Protection - Force Skin Pixels to Foreground ===
+    // Skin detection in YCrCb: Cr in [133, 173], Cb in [77, 127], Y in [80, 255]
+    cv::Mat skinMaskYCrCb;
+    cv::inRange(ycrcb, cv::Scalar(80, 133, 77), cv::Scalar(255, 173, 127), skinMaskYCrCb);
+    
+    // Additional skin detection in HSV: H in [0, 25], S in [30, 170], V in [80, 255]
+    cv::Mat skinMaskHSV;
+    cv::inRange(hsv, cv::Scalar(0, 30, 80), cv::Scalar(25, 170, 255), skinMaskHSV);
+    
+    // Combine skin masks
+    cv::Mat skinMask;
+    cv::bitwise_or(skinMaskYCrCb, skinMaskHSV, skinMask);
+    
+    // Force all skin pixels to foreground (mask value = 255)
+    cv::bitwise_or(personMaskCandidate, skinMask, personMaskCandidate);
+    
+    int skinPixels = cv::countNonZero(skinMask);
+    qDebug() << "🎨 GREEN SCREEN: Skin pixels protected:" << skinPixels;
+    
+    // === STEP 5: Dark Color Protection ===
+    // Protect low-saturation, low-value pixels (dark clothing/hair)
+    cv::Mat darkMask;
+    cv::Mat lowV, lowS;
+    cv::threshold(hsvChannels[2], lowV, 60, 255, cv::THRESH_BINARY_INV); // V < 60
+    cv::threshold(hsvChannels[1], lowS, 40, 255, cv::THRESH_BINARY_INV); // S < 40
+    cv::bitwise_or(lowV, lowS, darkMask);
+    
+    // Conservative: if pixel is dark OR low-saturation, keep it unless strongly green
+    // Check if B channel is low (green screen has high G, moderate R/B)
+    cv::Mat lowB;
+    cv::threshold(bgrChannels[0], lowB, 100, 255, cv::THRESH_BINARY_INV); // B < 100
+    cv::bitwise_and(darkMask, lowB, darkMask);
+    
+    // Add dark pixels to person mask
+    cv::bitwise_or(personMaskCandidate, darkMask, personMaskCandidate);
+    
+    int darkPixels = cv::countNonZero(darkMask);
+    qDebug() << "🎨 GREEN SCREEN: Dark pixels protected:" << darkPixels;
+    
+    // === STEP 6: Morphological Cleanup (Conservative) ===
+    int openK = 3;  // Small kernel for conservative opening
+    int closeK = 5; // Small kernel for conservative closing
     cv::Mat kOpen = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(openK, openK));
     cv::Mat kClose = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(closeK, closeK));
-    cv::Mat kErode = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
     
-    // Multi-pass morphology
-    cv::morphologyEx(personMask, personMask, cv::MORPH_OPEN, kOpen);  // Remove fragments
-    cv::morphologyEx(personMask, personMask, cv::MORPH_CLOSE, kClose); // Fill holes
-    cv::erode(personMask, personMask, kErode); // Pull edges inward
-    cv::morphologyEx(personMask, personMask, cv::MORPH_OPEN, kOpen);  // Final smoothing
-
-    // Feather edges for natural compositing
-    cv::GaussianBlur(personMask, personMask, cv::Size(5, 5), 0);
-    cv::threshold(personMask, personMask, 127, 255, cv::THRESH_BINARY);
-
-    // 🎯 CONTOUR-BASED REFINEMENT: Remove ALL fragments, keep only person
+    // Conservative opening to remove very small background islands
+    cv::morphologyEx(personMaskCandidate, personMaskCandidate, cv::MORPH_OPEN, kOpen);
+    // Conservative closing to fill small holes
+    cv::morphologyEx(personMaskCandidate, personMaskCandidate, cv::MORPH_CLOSE, kClose);
+    
+    int pixelsAfterMorph = cv::countNonZero(personMaskCandidate);
+    qDebug() << "🎨 GREEN SCREEN: After morphology:" << pixelsAfterMorph;
+    
+    // === STEP 7: Contour-Based Safety with Conservative Fallback ===
+    cv::Mat personMask = personMaskCandidate.clone();
     try {
-        personMask = refineGreenScreenMaskWithContours(personMask, 5000); // Min 5000 pixels (~70x70 area)
-    } catch (const std::exception &e) {
-        qWarning() << "🛡️ Contour refinement failed:" << e.what() << "- using original mask";
-    }
-    
-    // 🎯🎯 GRABCUT REFINEMENT: Intelligently separate person from any remaining green
-    // Apply ONLY every 5th frame during preview for stability, or every frame during recording
-    static int grabCutCounter = 0;
-    grabCutCounter++;
-    bool applyGrabCut = m_isRecording || (grabCutCounter % 5 == 0);
-    if (applyGrabCut && !personMask.empty() && !frame.empty()) {
-        try {
-            cv::Mat refinedMask = refineWithGrabCut(frame, personMask);
-            if (!refinedMask.empty() && cv::countNonZero(refinedMask) > 1000) {
-                personMask = refinedMask;
-                qDebug() << "🎯 GrabCut applied successfully";
-            } else {
-                qDebug() << "⚠️ GrabCut produced empty/invalid mask - skipping";
+        std::vector<std::vector<cv::Point>> contours;
+        std::vector<cv::Vec4i> hierarchy;
+        cv::findContours(personMaskCandidate.clone(), contours, hierarchy, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+        
+        if (!contours.empty()) {
+            // Sort contours by area
+            std::vector<std::pair<int, double>> contourAreas;
+            for (size_t i = 0; i < contours.size(); i++) {
+                double area = cv::contourArea(contours[i]);
+                contourAreas.push_back({static_cast<int>(i), area});
             }
-        } catch (const cv::Exception &e) {
-            qWarning() << "🛡️ GrabCut failed:" << e.what() << "- using original mask";
-        } catch (const std::exception &e) {
-            qWarning() << "🛡️ GrabCut exception:" << e.what() << "- using original mask";
-        }
-    }
-    
-    // 🎯🎯 DISTANCE-BASED REFINEMENT: Ensure NO green pixels near edges
-    try {
-        cv::Mat refinedMask = applyDistanceBasedRefinement(frame, personMask);
-        if (!refinedMask.empty() && cv::countNonZero(refinedMask) > 1000) {
-            personMask = refinedMask;
-        }
-    } catch (const std::exception &e) {
-        qWarning() << "🛡️ Distance refinement failed:" << e.what() << "- using original mask";
-    }
-    
-    // 🎯 TRIMAP + ALPHA MATTING: Natural edge extraction (DISABLED - too computationally expensive)
-    // Enable only if needed for specific high-quality requirements
-    /*
-    if (m_isRecording) {
-        try {
-            cv::Mat trimap = createTrimap(personMask, 5, 10);
-            if (!trimap.empty()) {
-                cv::Mat refinedMask = extractPersonWithAlphaMatting(frame, trimap);
-                if (!refinedMask.empty() && cv::countNonZero(refinedMask) > 1000) {
-                    personMask = refinedMask;
-                    qDebug() << "🎯 Alpha matting applied";
+            std::sort(contourAreas.begin(), contourAreas.end(), 
+                      [](const auto& a, const auto& b) { return a.second > b.second; });
+            
+            // Keep top 3 largest contours (support multiple people)
+            cv::Mat contourMask = cv::Mat::zeros(personMaskCandidate.size(), CV_8UC1);
+            const int maxContours = 3;
+            const int minArea = 2000; // Smaller minimum for conservative approach
+            int keptContours = 0;
+            
+            for (size_t i = 0; i < std::min(contourAreas.size(), (size_t)maxContours); i++) {
+                if (contourAreas[i].second >= minArea) {
+                    cv::drawContours(contourMask, contours, contourAreas[i].first, cv::Scalar(255), cv::FILLED);
+                    keptContours++;
                 }
             }
-        } catch (const std::exception &e) {
-            qWarning() << "🛡️ Alpha matting failed:" << e.what() << "- using original mask";
+            
+            // If we kept valid contours, use them; otherwise keep original (conservative fallback)
+            if (keptContours > 0 && cv::countNonZero(contourMask) > 1000) {
+                personMask = contourMask;
+                qDebug() << "🎨 GREEN SCREEN: Kept" << keptContours << "contours";
+            } else {
+                qDebug() << "🎨 GREEN SCREEN: No valid contours, keeping all pixels (conservative)";
+            }
         }
-    }
-    */
-    
-    // 🎯 TEMPORAL SMOOTHING: Ensure consistency across frames, prevent flickering fragments
-    try {
-        personMask = applyTemporalMaskSmoothing(personMask);
     } catch (const std::exception &e) {
-        qWarning() << "🛡️ Temporal smoothing failed:" << e.what() << "- using original mask";
+        qWarning() << "🎨 GREEN SCREEN: Contour processing failed:" << e.what() << "- keeping all pixels";
     }
-
+    
+    // === STEP 8: Green Spill Suppression ===
+    // For pixels inside mask near edges, reduce green channel if G > max(R,B) + threshold
+    try {
+        cv::Mat edges;
+        cv::Canny(personMask, edges, 50, 150);
+        cv::Mat edgeDilated;
+        cv::dilate(edges, edgeDilated, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(15, 15)));
+        
+        // Process pixels near edges
+        for (int y = 0; y < frame.rows; y++) {
+            for (int x = 0; x < frame.cols; x++) {
+                if (personMask.at<uchar>(y, x) > 0 && edgeDilated.at<uchar>(y, x) > 0) {
+                    cv::Vec3b& pixel = bgr.at<cv::Vec3b>(y, x);
+                    uchar B = pixel[0], G = pixel[1], R = pixel[2];
+                    uchar maxRB = std::max(R, B);
+                    
+                    // If green is significantly higher than red/blue, despill
+                    const int threshold = 30;
+                    if (G > maxRB + threshold) {
+                        // Reduce green by 40%
+                        pixel[1] = cv::saturate_cast<uchar>(G * 0.6 + maxRB * 0.4);
+                        
+                        // Optional: if still very green after despill, consider removing from mask
+                        // (only for extreme cases where it's clearly green screen)
+                        uchar newG = pixel[1];
+                        if (newG > maxRB + threshold * 2) {
+                            // Check if non-skin
+                            if (skinMask.at<uchar>(y, x) == 0) {
+                                // Optionally remove from mask
+                                // personMask.at<uchar>(y, x) = 0;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        qDebug() << "🎨 GREEN SCREEN: Green spill suppression applied";
+    } catch (const std::exception &e) {
+        qWarning() << "🎨 GREEN SCREEN: Spill suppression failed:" << e.what();
+    }
+    
+    int finalPixels = cv::countNonZero(personMask);
+    qDebug() << "🎨 GREEN SCREEN: Final person pixels:" << finalPixels;
+    qDebug() << "🎨 GREEN SCREEN: Masking complete";
+    
     return personMask;
 }
 
-// 🚀 GPU-ACCELERATED GREEN SCREEN MASKING with Optimized Memory Management
+// 🚀 GPU-ACCELERATED GREEN SCREEN MASKING with YCrCb Adaptive Sampling
 cv::cuda::GpuMat Capture::createGreenScreenPersonMaskGPU(const cv::cuda::GpuMat &gpuFrame) const
 {
     cv::cuda::GpuMat emptyMask;
     if (gpuFrame.empty()) {
-        qWarning() << "🎨 GPU frame is empty, cannot create green screen mask";
+        qWarning() << "🎨 GPU GREEN SCREEN: Empty frame received";
+        return emptyMask;
+    }
+
+    // Check CUDA availability
+    if (cv::cuda::getCudaEnabledDeviceCount() == 0) {
+        qDebug() << "🎨 GPU GREEN SCREEN: CUDA not available, falling back to CPU";
+        // Download frame and use CPU implementation
+        cv::Mat cpuFrame;
+        try {
+            gpuFrame.download(cpuFrame);
+            cv::Mat cpuMask = createGreenScreenPersonMask(cpuFrame);
+            if (!cpuMask.empty()) {
+                cv::cuda::GpuMat gpuMask;
+                gpuMask.upload(cpuMask);
+                return gpuMask;
+            }
+        } catch (const cv::Exception &e) {
+            qWarning() << "🎨 GPU GREEN SCREEN: CPU fallback failed:" << e.what();
+        }
         return emptyMask;
     }
 
     try {
-        // 🚀 INITIALIZE CACHED FILTERS (once only, reused for all frames)
-        static bool filtersInitialized = false;
-        if (!filtersInitialized && cv::cuda::getCudaEnabledDeviceCount() > 0) {
-            try {
-                // Cache filters to avoid recreating on every frame
-                const_cast<Capture*>(this)->m_greenScreenCannyDetector = cv::cuda::createCannyEdgeDetector(30, 90);
-                const_cast<Capture*>(this)->m_greenScreenGaussianBlur = cv::cuda::createGaussianFilter(CV_8U, CV_8U, cv::Size(5, 5), 1.0);
-                filtersInitialized = true;
-                qDebug() << "✅ GPU green screen filters initialized and cached";
-            } catch (const cv::Exception &e) {
-                qWarning() << "⚠️ Failed to initialize GPU green screen filters:" << e.what();
-                filtersInitialized = false;
+        qDebug() << "🎨 GPU GREEN SCREEN: Starting robust YCrCb-based masking on GPU";
+
+        // === STEP 1: Adaptive Green Sampling (requires CPU processing) ===
+        // Download frame to sample background green
+        cv::Mat cpuFrame;
+        gpuFrame.download(cpuFrame);
+        cv::cuda::Stream::Null().waitForCompletion();
+        
+        if (cpuFrame.empty()) {
+            qWarning() << "🎨 GPU GREEN SCREEN: Failed to download frame for sampling";
+            return emptyMask;
+        }
+        
+        // Sample green from corners and mid-edges
+        const int sampleSize = 20;
+        std::vector<cv::Point> sampleLocations;
+        const int margin = 10;
+        
+        sampleLocations.push_back(cv::Point(margin, margin));
+        sampleLocations.push_back(cv::Point(cpuFrame.cols - margin - sampleSize, margin));
+        sampleLocations.push_back(cv::Point(margin, cpuFrame.rows - margin - sampleSize));
+        sampleLocations.push_back(cv::Point(cpuFrame.cols - margin - sampleSize, cpuFrame.rows - margin - sampleSize));
+        sampleLocations.push_back(cv::Point(cpuFrame.cols/2 - sampleSize/2, margin));
+        sampleLocations.push_back(cv::Point(cpuFrame.cols/2 - sampleSize/2, cpuFrame.rows - margin - sampleSize));
+        sampleLocations.push_back(cv::Point(margin, cpuFrame.rows/2 - sampleSize/2));
+        sampleLocations.push_back(cv::Point(cpuFrame.cols - margin - sampleSize, cpuFrame.rows/2 - sampleSize/2));
+        
+        // Convert to YCrCb for sampling
+        cv::Mat ycrcb;
+        cv::cvtColor(cpuFrame, ycrcb, cv::COLOR_BGR2YCrCb);
+        
+        std::vector<uchar> crSamples, cbSamples, ySamples;
+        for (const auto& loc : sampleLocations) {
+            cv::Rect roi(loc.x, loc.y, sampleSize, sampleSize);
+            roi = roi & cv::Rect(0, 0, cpuFrame.cols, cpuFrame.rows);
+            if (roi.width > 0 && roi.height > 0) {
+                cv::Mat sample = ycrcb(roi);
+                std::vector<cv::Mat> channels;
+                cv::split(sample, channels);
+                
+                for (int y = 0; y < sample.rows; y++) {
+                    for (int x = 0; x < sample.cols; x++) {
+                        ySamples.push_back(channels[0].at<uchar>(y, x));
+                        crSamples.push_back(channels[1].at<uchar>(y, x));
+                        cbSamples.push_back(channels[2].at<uchar>(y, x));
+                    }
+                }
             }
         }
-
-        // 1️⃣ CONVERT TO HSV ON GPU
+        
+        double meanCr = 90, meanCb = 70, meanY = 128;
+        if (!crSamples.empty()) {
+            for (uchar val : crSamples) meanCr += val;
+            for (uchar val : cbSamples) meanCb += val;
+            for (uchar val : ySamples) meanY += val;
+            meanCr /= crSamples.size();
+            meanCb /= cbSamples.size();
+            meanY /= ySamples.size();
+        }
+        
+        const double dCr = 15.0, dCb = 15.0, dY = 40.0;
+        qDebug() << "🎨 GPU GREEN SCREEN: Sampled green - Cr:" << meanCr << "Cb:" << meanCb << "Y:" << meanY;
+        
+        // === STEP 2: Convert Frame to YCrCb on GPU ===
+        cv::cuda::GpuMat gpuYCrCb;
+        cv::cuda::cvtColor(gpuFrame, gpuYCrCb, cv::COLOR_BGR2YCrCb);
+        
+        // === STEP 3: Create Green Mask in YCrCb on GPU ===
+        std::vector<cv::cuda::GpuMat> ycrcbChannels(3);
+        cv::cuda::split(gpuYCrCb, ycrcbChannels);
+        
+        cv::cuda::GpuMat greenMaskCr, greenMaskCb, greenMaskY, greenMask;
+        cv::cuda::inRange(ycrcbChannels[1], meanCr - dCr, meanCr + dCr, greenMaskCr);
+        cv::cuda::inRange(ycrcbChannels[2], meanCb - dCb, meanCb + dCb, greenMaskCb);
+        cv::cuda::inRange(ycrcbChannels[0], meanY - dY, meanY + dY, greenMaskY);
+        
+        cv::cuda::bitwise_and(greenMaskCr, greenMaskCb, greenMask);
+        cv::cuda::bitwise_and(greenMask, greenMaskY, greenMask);
+        
+        // Invert to get person mask
+        cv::cuda::GpuMat gpuPersonMask;
+        cv::cuda::bitwise_not(greenMask, gpuPersonMask);
+        
+        // === STEP 4: Skin Protection on GPU ===
+        cv::cuda::GpuMat skinMaskYCrCb;
+        cv::cuda::inRange(gpuYCrCb, cv::Scalar(80, 133, 77), cv::Scalar(255, 173, 127), skinMaskYCrCb);
+        
+        // HSV skin detection
         cv::cuda::GpuMat gpuHSV;
         cv::cuda::cvtColor(gpuFrame, gpuHSV, cv::COLOR_BGR2HSV);
-
-        // 2️⃣ CHROMA KEY: Isolate green background using GPU
-        cv::Scalar lower(m_greenHueMin, m_greenSatMin, m_greenValMin);
-        cv::Scalar upper(m_greenHueMax, 255, 255);
-        cv::cuda::GpuMat gpuGreenMask;
-        cv::cuda::inRange(gpuHSV, lower, upper, gpuGreenMask);
-
-        // 3️⃣ INVERT: Non-green = person
-        cv::cuda::GpuMat gpuPersonMask;
-        cv::cuda::bitwise_not(gpuGreenMask, gpuPersonMask);
-
-        // 4️⃣ AGGRESSIVE GREEN FRAGMENT REMOVAL
+        cv::cuda::GpuMat skinMaskHSV;
+        cv::cuda::inRange(gpuHSV, cv::Scalar(0, 30, 80), cv::Scalar(25, 170, 255), skinMaskHSV);
+        
+        cv::cuda::GpuMat skinMask;
+        cv::cuda::bitwise_or(skinMaskYCrCb, skinMaskHSV, skinMask);
+        cv::cuda::bitwise_or(gpuPersonMask, skinMask, gpuPersonMask);
+        
+        // === STEP 5: Dark Color Protection on GPU ===
         std::vector<cv::cuda::GpuMat> hsvChannels(3);
         cv::cuda::split(gpuHSV, hsvChannels);
         
-        // Stage 1: Remove any pixels with high saturation (likely green screen fragments)
-        cv::cuda::GpuMat highSatMask;
-        cv::cuda::threshold(hsvChannels[1], highSatMask, 80, 255, cv::THRESH_BINARY); // Increased from 60 to 80
-        cv::cuda::bitwise_not(highSatMask, highSatMask); // Invert: low sat = keep
-        cv::cuda::bitwise_and(gpuPersonMask, highSatMask, gpuPersonMask);
+        cv::cuda::GpuMat lowV, lowS, darkMask;
+        cv::cuda::threshold(hsvChannels[2], lowV, 60, 255, cv::THRESH_BINARY_INV);
+        cv::cuda::threshold(hsvChannels[1], lowS, 40, 255, cv::THRESH_BINARY_INV);
+        cv::cuda::bitwise_or(lowV, lowS, darkMask);
         
-        // Stage 2: Remove pixels that are greenish (even if not fully green)
-        // Detect pixels with hue in green range (even at lower saturation)
-        cv::cuda::GpuMat nearGreenMask1, nearGreenMask2;
-        cv::cuda::threshold(hsvChannels[0], nearGreenMask1, m_greenHueMin - 5, 255, cv::THRESH_BINARY); // Reduced margin from -10 to -5
-        cv::cuda::threshold(hsvChannels[0], nearGreenMask2, m_greenHueMax + 5, 255, cv::THRESH_BINARY_INV); // Reduced margin from +10 to +5
-        cv::cuda::GpuMat nearGreenRange;
-        cv::cuda::bitwise_and(nearGreenMask1, nearGreenMask2, nearGreenRange);
-        
-        // Remove pixels that are both saturated AND in green hue range
-        cv::cuda::GpuMat satGreenMask;
-        cv::cuda::threshold(hsvChannels[1], satGreenMask, 60, 255, cv::THRESH_BINARY); // Increased from 40 to 60
-        cv::cuda::GpuMat greenFragmentMask;
-        cv::cuda::bitwise_and(nearGreenRange, satGreenMask, greenFragmentMask);
-        cv::cuda::bitwise_not(greenFragmentMask, greenFragmentMask); // Invert to keep non-green
-        cv::cuda::bitwise_and(gpuPersonMask, greenFragmentMask, gpuPersonMask);
-        
-        // Stage 3: Remove pixels with high green channel value
         std::vector<cv::cuda::GpuMat> bgrChannels(3);
         cv::cuda::split(gpuFrame, bgrChannels);
+        cv::cuda::GpuMat lowB;
+        cv::cuda::threshold(bgrChannels[0], lowB, 100, 255, cv::THRESH_BINARY_INV);
+        cv::cuda::bitwise_and(darkMask, lowB, darkMask);
+        cv::cuda::bitwise_or(gpuPersonMask, darkMask, gpuPersonMask);
         
-        cv::cuda::GpuMat greenChannelMask;
-        cv::cuda::threshold(bgrChannels[1], greenChannelMask, 150, 255, cv::THRESH_BINARY_INV); // Increased from 120 to 150
-        cv::cuda::bitwise_and(gpuPersonMask, greenChannelMask, gpuPersonMask);
-
-        // 5️⃣ AGGRESSIVE MORPHOLOGICAL CLEANUP to remove all fragments
-        int openK = std::max(3, m_greenMaskOpen); // Increased minimum for aggressive cleanup
-        int closeK = std::max(7, m_greenMaskClose); // Increased to fill holes better
+        // === STEP 6: Morphological Cleanup on GPU ===
+        int openK = 3, closeK = 5;
+        cv::Ptr<cv::cuda::Filter> morphOpen = cv::cuda::createMorphologyFilter(
+            cv::MORPH_OPEN, CV_8U, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(openK, openK)));
+        cv::Ptr<cv::cuda::Filter> morphClose = cv::cuda::createMorphologyFilter(
+            cv::MORPH_CLOSE, CV_8U, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(closeK, closeK)));
         
-        // Check if cached filters match current kernel sizes, otherwise create new ones
-        static int cachedOpenK = -1;
-        static int cachedCloseK = -1;
+        morphOpen->apply(gpuPersonMask, gpuPersonMask);
+        morphClose->apply(gpuPersonMask, gpuPersonMask);
         
-        if (cachedOpenK != openK || !const_cast<Capture*>(this)->m_greenScreenMorphOpen) {
-            const_cast<Capture*>(this)->m_greenScreenMorphOpen = cv::cuda::createMorphologyFilter(
-                cv::MORPH_OPEN, CV_8U, 
-                cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(openK, openK))
-            );
-            cachedOpenK = openK;
-        }
-        
-        if (cachedCloseK != closeK || !const_cast<Capture*>(this)->m_greenScreenMorphClose) {
-            const_cast<Capture*>(this)->m_greenScreenMorphClose = cv::cuda::createMorphologyFilter(
-                cv::MORPH_CLOSE, CV_8U, 
-                cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(closeK, closeK))
-            );
-            cachedCloseK = closeK;
-        }
-        
-        // Multi-pass morphology for thorough cleanup
-        // Pass 1: Open to remove small fragments and noise
-        if (m_greenScreenMorphOpen) {
-            m_greenScreenMorphOpen->apply(gpuPersonMask, gpuPersonMask);
-        }
-        
-        // Pass 2: Close to fill internal holes
-        if (m_greenScreenMorphClose) {
-            m_greenScreenMorphClose->apply(gpuPersonMask, gpuPersonMask);
-        }
-        
-        // Pass 3: Additional erosion to pull edges inward (removes edge fragments)
-        cv::Ptr<cv::cuda::Filter> erodeFilter = cv::cuda::createMorphologyFilter(
-            cv::MORPH_ERODE, CV_8U, 
-            cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3))
-        );
-        erodeFilter->apply(gpuPersonMask, gpuPersonMask);
-        
-        // Pass 4: Final open to smooth and remove any remaining artifacts
-        if (m_greenScreenMorphOpen) {
-            m_greenScreenMorphOpen->apply(gpuPersonMask, gpuPersonMask);
-        }
-
-        // 6️⃣ EDGE REFINEMENT: Use cached Gaussian blur for smooth edges
-        cv::cuda::GpuMat gpuBlurred;
-        if (m_greenScreenGaussianBlur) {
-            m_greenScreenGaussianBlur->apply(gpuPersonMask, gpuBlurred);
-        } else {
-            gpuBlurred = gpuPersonMask; // Fallback if filter not available
-        }
-
-        // 7️⃣ FINAL THRESHOLD: Convert to clean binary mask
-        cv::cuda::GpuMat gpuFinalMask;
-        cv::cuda::threshold(gpuBlurred, gpuFinalMask, 127, 255, cv::THRESH_BINARY);
-
-        // 🛡️ GPU SYNCHRONIZATION: Ensure all GPU operations complete before CPU processing
         cv::cuda::Stream::Null().waitForCompletion();
-
-        // 🎯 ADVANCED REFINEMENT PIPELINE: Download to CPU for sophisticated algorithms
-        cv::Mat cpuMask, cpuFrame;
+        
+        // === STEP 7: Contour-Based Safety (requires CPU processing) ===
+        cv::Mat cpuMask;
+        gpuPersonMask.download(cpuMask);
+        
         try {
-            gpuFinalMask.download(cpuMask);
-            gpuFrame.download(cpuFrame);
+            std::vector<std::vector<cv::Point>> contours;
+            cv::findContours(cpuMask.clone(), contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
             
-            if (!cpuMask.empty() && !cpuFrame.empty() && cv::countNonZero(cpuMask) > 1000) {
-                // Stage 1: Contour-based refinement to remove fragments
-                try {
-                    cv::Mat refinedMask = refineGreenScreenMaskWithContours(cpuMask, 5000);
-                    if (!refinedMask.empty() && cv::countNonZero(refinedMask) > 1000) {
-                        cpuMask = refinedMask;
+            if (!contours.empty()) {
+                std::vector<std::pair<int, double>> contourAreas;
+                for (size_t i = 0; i < contours.size(); i++) {
+                    contourAreas.push_back({static_cast<int>(i), cv::contourArea(contours[i])});
+                }
+                std::sort(contourAreas.begin(), contourAreas.end(), 
+                          [](const auto& a, const auto& b) { return a.second > b.second; });
+                
+                cv::Mat contourMask = cv::Mat::zeros(cpuMask.size(), CV_8UC1);
+                int keptContours = 0;
+                for (size_t i = 0; i < std::min(contourAreas.size(), (size_t)3); i++) {
+                    if (contourAreas[i].second >= 2000) {
+                        cv::drawContours(contourMask, contours, contourAreas[i].first, cv::Scalar(255), cv::FILLED);
+                        keptContours++;
                     }
-                } catch (const std::exception &e) {
-                    qWarning() << "🛡️ GPU: Contour refinement failed:" << e.what();
                 }
                 
-                // Stage 2: GrabCut refinement (ONLY every 5th frame for stability)
-                static int gpuGrabCutCounter = 0;
-                gpuGrabCutCounter++;
-                bool applyGrabCut = m_isRecording || (gpuGrabCutCounter % 5 == 0);
-                if (applyGrabCut) {
-                    try {
-                        cv::Mat refinedMask = refineWithGrabCut(cpuFrame, cpuMask);
-                        if (!refinedMask.empty() && cv::countNonZero(refinedMask) > 1000) {
-                            cpuMask = refinedMask;
-                            qDebug() << "🎯 GPU path: GrabCut applied successfully";
+                if (keptContours > 0 && cv::countNonZero(contourMask) > 1000) {
+                    cpuMask = contourMask;
+                    qDebug() << "🎨 GPU GREEN SCREEN: Kept" << keptContours << "contours";
+                }
+            }
+        } catch (const std::exception &e) {
+            qWarning() << "🎨 GPU GREEN SCREEN: Contour processing failed:" << e.what();
+        }
+        
+        // === STEP 8: Green Spill Suppression (on CPU) ===
+        try {
+            cv::Mat edges;
+            cv::Canny(cpuMask, edges, 50, 150);
+            cv::Mat edgeDilated;
+            cv::dilate(edges, edgeDilated, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(15, 15)));
+            
+            // Download frame and skin mask for spill suppression
+            cv::Mat cpuSkinMask;
+            skinMask.download(cpuSkinMask);
+            
+            for (int y = 0; y < cpuFrame.rows; y++) {
+                for (int x = 0; x < cpuFrame.cols; x++) {
+                    if (cpuMask.at<uchar>(y, x) > 0 && edgeDilated.at<uchar>(y, x) > 0) {
+                        cv::Vec3b& pixel = cpuFrame.at<cv::Vec3b>(y, x);
+                        uchar B = pixel[0], G = pixel[1], R = pixel[2];
+                        uchar maxRB = std::max(R, B);
+                        
+                        const int threshold = 30;
+                        if (G > maxRB + threshold) {
+                            pixel[1] = cv::saturate_cast<uchar>(G * 0.6 + maxRB * 0.4);
                         }
-                    } catch (const cv::Exception &e) {
-                        qWarning() << "🛡️ GPU: GrabCut failed:" << e.what();
-                    } catch (const std::exception &e) {
-                        qWarning() << "🛡️ GPU: GrabCut exception:" << e.what();
-                    }
-                }
-                
-                // Stage 3: Distance-based refinement to ensure no green near edges
-                try {
-                    cv::Mat refinedMask = applyDistanceBasedRefinement(cpuFrame, cpuMask);
-                    if (!refinedMask.empty() && cv::countNonZero(refinedMask) > 1000) {
-                        cpuMask = refinedMask;
-                    }
-                } catch (const std::exception &e) {
-                    qWarning() << "🛡️ GPU: Distance refinement failed:" << e.what();
-                }
-                
-                // Stage 4: Trimap + Alpha matting (DISABLED - too expensive)
-                /*
-                if (m_isRecording) {
-                    try {
-                        cv::Mat trimap = createTrimap(cpuMask, 5, 10);
-                        if (!trimap.empty()) {
-                            cv::Mat refinedMask = extractPersonWithAlphaMatting(cpuFrame, trimap);
-                            if (!refinedMask.empty() && cv::countNonZero(refinedMask) > 1000) {
-                                cpuMask = refinedMask;
-                            }
-                        }
-                    } catch (const std::exception &e) {
-                        qWarning() << "🛡️ GPU: Alpha matting failed:" << e.what();
-                    }
-                }
-                */
-                
-                // Stage 5: Temporal smoothing to prevent flickering
-                try {
-                    cpuMask = applyTemporalMaskSmoothing(cpuMask);
-                } catch (const std::exception &e) {
-                    qWarning() << "🛡️ GPU: Temporal smoothing failed:" << e.what();
-                }
-                
-                // Upload refined mask back to GPU
-                if (!cpuMask.empty() && cv::countNonZero(cpuMask) > 1000) {
-                    try {
-                        gpuFinalMask.upload(cpuMask);
-                        qDebug() << "🎯 GPU path: Advanced refinement complete";
-                    } catch (const cv::Exception &e) {
-                        qWarning() << "🛡️ GPU: Failed to upload refined mask:" << e.what();
                     }
                 }
             }
-        } catch (const cv::Exception &e) {
-            qWarning() << "🛡️ GPU: Advanced refinement failed:" << e.what() << "- using original mask";
-            // Continue with original mask
         } catch (const std::exception &e) {
-            qWarning() << "🛡️ GPU: Refinement exception:" << e.what() << "- using original mask";
-        } catch (...) {
-            qWarning() << "🛡️ GPU: Unknown error in refinement - using original mask";
+            qWarning() << "🎨 GPU GREEN SCREEN: Spill suppression failed:" << e.what();
         }
-
-        // 🛡️ VALIDATE OUTPUT
-        if (gpuFinalMask.empty()) {
-            qWarning() << "🎨 GPU green screen masking produced empty mask";
-            return emptyMask;
-        }
-
+        
+        // Upload final mask back to GPU
+        cv::cuda::GpuMat gpuFinalMask;
+        gpuFinalMask.upload(cpuMask);
+        
+        qDebug() << "🎨 GPU GREEN SCREEN: Masking complete";
         return gpuFinalMask;
 
     } catch (const cv::Exception &e) {
-        qWarning() << "🎨 GPU green screen masking failed:" << e.what() << "- returning empty mask";
+        qWarning() << "🎨 GPU GREEN SCREEN: Failed:" << e.what() << "- falling back to CPU";
+        // Fallback to CPU implementation
+        cv::Mat cpuFrame;
+        try {
+            gpuFrame.download(cpuFrame);
+            cv::Mat cpuMask = createGreenScreenPersonMask(cpuFrame);
+            if (!cpuMask.empty()) {
+                cv::cuda::GpuMat gpuMask;
+                gpuMask.upload(cpuMask);
+                return gpuMask;
+            }
+        } catch (const cv::Exception &e2) {
+            qWarning() << "🎨 GPU GREEN SCREEN: CPU fallback also failed:" << e2.what();
+        }
         return emptyMask;
     } catch (const std::exception &e) {
-        qWarning() << "🎨 Exception in GPU green screen masking:" << e.what();
-        return emptyMask;
-    } catch (...) {
-        qWarning() << "🎨 Unknown exception in GPU green screen masking";
+        qWarning() << "🎨 GPU GREEN SCREEN: Exception:" << e.what();
         return emptyMask;
     }
 }
