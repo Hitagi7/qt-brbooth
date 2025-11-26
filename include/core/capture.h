@@ -522,11 +522,8 @@ private:
     
     // Lighting Correction Methods
     void initializeLightingCorrection();
-    void setLightingCorrectionEnabled(bool enabled);
-    bool isLightingCorrectionEnabled() const;
     bool isGPULightingAvailable() const;
     void setReferenceTemplate(const QString &templatePath);
-    cv::Mat applyPersonLightingCorrection(const cv::Mat &inputImage, const cv::Mat &personMask);
     cv::Mat createPersonMaskFromSegmentedFrame(const cv::Mat &segmentedFrame);
     cv::Mat applyPersonColorMatching(const cv::Mat &segmentedFrame);
     cv::Mat applyLightingToRawPersonRegion(const cv::Mat &personRegion, const cv::Mat &personMask);

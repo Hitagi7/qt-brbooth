@@ -44,34 +44,11 @@ public:
     bool setReferenceTemplate(const QString &templatePath);
     
     /**
-     * @brief Apply lighting correction to segmented person only
-     * @param inputImage Original image with segmented person
-     * @param personMask Binary mask indicating person pixels (255=person, 0=background)
-     * @param referenceTemplate Background template for lighting reference
-     * @return Corrected image with improved lighting on person only
-     */
-    cv::Mat applyPersonLightingCorrection(const cv::Mat &inputImage, 
-                                         const cv::Mat &personMask, 
-                                         const cv::Mat &referenceTemplate);
-    
-    /**
      * @brief Apply lighting correction to entire image (fallback method)
      * @param inputImage Input image to correct
      * @return Corrected image
      */
     cv::Mat applyGlobalLightingCorrection(const cv::Mat &inputImage);
-    
-    /**
-     * @brief Enable or disable lighting correction
-     * @param enabled true to enable, false to disable
-     */
-    void setEnabled(bool enabled);
-    
-    /**
-     * @brief Check if lighting correction is enabled
-     * @return true if enabled, false otherwise
-     */
-    bool isEnabled() const;
     
     /**
      * @brief Check if GPU acceleration is available
@@ -92,34 +69,14 @@ public:
 
 private:
     // Core lighting correction methods
-    cv::Mat analyzeTemplateLighting(const cv::Mat &templateImage);
-    cv::Mat correctPersonLighting(const cv::Mat &personRegion, 
-                                 const cv::Mat &templateLighting, 
-                                 const cv::Mat &personMask);
-    cv::Mat applyCLAHEWithReference(const cv::Mat &input, 
-                                   const cv::Mat &reference, 
-                                   const cv::Mat &mask);
-    cv::Mat applyColorBalanceWithReference(const cv::Mat &input, 
-                                          const cv::Mat &reference, 
-                                          const cv::Mat &mask);
     cv::Mat applyGammaCorrection(const cv::Mat &input, double gamma);
     
-    
-    // Utility methods
-    cv::Mat extractPersonRegion(const cv::Mat &inputImage, const cv::Mat &personMask);
-    cv::Mat compositeCorrectedPerson(const cv::Mat &originalImage, 
-                                    const cv::Mat &correctedPerson, 
-                                    const cv::Mat &personMask);
-    cv::Mat createSmoothMask(const cv::Mat &binaryMask);
-    
     // Member variables
-    bool m_enabled;
     bool m_gpuAvailable;
     bool m_initialized;
     
     // Reference template
     cv::Mat m_referenceTemplate;
-    cv::Mat m_templateLightingProfile;
     QString m_templatePath;
     
     // GPU resources
@@ -138,7 +95,6 @@ private:
     double m_clipLimit;
     cv::Size m_tileGridSize;
     double m_gammaValue;
-    double m_colorBalanceStrength;
 };
 
 #endif // LIGHTING_CORRECTOR_H
