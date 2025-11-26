@@ -3,31 +3,22 @@
 
 #include <opencv2/opencv.hpp>
 #include <opencv2/cudaimgproc.hpp>
-#include <opencv2/cudacodec.hpp>
-#include <opencv2/imgproc.hpp>
 #include <QString>
 #include <QDebug>
 
 /**
- * @brief Advanced lighting correction system for photo booth applications
+ * @brief Lighting correction system
  * 
- * This class provides intelligent lighting correction that:
+ * This class provides lighting correction that:
  * - Uses background template as reference for optimal lighting
- * - Applies correction only to segmented subjects (not background)
+ * - Applies correction only to segmented subjects 
  * - Supports both GPU and CPU processing
  * - Maintains natural skin tones and prevents over-correction
  */
 class LightingCorrector
 {
 public:
-    /**
-     * @brief Constructor
-     */
     LightingCorrector();
-    
-    /**
-     * @brief Destructor
-     */
     ~LightingCorrector();
     
     /**
@@ -37,64 +28,39 @@ public:
     bool initialize();
     
     /**
-     * @brief Set the reference template for lighting correction
-     * @param templatePath Path to the background template image
-     * @return true if template loaded successfully, false otherwise
-     */
-    bool setReferenceTemplate(const QString &templatePath);
-    
-    /**
      * @brief Apply lighting correction to entire image (fallback method)
      * @param inputImage Input image to correct
      * @return Corrected image
      */
     cv::Mat applyGlobalLightingCorrection(const cv::Mat &inputImage);
     
-    /**
-     * @brief Check if GPU acceleration is available
-     * @return true if GPU available, false otherwise
-     */
+    // Check if GPU is available
     bool isGPUAvailable() const;
     
-    /**
-     * @brief Get the current reference template
-     * @return Reference template image
-     */
+    // Gets the background template that's used as a reference
     cv::Mat getReferenceTemplate() const;
-    
-    /**
-     * @brief Clean up resources
-     */
+
+    // Loads the selected background image to use as a lighting reference
+    bool setReferenceTemplate(const QString &templatePath);
+
+    // Free up GPU/CPU resources
     void cleanup();
 
 private:
-    // Core lighting correction methods
+    // Adjusts brightness using gamma curve
     cv::Mat applyGammaCorrection(const cv::Mat &input, double gamma);
     
     // Member variables
     bool m_gpuAvailable;
     bool m_initialized;
+    cv::Mat m_referenceTemplate;  // Background image we use as lighting reference
+    cv::Ptr<cv::cuda::CLAHE> m_gpuCLAHE;  // GPU contrast enhancer
+    cv::Ptr<cv::CLAHE> m_cpuCLAHE;  // CPU contrast enhancer (fallback)
     
-    // Reference template
-    cv::Mat m_referenceTemplate;
-    QString m_templatePath;
-    
-    // GPU resources
-    cv::Ptr<cv::cuda::CLAHE> m_gpuCLAHE;
-    cv::cuda::GpuMat m_gpuInputBuffer;
-    cv::cuda::GpuMat m_gpuMaskBuffer;
-    cv::cuda::GpuMat m_gpuTemplateBuffer;
-    cv::cuda::GpuMat m_gpuOutputBuffer;
-    cv::cuda::GpuMat m_gpuTempBuffer1;
-    cv::cuda::GpuMat m_gpuTempBuffer2;
-    
-    // CPU resources
-    cv::Ptr<cv::CLAHE> m_cpuCLAHE;
-    
-    // Processing parameters
-    double m_clipLimit;
-    cv::Size m_tileGridSize;
-    double m_gammaValue;
+    // Tuning parameters - tweak these if results look off
+    double m_clipLimit;  // How much contrast boost (higher = more aggressive)
+    cv::Size m_tileGridSize;  // Grid size for adaptive processing
+    double m_gammaValue;  // Brightness adjustment (1.5 = brighter)
 };
 
 #endif // LIGHTING_CORRECTOR_H
