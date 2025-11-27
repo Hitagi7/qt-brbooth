@@ -616,6 +616,15 @@ private:
         double greenRatioMin = 0.42;
         double lumaMin = 30.0;
         double probabilityThreshold = 0.55;
+        int guardValueMax = 140;
+        int guardSatMax = 80;
+        double edgeGuardMin = 45.0;
+        int hueGuardPadding = 6;
+        double invVarB = 1.0 / 400.0;
+        double invVarG = 1.0 / 400.0;
+        double invVarR = 1.0 / 400.0;
+        double colorDistanceThreshold = 3.2;
+        double colorGuardThreshold = 4.8;
     };
 
     void updateGreenBackgroundModel(const cv::Mat &frame) const;
@@ -635,6 +644,11 @@ private:
     mutable double m_bgRedMean;
     mutable double m_bgGreenMean;
     mutable double m_bgBlueMean;
+    mutable double m_bgRedStd;
+    mutable double m_bgGreenStd;
+    mutable double m_bgBlueStd;
+    mutable cv::Matx33d m_bgColorInvCov;
+    mutable bool m_bgColorInvCovReady;
 };
 
 #endif // CAPTURE_H
