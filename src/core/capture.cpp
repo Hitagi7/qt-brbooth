@@ -4623,7 +4623,7 @@ Capture::AdaptiveGreenThresholds Capture::computeAdaptiveGreenThresholds() const
     return thresholds;
 }
 
-// FAST GREEN-ONLY REMOVAL: Remove green pixels (hue 35-85, including dark green)
+// AGGRESSIVE GREEN REMOVAL: Remove all green pixels including boundary pixels
 cv::Mat Capture::createGreenScreenPersonMask(const cv::Mat &frame) const
 {
     if (frame.empty()) return cv::Mat();
@@ -4631,10 +4631,13 @@ cv::Mat Capture::createGreenScreenPersonMask(const cv::Mat &frame) const
     cv::Mat hsv;
     cv::cvtColor(frame, hsv, cv::COLOR_BGR2HSV);
 
-    // Single inRange operation: Hue 35-85 (green), Sat >20 (has color), Val >15 (not pure black)
-    // This captures ALL greens including dark green, while excluding black/blue/red
+    // Wider range: Hue 30-90 (catch more green shades), Sat >15, Val >10
     cv::Mat greenMask;
-    cv::inRange(hsv, cv::Scalar(35, 20, 15), cv::Scalar(85, 255, 255), greenMask);
+    cv::inRange(hsv, cv::Scalar(30, 15, 10), cv::Scalar(90, 255, 255), greenMask);
+
+    // DILATE green mask to catch boundary pixels that are partially green
+    cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
+    cv::dilate(greenMask, greenMask, kernel);
 
     // Invert: NOT green = person
     cv::Mat personMask;
@@ -4678,13 +4681,25 @@ cv::cuda::GpuMat Capture::createGreenScreenPersonMaskGPU(const cv::cuda::GpuMat 
             }
         }
 
-        // 🎯 GPU: FAST GREEN-ONLY REMOVAL
+        // 🎯 GPU: AGGRESSIVE GREEN REMOVAL
         cv::cuda::GpuMat gpuHSV;
         cv::cuda::cvtColor(gpuFrame, gpuHSV, cv::COLOR_BGR2HSV);
 
-        // Single inRange: Hue 35-85, Sat >20, Val >15
+        // Wider range: Hue 30-90, Sat >15, Val >10
         cv::cuda::GpuMat greenMask;
-        cv::cuda::inRange(gpuHSV, cv::Scalar(35, 20, 15), cv::Scalar(85, 255, 255), greenMask);
+        cv::cuda::inRange(gpuHSV, cv::Scalar(30, 15, 10), cv::Scalar(90, 255, 255), greenMask);
+
+        // DILATE green mask to catch boundary pixels
+        static cv::Ptr<cv::cuda::Filter> dilateFilter;
+        if (!dilateFilter) {
+            dilateFilter = cv::cuda::createMorphologyFilter(
+                cv::MORPH_DILATE, CV_8U,
+                cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5))
+            );
+        }
+        if (dilateFilter) {
+            dilateFilter->apply(greenMask, greenMask);
+        }
 
         // Invert: NOT green = person
         cv::cuda::GpuMat gpuPersonMask;
