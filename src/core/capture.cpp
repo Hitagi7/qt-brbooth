@@ -27,6 +27,7 @@
 #include <QFileInfo>
 #include <QSet>
 #include <algorithm>
+#include <cmath>
 #include <opencv2/opencv.hpp>
 #include <opencv2/objdetect.hpp>
 #include <opencv2/video.hpp>
@@ -280,6 +281,20 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     , m_hasLightingComparison(false)
     , m_hasVideoLightingComparison(false)
     , m_recordedPersonScaleFactor(1.0) // Initialize to default scale (100%)
+    , m_bgModelInitialized(false)
+    , m_bgHueMean(60.0)
+    , m_bgHueStd(10.0)
+    , m_bgSatMean(120.0)
+    , m_bgSatStd(20.0)
+    , m_bgValMean(120.0)
+    , m_bgValStd(20.0)
+    , m_bgCbMean(90.0)
+    , m_bgCbStd(10.0)
+    , m_bgCrMean(120.0)
+    , m_bgCrStd(10.0)
+    , m_bgRedMean(60.0)
+    , m_bgGreenMean(150.0)
+    , m_bgBlueMean(60.0)
 
 {
     ui->setupUi(this);
@@ -1854,7 +1869,6 @@ void Capture::performImageCapture()
             // Apply person-only lighting correction using template reference
             cv::Mat lightingCorrectedFrame;
             qDebug() << "🌟 LIGHTING DEBUG - Segmentation mode detected";
-            qDebug() << "🌟 LIGHTING DEBUG - Lighting enabled:" << isLightingCorrectionEnabled();
             qDebug() << "🌟 LIGHTING DEBUG - Background template enabled:" << m_useBackgroundTemplate;
             qDebug() << "🌟 LIGHTING DEBUG - Template path:" << m_selectedBackgroundTemplate;
             qDebug() << "🌟 LIGHTING DEBUG - Lighting corrector exists:" << (m_lightingCorrector != nullptr);
@@ -1880,10 +1894,9 @@ void Capture::performImageCapture()
             cv::Mat originalFrame = qImageToCvMat(m_originalCameraImage);
             cv::Mat lightingCorrectedFrame;
             qDebug() << "🌟 LIGHTING DEBUG - Normal mode detected";
-            qDebug() << "🌟 LIGHTING DEBUG - Lighting enabled:" << isLightingCorrectionEnabled();
             qDebug() << "🌟 LIGHTING DEBUG - Lighting corrector exists:" << (m_lightingCorrector != nullptr);
             
-            if (isLightingCorrectionEnabled() && m_lightingCorrector) {
+            if (m_lightingCorrector) {
                 lightingCorrectedFrame = m_lightingCorrector->applyGlobalLightingCorrection(originalFrame);
                 qDebug() << "🎯 Applied global lighting correction (normal mode)";
             } else {
@@ -2520,6 +2533,7 @@ cv::Mat Capture::processFrameWithGPUOnlyPipeline(const cv::Mat &frame)
         return cv::Mat();
     }
 
+    updateGreenBackgroundModel(frame);
     m_personDetectionTimer.start();
 
     try {
@@ -4583,43 +4597,286 @@ cv::Mat Capture::getMotionMask(const cv::Mat &frame)
     return fgMask;
 }
 
+void Capture::updateGreenBackgroundModel(const cv::Mat &frame) const
+{
+    if (frame.empty() || frame.channels() != 3) {
+        return;
+    }
+
+    const int rawBorderX = std::max(6, frame.cols / 24);
+    const int rawBorderY = std::max(6, frame.rows / 24);
+    const int borderX = std::min(rawBorderX, frame.cols);
+    const int borderY = std::min(rawBorderY, frame.rows);
+
+    if (borderX <= 0 || borderY <= 0) {
+        return;
+    }
+
+    cv::Mat sampleMask = cv::Mat::zeros(frame.size(), CV_8UC1);
+    const cv::Rect topRect(0, 0, frame.cols, borderY);
+    const cv::Rect bottomRect(0, std::max(0, frame.rows - borderY), frame.cols, borderY);
+    const cv::Rect leftRect(0, 0, borderX, frame.rows);
+    const cv::Rect rightRect(std::max(0, frame.cols - borderX), 0, borderX, frame.rows);
+
+    cv::rectangle(sampleMask, topRect, cv::Scalar(255), cv::FILLED);
+    cv::rectangle(sampleMask, bottomRect, cv::Scalar(255), cv::FILLED);
+    cv::rectangle(sampleMask, leftRect, cv::Scalar(255), cv::FILLED);
+    cv::rectangle(sampleMask, rightRect, cv::Scalar(255), cv::FILLED);
+
+    const int samplePixels = cv::countNonZero(sampleMask);
+    if (samplePixels < (frame.rows + frame.cols)) {
+        return;
+    }
+
+    cv::Mat hsv, ycrcb;
+    cv::cvtColor(frame, hsv, cv::COLOR_BGR2HSV);
+    cv::cvtColor(frame, ycrcb, cv::COLOR_BGR2YCrCb);
+
+    cv::Scalar hsvMean, hsvStd;
+    cv::Scalar ycrcbMean, ycrcbStd;
+    cv::Scalar bgrMean, bgrStd;
+
+    cv::meanStdDev(hsv, hsvMean, hsvStd, sampleMask);
+    cv::meanStdDev(ycrcb, ycrcbMean, ycrcbStd, sampleMask);
+    cv::meanStdDev(frame, bgrMean, bgrStd, sampleMask);
+
+    const bool alreadyInitialized = m_bgModelInitialized;
+    auto blendValue = [alreadyInitialized](double current, double measurement) {
+        if (!alreadyInitialized) return measurement;
+        return 0.85 * current + 0.15 * measurement;
+    };
+
+    m_bgHueMean = blendValue(m_bgHueMean, hsvMean[0]);
+    m_bgHueStd = blendValue(m_bgHueStd, std::max(1.0, hsvStd[0]));
+    m_bgSatMean = blendValue(m_bgSatMean, hsvMean[1]);
+    m_bgSatStd = blendValue(m_bgSatStd, std::max(1.0, hsvStd[1]));
+    m_bgValMean = blendValue(m_bgValMean, hsvMean[2]);
+    m_bgValStd = blendValue(m_bgValStd, std::max(1.0, hsvStd[2]));
+
+    m_bgCbMean = blendValue(m_bgCbMean, ycrcbMean[2]);
+    m_bgCbStd = blendValue(m_bgCbStd, std::max(1.0, ycrcbStd[2]));
+    m_bgCrMean = blendValue(m_bgCrMean, ycrcbMean[1]);
+    m_bgCrStd = blendValue(m_bgCrStd, std::max(1.0, ycrcbStd[1]));
+
+    m_bgBlueMean = blendValue(m_bgBlueMean, bgrMean[0]);
+    m_bgGreenMean = blendValue(m_bgGreenMean, bgrMean[1]);
+    m_bgRedMean = blendValue(m_bgRedMean, bgrMean[2]);
+
+    m_bgModelInitialized = true;
+}
+
+Capture::AdaptiveGreenThresholds Capture::computeAdaptiveGreenThresholds() const
+{
+    AdaptiveGreenThresholds thresholds;
+
+    auto clampHue = [](int value) {
+        return std::max(0, std::min(179, value));
+    };
+    auto clampByte = [](int value) {
+        return std::max(0, std::min(255, value));
+    };
+
+    if (!m_bgModelInitialized) {
+        thresholds.hueMin = clampHue(m_greenHueMin);
+        thresholds.hueMax = clampHue(m_greenHueMax);
+        thresholds.strictSatMin = clampByte(m_greenSatMin);
+        thresholds.relaxedSatMin = clampByte(std::max(10, m_greenSatMin - 10));
+        thresholds.strictValMin = clampByte(m_greenValMin);
+        thresholds.relaxedValMin = clampByte(std::max(10, m_greenValMin - 10));
+        thresholds.darkSatMin = clampByte(std::max(5, m_greenSatMin - 10));
+        thresholds.darkValMax = clampByte(m_greenValMin + 50);
+        thresholds.cbMin = 50.0;
+        thresholds.cbMax = 150.0;
+        thresholds.crMax = 150.0;
+        thresholds.greenDelta = 8.0;
+        thresholds.greenRatioMin = 0.45;
+        thresholds.lumaMin = 45.0;
+        thresholds.probabilityThreshold = 0.55;
+        return thresholds;
+    }
+
+    const double hueStd = std::max(4.0, m_bgHueStd);
+    const double satStd = std::max(4.0, m_bgSatStd);
+    const double valStd = std::max(4.0, m_bgValStd);
+    const double cbStd = std::max(2.5, m_bgCbStd);
+    const double crStd = std::max(2.5, m_bgCrStd);
+
+    const int huePadding = static_cast<int>(std::round(2.5 * hueStd)) + 4;
+    const int relaxedSatAmount = static_cast<int>(std::round(1.9 * satStd)) + 5;
+    const int relaxedValAmount = static_cast<int>(std::round(1.6 * valStd)) + 5;
+
+    thresholds.hueMin = clampHue(static_cast<int>(std::round(m_bgHueMean)) - huePadding);
+    thresholds.hueMax = clampHue(static_cast<int>(std::round(m_bgHueMean)) + huePadding);
+    thresholds.strictSatMin = clampByte(static_cast<int>(std::round(m_bgSatMean - 0.6 * satStd)));
+    thresholds.relaxedSatMin = clampByte(std::max(18, static_cast<int>(std::round(m_bgSatMean - relaxedSatAmount))));
+    thresholds.strictValMin = clampByte(static_cast<int>(std::round(m_bgValMean - 0.6 * valStd)));
+    thresholds.relaxedValMin = clampByte(std::max(18, static_cast<int>(std::round(m_bgValMean - relaxedValAmount))));
+    thresholds.darkSatMin = clampByte(std::max(5, static_cast<int>(std::round(m_bgSatMean - 0.8 * satStd))));
+    thresholds.darkValMax = clampByte(static_cast<int>(std::round(m_bgValMean + 2.2 * valStd)));
+
+    const double cbRange = 2.2 * cbStd + 6.0;
+    thresholds.cbMin = std::max(0.0, m_bgCbMean - cbRange);
+    thresholds.cbMax = std::min(255.0, m_bgCbMean + cbRange);
+    thresholds.crMax = std::min(255.0, m_bgCrMean + 2.4 * crStd + 6.0);
+
+    const double greenDominance = m_bgGreenMean - std::max(m_bgRedMean, m_bgBlueMean);
+    thresholds.greenDelta = std::max(4.0, greenDominance * 0.35 + 6.0);
+    const double sumRGB = std::max(1.0, m_bgRedMean + m_bgGreenMean + m_bgBlueMean);
+    const double bgRatio = m_bgGreenMean / sumRGB;
+    thresholds.greenRatioMin = std::clamp(bgRatio - 0.05, 0.35, 0.8);
+    thresholds.lumaMin = std::max(25.0, m_bgValMean - 1.2 * valStd);
+    thresholds.probabilityThreshold = 0.58;
+
+    return thresholds;
+}
+
 // Create a person mask from non-green areas using HSV thresholding
 cv::Mat Capture::createGreenScreenPersonMask(const cv::Mat &frame) const
 {
     if (frame.empty()) return cv::Mat();
 
-    cv::Mat hsv, bgr;
-    cv::cvtColor(frame, hsv, cv::COLOR_BGR2HSV);
-    bgr = frame.clone();
+    updateGreenBackgroundModel(frame);
+    const auto thresholds = computeAdaptiveGreenThresholds();
 
-    // Split channels for multi-stage filtering
+    cv::Mat hsv;
+    cv::cvtColor(frame, hsv, cv::COLOR_BGR2HSV);
+    cv::Mat ycrcb;
+    cv::cvtColor(frame, ycrcb, cv::COLOR_BGR2YCrCb);
+
     std::vector<cv::Mat> hsvChannels(3);
     cv::split(hsv, hsvChannels);
-    std::vector<cv::Mat> bgrChannels(3);
-    cv::split(bgr, bgrChannels);
 
-    // PRIMARY CHROMA KEY: Threshold for green background
-    cv::Scalar lower(m_greenHueMin, m_greenSatMin, m_greenValMin);
-    cv::Scalar upper(m_greenHueMax, 255, 255);
-    cv::Mat greenMask;
-    cv::inRange(hsv, lower, upper, greenMask);
+    std::vector<cv::Mat> bgrChannels(3);
+    cv::split(frame, bgrChannels);
+    std::vector<cv::Mat> ycrcbChannels(3);
+    cv::split(ycrcb, ycrcbChannels);
+
+    cv::Mat frameFloat;
+    frame.convertTo(frameFloat, CV_32F);
+    std::vector<cv::Mat> floatChannels(3);
+    cv::split(frameFloat, floatChannels);
+
+    cv::Mat sumFloat;
+    cv::add(floatChannels[0], floatChannels[1], sumFloat);
+    cv::add(sumFloat, floatChannels[2], sumFloat);
+    cv::add(sumFloat, cv::Scalar(1e-3f), sumFloat);
+
+    cv::Mat greenRatio;
+    cv::divide(floatChannels[1], sumFloat, greenRatio);
+    cv::Mat ratioMask;
+    cv::threshold(greenRatio, ratioMask, thresholds.greenRatioMin, 255.0, cv::THRESH_BINARY);
+    ratioMask.convertTo(ratioMask, CV_8U);
+
+    cv::Mat lumaMask;
+    cv::compare(ycrcbChannels[0], cv::Scalar(thresholds.lumaMin), lumaMask, cv::CMP_GE);
+
+    cv::Mat strictGreenMask;
+    cv::inRange(
+        hsv,
+        cv::Scalar(thresholds.hueMin, thresholds.strictSatMin, thresholds.strictValMin),
+        cv::Scalar(thresholds.hueMax, 255, 255),
+        strictGreenMask
+    );
+
+    cv::Mat washedGreenMask;
+    cv::inRange(
+        hsv,
+        cv::Scalar(thresholds.hueMin, std::max(0, thresholds.relaxedSatMin), std::max(0, thresholds.relaxedValMin)),
+        cv::Scalar(thresholds.hueMax, 255, 255),
+        washedGreenMask
+    );
+
+    cv::Mat darkGreenMask;
+    cv::inRange(
+        hsv,
+        cv::Scalar(thresholds.hueMin, std::max(0, thresholds.darkSatMin), 0),
+        cv::Scalar(thresholds.hueMax, 255, thresholds.darkValMax),
+        darkGreenMask
+    );
+
+    cv::Mat cbMask, crMask, ycbcrMask;
+    cv::inRange(ycrcbChannels[2], thresholds.cbMin, thresholds.cbMax, cbMask);
+    cv::inRange(ycrcbChannels[1], 0, thresholds.crMax, crMask);
+    cv::bitwise_and(cbMask, crMask, ycbcrMask);
+
+    cv::Mat maxBR;
+    cv::max(bgrChannels[0], bgrChannels[2], maxBR);
+    cv::Mat g32, max32, diff32;
+    bgrChannels[1].convertTo(g32, CV_32F);
+    maxBR.convertTo(max32, CV_32F);
+    cv::subtract(g32, max32, diff32);
+    cv::Mat dominanceMask;
+    cv::compare(diff32, cv::Scalar(thresholds.greenDelta), dominanceMask, cv::CMP_GT);
+
+    auto gateMask = [](cv::Mat &target, const cv::Mat &gate) {
+        if (target.empty() || gate.empty()) {
+            return;
+        }
+        cv::bitwise_and(target, gate, target);
+    };
+
+    gateMask(washedGreenMask, lumaMask);
+    gateMask(ycbcrMask, lumaMask);
+
+    gateMask(washedGreenMask, ratioMask);
+    gateMask(darkGreenMask, ratioMask);
+    gateMask(ycbcrMask, ratioMask);
+    gateMask(dominanceMask, ratioMask);
+
+    cv::Mat probability = cv::Mat::zeros(frame.size(), CV_32F);
+    auto accumulateWeighted = [&probability](const cv::Mat &mask, float weight) {
+        if (mask.empty() || weight <= 0.0f) {
+            return;
+        }
+        cv::Mat mask32;
+        mask.convertTo(mask32, CV_32F, weight / 255.0f);
+        cv::add(probability, mask32, probability);
+    };
+
+    const float wWashed = 0.9f;
+    const float wDark = 0.7f;
+    const float wYcbcr = 0.6f;
+    const float wDominance = 0.5f;
+    const float totalWeight = wWashed + wDark + wYcbcr + wDominance;
+
+    accumulateWeighted(washedGreenMask, wWashed);
+    accumulateWeighted(darkGreenMask, wDark);
+    accumulateWeighted(ycbcrMask, wYcbcr);
+    accumulateWeighted(dominanceMask, wDominance);
+
+    if (totalWeight > 0.0f) {
+        probability *= (1.0f / totalWeight);
+    }
+
+    cv::Mat probabilityMask;
+    cv::compare(probability, cv::Scalar(static_cast<float>(thresholds.probabilityThreshold)), probabilityMask, cv::CMP_GE);
+    probabilityMask.convertTo(probabilityMask, CV_8U);
+
+    cv::Mat backgroundMask;
+    cv::bitwise_or(strictGreenMask, probabilityMask, backgroundMask);
 
     // Non-green = potential person
     cv::Mat personMask;
-    cv::bitwise_not(greenMask, personMask);
+    cv::bitwise_not(backgroundMask, personMask);
 
-    // ✅ SIMPLIFIED CLEANUP: Only basic morphological operations (no aggressive fragment removal)
-    // Light morphological cleanup to remove small noise
-    int openK = 3;  // Small kernel for light cleanup only
-    int closeK = 5; // Small kernel to fill tiny holes only
+    // ✅ ONLY LIGHT MORPHOLOGY: Keep black/dark colors intact while smoothing edges
+    auto normalizedKernel = [](int size, int fallback) {
+        int kernel = size > 0 ? size : fallback;
+        if (kernel < 3) kernel = 3;
+        if ((kernel % 2) == 0) kernel += 1;
+        return kernel;
+    };
+    int openK = normalizedKernel(m_greenMaskOpen, 3);
+    int closeK = normalizedKernel(std::max(m_greenMaskClose, openK + 2), 5);
+
     cv::Mat kOpen = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(openK, openK));
     cv::Mat kClose = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(closeK, closeK));
-    
-    // Single-pass light morphology (not aggressive)
-    cv::morphologyEx(personMask, personMask, cv::MORPH_OPEN, kOpen);  // Remove small noise
-    cv::morphologyEx(personMask, personMask, cv::MORPH_CLOSE, kClose); // Fill tiny holes
 
-    // Feather edges for natural compositing
+    cv::morphologyEx(personMask, personMask, cv::MORPH_OPEN, kOpen);   // Remove speckles
+    cv::morphologyEx(personMask, personMask, cv::MORPH_CLOSE, kClose); // Fill pin holes
+    cv::medianBlur(personMask, personMask, 3);                         // Kill single-pixel flicker
+
+    // Feather edges for natural compositing without shrinking mask
     cv::GaussianBlur(personMask, personMask, cv::Size(5, 5), 0);
     cv::threshold(personMask, personMask, 127, 255, cv::THRESH_BINARY);
 
@@ -4645,6 +4902,16 @@ cv::cuda::GpuMat Capture::createGreenScreenPersonMaskGPU(const cv::cuda::GpuMat 
         return emptyMask;
     }
 
+    if (!m_bgModelInitialized) {
+        try {
+            cv::Mat fallbackFrame;
+            gpuFrame.download(fallbackFrame);
+            updateGreenBackgroundModel(fallbackFrame);
+        } catch (const cv::Exception &) {
+            // Ignore download errors; thresholds fallback to defaults
+        }
+    }
+
     try {
         // 🚀 INITIALIZE CACHED FILTERS (once only, reused for all frames)
         static bool filtersInitialized = false;
@@ -4661,24 +4928,135 @@ cv::cuda::GpuMat Capture::createGreenScreenPersonMaskGPU(const cv::cuda::GpuMat 
             }
         }
 
-        // 1️⃣ CONVERT TO HSV ON GPU
+        // 1️⃣ CONVERT TO HSV/YCrCb ON GPU
         cv::cuda::GpuMat gpuHSV;
         cv::cuda::cvtColor(gpuFrame, gpuHSV, cv::COLOR_BGR2HSV);
+        cv::cuda::GpuMat gpuYCrCb;
+        cv::cuda::cvtColor(gpuFrame, gpuYCrCb, cv::COLOR_BGR2YCrCb);
 
-        // 2️⃣ CHROMA KEY: Isolate green background using GPU
-        cv::Scalar lower(m_greenHueMin, m_greenSatMin, m_greenValMin);
-        cv::Scalar upper(m_greenHueMax, 255, 255);
-        cv::cuda::GpuMat gpuGreenMask;
-        cv::cuda::inRange(gpuHSV, lower, upper, gpuGreenMask);
+        const auto thresholds = computeAdaptiveGreenThresholds();
+
+        // 2️⃣ CHROMA KEY: Multi-space voting (HSV + YCrCb + dominance)
+        cv::cuda::GpuMat gpuStrictMask, gpuWashedMask, gpuDarkMask;
+        cv::cuda::inRange(
+            gpuHSV,
+            cv::Scalar(thresholds.hueMin, thresholds.strictSatMin, thresholds.strictValMin),
+            cv::Scalar(thresholds.hueMax, 255, 255),
+            gpuStrictMask
+        );
+        cv::cuda::inRange(
+            gpuHSV,
+            cv::Scalar(thresholds.hueMin, std::max(0, thresholds.relaxedSatMin), std::max(0, thresholds.relaxedValMin)),
+            cv::Scalar(thresholds.hueMax, 255, 255),
+            gpuWashedMask
+        );
+        cv::cuda::inRange(
+            gpuHSV,
+            cv::Scalar(thresholds.hueMin, std::max(0, thresholds.darkSatMin), 0),
+            cv::Scalar(thresholds.hueMax, 255, thresholds.darkValMax),
+            gpuDarkMask
+        );
+
+        std::vector<cv::cuda::GpuMat> ycrcbChannels(3);
+        cv::cuda::split(gpuYCrCb, ycrcbChannels);
+        std::vector<cv::cuda::GpuMat> bgrChannels(3);
+        cv::cuda::split(gpuFrame, bgrChannels);
+
+        cv::cuda::GpuMat cbLower, cbUpper, cbBand, crBand, gpuYcbcrMask;
+        cv::cuda::compare(ycrcbChannels[2], cv::Scalar(thresholds.cbMin), cbLower, cv::CMP_GE);
+        cv::cuda::compare(ycrcbChannels[2], cv::Scalar(thresholds.cbMax), cbUpper, cv::CMP_LE);
+        cv::cuda::bitwise_and(cbLower, cbUpper, cbBand);
+        cv::cuda::compare(ycrcbChannels[1], cv::Scalar(thresholds.crMax), crBand, cv::CMP_LE);
+        cv::cuda::bitwise_and(cbBand, crBand, gpuYcbcrMask);
+
+        cv::cuda::GpuMat maxBR;
+        cv::cuda::max(bgrChannels[0], bgrChannels[2], maxBR);
+        cv::cuda::GpuMat g32, max32, diff32;
+        bgrChannels[1].convertTo(g32, CV_32F);
+        maxBR.convertTo(max32, CV_32F);
+        cv::cuda::subtract(g32, max32, diff32);
+        cv::cuda::GpuMat gpuDominanceMask;
+        cv::cuda::compare(diff32, cv::Scalar(thresholds.greenDelta), gpuDominanceMask, cv::CMP_GT);
+
+        std::vector<cv::cuda::GpuMat> bgrFloatChannels(3);
+        for (int i = 0; i < 3; ++i) {
+            bgrChannels[i].convertTo(bgrFloatChannels[i], CV_32F);
+        }
+
+        cv::cuda::GpuMat sumFloat;
+        cv::cuda::add(bgrFloatChannels[0], bgrFloatChannels[1], sumFloat);
+        cv::cuda::add(sumFloat, bgrFloatChannels[2], sumFloat);
+        cv::cuda::add(sumFloat, cv::Scalar(1e-3f), sumFloat);
+
+        cv::cuda::GpuMat greenRatio;
+        cv::cuda::divide(bgrFloatChannels[1], sumFloat, greenRatio);
+        cv::cuda::GpuMat gpuRatioMask;
+        cv::cuda::threshold(greenRatio, gpuRatioMask, thresholds.greenRatioMin, 255.0, cv::THRESH_BINARY);
+        gpuRatioMask.convertTo(gpuRatioMask, CV_8U);
+
+        cv::cuda::GpuMat gpuLumaMask;
+        cv::cuda::compare(ycrcbChannels[0], cv::Scalar(thresholds.lumaMin), gpuLumaMask, cv::CMP_GE);
+
+        auto gateMask = [](cv::cuda::GpuMat &target, const cv::cuda::GpuMat &gate) {
+            if (target.empty() || gate.empty()) {
+                return;
+            }
+            cv::cuda::bitwise_and(target, gate, target);
+        };
+
+        gateMask(gpuWashedMask, gpuLumaMask);
+        gateMask(gpuYcbcrMask, gpuLumaMask);
+
+        gateMask(gpuWashedMask, gpuRatioMask);
+        gateMask(gpuDarkMask, gpuRatioMask);
+        gateMask(gpuYcbcrMask, gpuRatioMask);
+        gateMask(gpuDominanceMask, gpuRatioMask);
+
+        cv::cuda::GpuMat gpuProbability(gpuFrame.size(), CV_32F);
+        gpuProbability.setTo(cv::Scalar::all(0));
+        auto accumulateWeighted = [&gpuProbability](const cv::cuda::GpuMat &mask, float weight) {
+            if (mask.empty() || weight <= 0.0f) {
+                return;
+            }
+            cv::cuda::GpuMat mask32;
+            mask.convertTo(mask32, CV_32F, weight / 255.0f);
+            cv::cuda::add(gpuProbability, mask32, gpuProbability);
+        };
+
+        const float wWashed = 0.9f;
+        const float wDark = 0.7f;
+        const float wYcbcr = 0.6f;
+        const float wDominance = 0.5f;
+        const float totalWeight = wWashed + wDark + wYcbcr + wDominance;
+
+        accumulateWeighted(gpuWashedMask, wWashed);
+        accumulateWeighted(gpuDarkMask, wDark);
+        accumulateWeighted(gpuYcbcrMask, wYcbcr);
+        accumulateWeighted(gpuDominanceMask, wDominance);
+
+        if (totalWeight > 0.0f) {
+            cv::cuda::multiply(gpuProbability, cv::Scalar(1.0f / totalWeight), gpuProbability);
+        }
+
+        cv::cuda::GpuMat gpuProbabilityMask;
+        cv::cuda::compare(gpuProbability, cv::Scalar(thresholds.probabilityThreshold), gpuProbabilityMask, cv::CMP_GE);
+
+        cv::cuda::GpuMat gpuBackgroundMask;
+        cv::cuda::bitwise_or(gpuStrictMask, gpuProbabilityMask, gpuBackgroundMask);
 
         // 3️⃣ INVERT: Non-green = person
         cv::cuda::GpuMat gpuPersonMask;
-        cv::cuda::bitwise_not(gpuGreenMask, gpuPersonMask);
+        cv::cuda::bitwise_not(gpuBackgroundMask, gpuPersonMask);
 
         // ✅ SIMPLIFIED CLEANUP: Only basic morphological operations (no aggressive fragment removal)
-        // Light morphological cleanup to remove small noise
-        int openK = 3;  // Small kernel for light cleanup only
-        int closeK = 5; // Small kernel to fill tiny holes only
+        auto normalizedKernel = [](int size, int fallback) {
+            int kernel = size > 0 ? size : fallback;
+            if (kernel < 3) kernel = 3;
+            if ((kernel % 2) == 0) kernel += 1;
+            return kernel;
+        };
+        int openK = normalizedKernel(m_greenMaskOpen, 3);
+        int closeK = normalizedKernel(std::max(m_greenMaskClose, openK + 2), 5);
         
         // Check if cached filters match current kernel sizes, otherwise create new ones
         static int cachedOpenK = -1;
@@ -4730,7 +5108,10 @@ cv::cuda::GpuMat Capture::createGreenScreenPersonMaskGPU(const cv::cuda::GpuMat 
         cv::Mat cpuMask;
         try {
             gpuFinalMask.download(cpuMask);
-            
+            if (!cpuMask.empty()) {
+                cv::medianBlur(cpuMask, cpuMask, 3);
+            }
+
             if (!cpuMask.empty() && cv::countNonZero(cpuMask) > 1000) {
                 // ✅ TEMPORAL SMOOTHING ONLY: Prevent flickering across frames
                 try {

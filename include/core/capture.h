@@ -599,6 +599,42 @@ private:
     // 🎯 Temporal green screen mask smoothing
     mutable cv::Mat m_lastGreenScreenMask;
     mutable int m_greenScreenMaskStableCount;
+
+    struct AdaptiveGreenThresholds {
+        int hueMin = 30;
+        int hueMax = 95;
+        int strictSatMin = 30;
+        int relaxedSatMin = 10;
+        int strictValMin = 30;
+        int relaxedValMin = 10;
+        int darkSatMin = 5;
+        int darkValMax = 80;
+        double cbMin = 60.0;
+        double cbMax = 140.0;
+        double crMax = 150.0;
+        double greenDelta = 8.0;
+        double greenRatioMin = 0.42;
+        double lumaMin = 30.0;
+        double probabilityThreshold = 0.55;
+    };
+
+    void updateGreenBackgroundModel(const cv::Mat &frame) const;
+    AdaptiveGreenThresholds computeAdaptiveGreenThresholds() const;
+
+    mutable bool m_bgModelInitialized;
+    mutable double m_bgHueMean;
+    mutable double m_bgHueStd;
+    mutable double m_bgSatMean;
+    mutable double m_bgSatStd;
+    mutable double m_bgValMean;
+    mutable double m_bgValStd;
+    mutable double m_bgCbMean;
+    mutable double m_bgCbStd;
+    mutable double m_bgCrMean;
+    mutable double m_bgCrStd;
+    mutable double m_bgRedMean;
+    mutable double m_bgGreenMean;
+    mutable double m_bgBlueMean;
 };
 
 #endif // CAPTURE_H
