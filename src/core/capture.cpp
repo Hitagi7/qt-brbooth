@@ -4639,21 +4639,33 @@ Capture::AdaptiveGreenThresholds Capture::computeAdaptiveGreenThresholds() const
 }
 
 // AGGRESSIVE GREEN REMOVAL: Remove all green pixels including boundary pixels
-// MAXIMUM SPEED: Only essential operations - no morphological ops for live feed
+// FAST & ACCURATE: Green channel dominance detection - balanced thresholds
 cv::Mat Capture::createGreenScreenPersonMask(const cv::Mat &frame) const
 {
     if (frame.empty()) return cv::Mat();
 
     try {
-        cv::Mat hsv;
-        cv::cvtColor(frame, hsv, cv::COLOR_BGR2HSV);
+        // Split BGR channels
+        std::vector<cv::Mat> channels;
+        cv::split(frame, channels);
+        cv::Mat blue = channels[0];
+        cv::Mat green = channels[1];
+        cv::Mat red = channels[2];
 
-        // SINGLE inRange with higher saturation threshold (Sat >25 instead of 15)
-        // This prevents black clothing (very low sat) from being confused with dark green
-        cv::Mat greenMask;
-        cv::inRange(hsv, cv::Scalar(30, 25, 15), cv::Scalar(90, 255, 255), greenMask);
+        // Green screen has GREEN DOMINANCE: G > R and G > B by a margin
+        // Dark clothing has similar R, G, B values (no green dominance)
+        // Lower threshold (5) to catch all green screen areas including shadows
+        cv::Mat greenDominantR, greenDominantB, greenMask;
+        cv::subtract(green, red, greenDominantR);    // G - R
+        cv::subtract(green, blue, greenDominantB);   // G - B
+        
+        // G - R > 5 AND G - B > 5 means green is dominant
+        cv::Mat threshR, threshB;
+        cv::threshold(greenDominantR, threshR, 5, 255, cv::THRESH_BINARY);
+        cv::threshold(greenDominantB, threshB, 5, 255, cv::THRESH_BINARY);
+        cv::bitwise_and(threshR, threshB, greenMask);
 
-        // Invert: NOT green = person (no morphological operations for maximum speed)
+        // Invert: NOT green = person
         cv::Mat personMask;
         cv::bitwise_not(greenMask, personMask);
 
@@ -4700,16 +4712,27 @@ cv::cuda::GpuMat Capture::createGreenScreenPersonMaskGPU(const cv::cuda::GpuMat 
             }
         }
 
-        // GPU: MAXIMUM SPEED - Only essential operations, no morphological ops
-        cv::cuda::GpuMat gpuHSV;
-        cv::cuda::cvtColor(gpuFrame, gpuHSV, cv::COLOR_BGR2HSV);
+        // GPU: FAST & ACCURATE - Green channel dominance detection
+        // Split BGR channels
+        std::vector<cv::cuda::GpuMat> channels(3);
+        cv::cuda::split(gpuFrame, channels);
+        cv::cuda::GpuMat blue = channels[0];
+        cv::cuda::GpuMat green = channels[1];
+        cv::cuda::GpuMat red = channels[2];
 
-        // SINGLE inRange with higher saturation threshold (Sat >25 instead of 15)
-        // This prevents black clothing (very low sat) from being confused with dark green
-        cv::cuda::GpuMat greenMask;
-        cv::cuda::inRange(gpuHSV, cv::Scalar(30, 25, 15), cv::Scalar(90, 255, 255), greenMask);
+        // Green screen has GREEN DOMINANCE: G > R and G > B by a margin
+        // Dark clothing has similar R, G, B values (no green dominance)
+        cv::cuda::GpuMat greenDominantR, greenDominantB;
+        cv::cuda::subtract(green, red, greenDominantR);    // G - R
+        cv::cuda::subtract(green, blue, greenDominantB);   // G - B
+        
+        // G - R > 5 AND G - B > 5 means green is dominant (lower to catch all green)
+        cv::cuda::GpuMat threshR, threshB, greenMask;
+        cv::cuda::threshold(greenDominantR, threshR, 5, 255, cv::THRESH_BINARY);
+        cv::cuda::threshold(greenDominantB, threshB, 5, 255, cv::THRESH_BINARY);
+        cv::cuda::bitwise_and(threshR, threshB, greenMask);
 
-        // Invert: NOT green = person (no morphological operations for maximum speed)
+        // Invert: NOT green = person
         cv::cuda::GpuMat gpuPersonMask;
         cv::cuda::bitwise_not(greenMask, gpuPersonMask);
 
