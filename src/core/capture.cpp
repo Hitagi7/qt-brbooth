@@ -4639,7 +4639,7 @@ Capture::AdaptiveGreenThresholds Capture::computeAdaptiveGreenThresholds() const
 }
 
 // AGGRESSIVE GREEN REMOVAL: Remove all green pixels including boundary pixels
-// FAST & ACCURATE: Green channel dominance detection - balanced thresholds
+// FAST & ACCURATE: Works for both green AND teal/cyan backdrops
 cv::Mat Capture::createGreenScreenPersonMask(const cv::Mat &frame) const
 {
     if (frame.empty()) return cv::Mat();
@@ -4648,24 +4648,23 @@ cv::Mat Capture::createGreenScreenPersonMask(const cv::Mat &frame) const
         // Split BGR channels
         std::vector<cv::Mat> channels;
         cv::split(frame, channels);
-        cv::Mat blue = channels[0];
         cv::Mat green = channels[1];
         cv::Mat red = channels[2];
 
-        // Green screen has GREEN DOMINANCE: G > R and G > B by a margin
-        // Dark clothing has similar R, G, B values (no green dominance)
-        // Lower threshold (5) to catch all green screen areas including shadows
-        cv::Mat greenDominantR, greenDominantB, greenMask;
-        cv::subtract(green, red, greenDominantR);    // G - R
-        cv::subtract(green, blue, greenDominantB);   // G - B
-        
-        // G - R > 5 AND G - B > 5 means green is dominant
-        cv::Mat threshR, threshB;
-        cv::threshold(greenDominantR, threshR, 5, 255, cv::THRESH_BINARY);
-        cv::threshold(greenDominantB, threshB, 5, 255, cv::THRESH_BINARY);
-        cv::bitwise_and(threshR, threshB, greenMask);
+        // For green AND cyan/teal screens: just check that green dominates red
+        // Green: G > R, G > B  
+        // Cyan/Teal: G > R, B > R, G ≈ B
+        // Both have GREEN > RED, so just check G - R
+        // Dark clothing has similar R, G, B values (G - R is small)
+        cv::Mat greenDominantR;
+        cv::subtract(green, red, greenDominantR);  // G - R
 
-        // Invert: NOT green = person
+        // G - R > 15 means green or teal background (red is low relative to green)
+        // Higher threshold (15) to preserve dark clothing
+        cv::Mat greenMask;
+        cv::threshold(greenDominantR, greenMask, 15, 255, cv::THRESH_BINARY);
+
+        // Invert: NOT green/teal = person
         cv::Mat personMask;
         cv::bitwise_not(greenMask, personMask);
 
@@ -4712,27 +4711,25 @@ cv::cuda::GpuMat Capture::createGreenScreenPersonMaskGPU(const cv::cuda::GpuMat 
             }
         }
 
-        // GPU: FAST & ACCURATE - Green channel dominance detection
+        // GPU: FAST & ACCURATE - Works for both green AND teal/cyan backdrops
         // Split BGR channels
         std::vector<cv::cuda::GpuMat> channels(3);
         cv::cuda::split(gpuFrame, channels);
-        cv::cuda::GpuMat blue = channels[0];
         cv::cuda::GpuMat green = channels[1];
         cv::cuda::GpuMat red = channels[2];
 
-        // Green screen has GREEN DOMINANCE: G > R and G > B by a margin
-        // Dark clothing has similar R, G, B values (no green dominance)
-        cv::cuda::GpuMat greenDominantR, greenDominantB;
-        cv::cuda::subtract(green, red, greenDominantR);    // G - R
-        cv::cuda::subtract(green, blue, greenDominantB);   // G - B
-        
-        // G - R > 5 AND G - B > 5 means green is dominant (lower to catch all green)
-        cv::cuda::GpuMat threshR, threshB, greenMask;
-        cv::cuda::threshold(greenDominantR, threshR, 5, 255, cv::THRESH_BINARY);
-        cv::cuda::threshold(greenDominantB, threshB, 5, 255, cv::THRESH_BINARY);
-        cv::cuda::bitwise_and(threshR, threshB, greenMask);
+        // For green AND cyan/teal screens: just check that green dominates red
+        // Green: G > R, G > B  |  Cyan/Teal: G > R, B > R, G ≈ B
+        // Both have GREEN > RED, so just check G - R
+        cv::cuda::GpuMat greenDominantR;
+        cv::cuda::subtract(green, red, greenDominantR);  // G - R
 
-        // Invert: NOT green = person
+        // G - R > 15 means green or teal background (red is low relative to green)
+        // Higher threshold (15) to preserve dark clothing
+        cv::cuda::GpuMat greenMask;
+        cv::cuda::threshold(greenDominantR, greenMask, 15, 255, cv::THRESH_BINARY);
+
+        // Invert: NOT green/teal = person
         cv::cuda::GpuMat gpuPersonMask;
         cv::cuda::bitwise_not(greenMask, gpuPersonMask);
 
