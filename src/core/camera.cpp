@@ -122,9 +122,9 @@ void Camera::startCamera()
         // Ensure timer is started in the correct thread context
         QMetaObject::invokeMethod(cameraReadTimer, "start", Qt::QueuedConnection, Q_ARG(int, timerInterval));
         emit cameraOpened(true, actual_width, actual_height, actual_fps);
-        qDebug() << "📹 Camera: Camera started successfully in worker thread. Timer interval:"
+        qDebug() << "Camera: Camera started successfully in worker thread. Timer interval:"
                  << timerInterval << "ms";
-        qDebug() << "📹 Camera: Ready for capture!";
+        qDebug() << "Camera: Ready for capture!";
     });
 }
 

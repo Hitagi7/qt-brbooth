@@ -133,8 +133,8 @@ void Background::processImageButtonClick(QPushButton *button)
 
     if (!path.isEmpty()) {
         setSelectedBackground(path);
-        qDebug() << "🎯 Background selected:" << path;
-        qDebug() << "🎯 Background stored:" << getSelectedBackground();
+        qDebug() << "Background selected:" << path;
+        qDebug() << "Background stored:" << getSelectedBackground();
         emit backgroundChanged(getSelectedBackground());
     }
 

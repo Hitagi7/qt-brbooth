@@ -44,7 +44,7 @@ BRBooth::BRBooth(QWidget *parent)
         qDebug() << "   GPU: " << deviceInfo.name();
         qDebug() << "   Memory: " << deviceInfo.totalMemory() / (1024*1024) << " MB";
     } else {
-        qDebug() << "⚠️  CUDA GPU Acceleration: DISABLED (no CUDA devices found)";
+        qDebug() << " CUDA GPU Acceleration: DISABLED (no CUDA devices found)";
     }
     ui->setupUi(this);
     setCentralWidget(ui->stackedWidget); // Set the stacked widget as the central widget
@@ -280,7 +280,7 @@ BRBooth::BRBooth(QWidget *parent)
             m_transitioningToCapture = true; // Mark that we're transitioning to capture
 
             // Camera will be started when reaching capture page
-            qDebug() << "📹 Camera will be started when reaching capture page...";
+            qDebug() << "Camera will be started when reaching capture page...";
 
             // Set capture mode and video template asynchronously to prevent blocking
             QTimer::singleShot(0, [this, videoPath]() {
@@ -311,16 +311,16 @@ BRBooth::BRBooth(QWidget *parent)
             m_transitioningToCapture = true; // Mark that we're transitioning to capture
 
             // Camera will be started when reaching capture page
-            qDebug() << "📹 Camera will be started when reaching capture page...";
+            qDebug() << "Camera will be started when reaching capture page...";
 
             // Pass the selected background template to capture page
             if (capturePage && backgroundPage) {
                 QString selectedBackground = backgroundPage->getSelectedBackground();
                 if (!selectedBackground.isEmpty()) {
                     capturePage->setSelectedBackgroundTemplate(selectedBackground);
-                    qDebug() << "🎯 Background template passed to capture:" << selectedBackground;
+                    qDebug() << "Background template passed to capture:" << selectedBackground;
                 } else {
-                    qDebug() << "🎯 No background template selected - will use black background";
+                    qDebug() << "No background template selected - will use black background";
                 }
             }
 
@@ -332,8 +332,8 @@ BRBooth::BRBooth(QWidget *parent)
         connect(backgroundPage, &Background::backgroundChanged, this, [this](const QString &backgroundPath) {
             if (capturePage) {
                 capturePage->setSelectedBackgroundTemplate(backgroundPath);
-                qDebug() << "🎯 Background template updated in capture:" << backgroundPath;
-                qDebug() << "🎯 Capture page background template set to:" << capturePage->getSelectedBackgroundTemplate();
+                qDebug() << "Background template updated in capture:" << backgroundPath;
+                qDebug() << "Capture page background template set to:" << capturePage->getSelectedBackgroundTemplate();
             }
             // Update loading text color based on background template
             if (loadingPage) {
@@ -346,25 +346,25 @@ BRBooth::BRBooth(QWidget *parent)
         // Handle the 'back' action from the Capture page
         connect(capturePage, &Capture::backtoPreviousPage, this, [this]() {
             // lastVisitedPageIndex should correctly hold the index of the page *before* Capture.
-            qDebug() << "🎯 Capture back button pressed. lastVisitedPageIndex:" << lastVisitedPageIndex
+            qDebug() << "Capture back button pressed. lastVisitedPageIndex:" << lastVisitedPageIndex
                      << "backgroundPageIndex:" << backgroundPageIndex
                      << "dynamicPageIndex:" << dynamicPageIndex;
 
             if (lastVisitedPageIndex == backgroundPageIndex) {
-                qDebug() << "🎯 Going back to background page";
+                qDebug() << "Going back to background page";
                 showBackgroundPage();
             } else if (lastVisitedPageIndex == dynamicPageIndex) {
-                qDebug() << "🎯 Going back to dynamic page";
+                qDebug() << "Going back to dynamic page";
                 showDynamicPage(); // Will transition to the correct page
             } else {
-                qDebug() << "🎯 lastVisitedPageIndex doesn't match expected values, going to landing page";
+                qDebug() << "lastVisitedPageIndex doesn't match expected values, going to landing page";
                 showLandingPage(); // Fallback if lastVisitedPageIndex is unexpected
             }
         });
         
         // Connect the new showLoadingPage signal to immediately show loading UI
         connect(capturePage, &Capture::showLoadingPage, this, [this]() {
-            qDebug() << "🌟 Switching to loading page for post-processing";
+            qDebug() << "Switching to loading page for post-processing";
             if (loadingPage) {
                 loadingPage->setMessage("Loading Output...");
                 loadingPage->resetProgress();
@@ -374,7 +374,7 @@ BRBooth::BRBooth(QWidget *parent)
         
         // When capture completes, show final output page directly
         connect(capturePage, &Capture::showFinalOutputPage, this, [this]() {
-            qDebug() << "🌟 Post-processing complete - showing final output page";
+            qDebug() << "Post-processing complete - showing final output page";
             ui->stackedWidget->setCurrentIndex(finalOutputPageIndex);
         });
         connect(capturePage, &Capture::imageCaptured, finalOutputPage, &Final::setImage);
@@ -412,7 +412,7 @@ BRBooth::BRBooth(QWidget *parent)
         
         // When user clicks confirm, proceed to loading/processing
         connect(confirmPage, &Confirm::proceedToProcessing, this, [this]() {
-            qDebug() << "✅ User confirmed - proceeding to post-processing";
+            qDebug() << "User confirmed - proceeding to post-processing";
             confirmPage->clearPreview();
             
             // Show loading page
@@ -431,7 +431,7 @@ BRBooth::BRBooth(QWidget *parent)
         connect(finalOutputPage, &Final::backToCapturePage, this, [this]() {
             // When going back from final output to capture, preserve the original lastVisitedPageIndex
             // so we can go back to the correct page (background or dynamic)
-            qDebug() << "🎯 Going back from final output to capture page";
+            qDebug() << "Going back from final output to capture page";
             
             // Note: resetCapturePage() is now handled centrally in showCapturePage()
             showCapturePage();
@@ -447,17 +447,17 @@ BRBooth::BRBooth(QWidget *parent)
         if (index == capturePageIndex) {
             // Start camera only when reaching capture page
             if (cameraWorker && !cameraWorker->isCameraOpen()) {
-                qDebug() << "📹 Starting camera for Capture page...";
+                qDebug() << "Starting camera for Capture page...";
                 
                 // Show "Loading Camera..." message while camera initializes
                 if (capturePage) {
                     capturePage->showLoadingCameraLabel();
-                    qDebug() << "📹 Showing Loading Camera label while reopening camera";
+                    qDebug() << "Showing Loading Camera label while reopening camera";
                 }
                 
                 emit startCameraWorker();
             } else {
-                qDebug() << "📹 Camera already running for Capture page";
+                qDebug() << "Camera already running for Capture page";
             }
 
             // Initialize resources and enable processing modes for capture page
@@ -466,13 +466,13 @@ BRBooth::BRBooth(QWidget *parent)
                     capturePage->initializeResources();
                     capturePage->enableHandDetectionForCapture();
                     capturePage->enableSegmentationInCapture();
-                    qDebug() << "📹 Resources initialized and processing modes enabled for Capture page";
+                    qDebug() << "Resources initialized and processing modes enabled for Capture page";
                 }
             });
         } else {
             // Stop camera and disable processing for all other pages
             if (cameraWorker && cameraWorker->isCameraOpen()) {
-                qDebug() << "📹 Stopping camera for non-capture page (index:" << index << ")...";
+                qDebug() << "Stopping camera for non-capture page (index:" << index << ")...";
                 emit stopCameraWorker();
             }
 
@@ -480,7 +480,7 @@ BRBooth::BRBooth(QWidget *parent)
             QTimer::singleShot(50, [this]() {
                 if (capturePage) {
                     capturePage->cleanupResources();
-                    qDebug() << "📹 Resources cleaned up and processing disabled for non-capture page";
+                    qDebug() << "Resources cleaned up and processing disabled for non-capture page";
                 }
             });
         }
@@ -680,7 +680,7 @@ void BRBooth::showCapturePage()
         QString currentForegroundPath = foregroundPage->getSelectedForeground();
         if (!currentForegroundPath.isEmpty()) {
             finalOutputPage->setForegroundOverlay(currentForegroundPath);
-            qDebug() << "🎯 Static template mode: Setting foreground overlay:" << currentForegroundPath;
+            qDebug() << "Static template mode: Setting foreground overlay:" << currentForegroundPath;
         }
         
         // CRITICAL: Clear any existing dynamic video background when switching to static mode
@@ -688,15 +688,15 @@ void BRBooth::showCapturePage()
             capturePage->disableDynamicVideoBackground();
             // Also clear the stored path to prevent auto-restoration
             capturePage->clearDynamicVideoPath();
-            qDebug() << "🎯 Static template mode: Cleared dynamic video background";
+            qDebug() << "Static template mode: Cleared dynamic video background";
         }
     } else if (lastVisitedPageIndex == dynamicPageIndex) {
         // Coming from DYNAMIC mode - clear static templates
         finalOutputPage->setForegroundOverlay("");
-        qDebug() << "🎯 Dynamic template mode: Clearing foreground overlay";
+        qDebug() << "Dynamic template mode: Clearing foreground overlay";
         
         // Dynamic video background will be restored by showEvent() if a path was stored
-        qDebug() << "🎯 Dynamic template mode: Video background will be restored by showEvent()";
+        qDebug() << "Dynamic template mode: Video background will be restored by showEvent()";
     }
 
     // 🔄 CRITICAL FIX: Always reset capture page slider when navigating to capture page

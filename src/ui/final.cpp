@@ -169,17 +169,17 @@ void Final::refreshDisplay()
     }
     // If no video frames, but a single image is loaded
     else if (!m_lastLoadedImage.isNull()) {
-        // 🎯 FIX: Display the image as-is from capture interface (preserve user scaling)
+        // FIX: Display the image as-is from capture interface (preserve user scaling)
         // The image already has the user's desired scaling applied from the capture interface
         QSize imageSize = m_lastLoadedImage.size();
         
-        qDebug() << "🎯 Final interface displaying image with preserved scaling. Image size:" << imageSize;
+        qDebug() << "Final interface displaying image with preserved scaling. Image size:" << imageSize;
         
         // Display the image as-is - DO NOT re-scale to preserve capture interface scaling
         ui->videoLabel->setPixmap(m_lastLoadedImage);
         ui->videoLabel->setAlignment(Qt::AlignCenter);
         
-        qDebug() << "🎯 Image displayed with preserved scaling from capture interface";
+        qDebug() << "Image displayed with preserved scaling from capture interface";
     }
     // If nothing is loaded, clear the display
     else {
@@ -230,11 +230,11 @@ void Final::showEvent(QShowEvent *event)
         // Reset to frame 0
         m_currentFrameIndex = 0;
         
-        // 🎯 FIX: Display the first frame as-is (preserve capture interface scaling)
+        // FIX: Display the first frame as-is (preserve capture interface scaling)
         QPixmap firstFrame = m_videoFrames.at(0);
         QSize frameSize = firstFrame.size();
         
-        qDebug() << "🎯 Displaying first frame with preserved scaling. Frame size:" << frameSize;
+        qDebug() << "Displaying first frame with preserved scaling. Frame size:" << frameSize;
         
         // Display frame as-is - DO NOT re-scale to preserve capture interface scaling
         ui->videoLabel->setPixmap(firstFrame);
@@ -301,11 +301,11 @@ void Final::setVideo(const QList<QPixmap> &frames, double fps)
     if (!m_videoFrames.isEmpty()) {
         qDebug() << "Playing back video with " << m_videoFrames.size() << " frames at " << fps << " FPS.";
         
-        // 🎯 FIX: Display the first frame as-is (preserve capture interface scaling)
+        // FIX: Display the first frame as-is (preserve capture interface scaling)
         QPixmap firstFrame = m_videoFrames.at(0);
         QSize frameSize = firstFrame.size();
         
-        qDebug() << "🎯 Displaying first frame with preserved scaling. Frame size:" << frameSize;
+        qDebug() << "Displaying first frame with preserved scaling. Frame size:" << frameSize;
         
         // Display frame as-is - DO NOT re-scale to preserve capture interface scaling
         ui->videoLabel->setPixmap(firstFrame);
@@ -337,14 +337,14 @@ void Final::setVideoWithComparison(const QList<QPixmap> &frames, const QList<QPi
     m_lastLoadedImage = QPixmap(); // Clear last image if switching to video
 
     if (!m_videoFrames.isEmpty()) {
-        qDebug() << "🌟 Playing back video with comparison - Processed:" << m_videoFrames.size() 
+        qDebug() << "Playing back video with comparison - Processed:" << m_videoFrames.size() 
                  << "Original:" << m_originalVideoFrames.size() << "frames at" << fps << "FPS.";
         
-        // 🎯 FIX: Display the first frame as-is (preserve capture interface scaling)
+        // FIX: Display the first frame as-is (preserve capture interface scaling)
         QPixmap firstFrame = m_videoFrames.at(0);
         QSize frameSize = firstFrame.size();
         
-        qDebug() << "🎯 Displaying first comparison frame with preserved scaling. Frame size:" << frameSize;
+        qDebug() << "Displaying first comparison frame with preserved scaling. Frame size:" << frameSize;
         
         // Display frame as-is - DO NOT re-scale to preserve capture interface scaling
         ui->videoLabel->setPixmap(firstFrame);
@@ -412,7 +412,7 @@ void Final::playNextFrame()
         qDebug() << "🔄 Video looped back to frame 0";
     }
 
-    // 🎯 FIX: Get and display the current frame as-is (preserve capture interface scaling)
+    // FIX: Get and display the current frame as-is (preserve capture interface scaling)
     // The frames are already scaled from the capture interface, so display them without modification
     QPixmap currentFrame = m_videoFrames.at(m_currentFrameIndex);
     
@@ -564,12 +564,12 @@ void Final::saveVideoToFile()
         dir.mkpath(downloadsPath);
     }
 
-    // 🌟 Handle comparison videos (both enhanced and original)
+    // Handle comparison videos (both enhanced and original)
     if (m_hasComparisonVideos && !m_originalVideoFrames.isEmpty()) {
         QString enhancedFileName = downloadsPath + "/video_lighting_enhanced_" + timestamp + ".avi";
         QString originalFileName = downloadsPath + "/video_original_" + timestamp + ".avi";
         
-        qDebug() << "🌟 Saving both video versions - Enhanced:" << m_videoFrames.size() 
+        qDebug() << "Saving both video versions - Enhanced:" << m_videoFrames.size() 
                  << "Original:" << m_originalVideoFrames.size() << "frames";
         
         bool enhancedSaved = saveVideoFramesToFile(m_videoFrames, enhancedFileName);
@@ -601,7 +601,7 @@ void Final::saveVideoToFile()
         return;
     }
 
-    // 🌟 Handle single video (no comparison)
+    // Handle single video (no comparison)
     QString fileName = downloadsPath + "/video_" + timestamp + ".avi";
     bool saved = saveVideoFramesToFile(m_videoFrames, fileName);
     

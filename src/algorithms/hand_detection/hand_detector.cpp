@@ -79,7 +79,7 @@ bool HandDetector::initialize()
                 
                 m_cudaAvailable = true;
                 m_detectorType = "CUDA";
-                qDebug() << "🚀 CUDA-accelerated hand detection enabled!";
+                qDebug() << " CUDA-accelerated hand detection enabled!";
             } else {
                 qWarning() << "HandDetector: CUDA device not compatible, falling back to CPU";
                 m_cudaAvailable = false;
@@ -106,13 +106,13 @@ bool HandDetector::initialize()
         if (loadReferenceFistShape(fistRefPath)) {
             qDebug() << "✊ ASL-STYLE SHAPE MATCHING ENABLED with reference fist image!";
         } else {
-            qDebug() << "⚠️ No reference fist found - creating generic fist contour";
+            qDebug() << "No reference fist found - creating generic fist contour";
             // Create a simple generic fist contour (circle-ish shape)
             createGenericFistReference();
         }
         
         qDebug() << "HandDetector: Hand gesture detection initialized successfully";
-        qDebug() << "🎯 Hand detector ready - using" << m_detectorType << "processing!";
+        qDebug() << "Hand detector ready - using" << m_detectorType << "processing!";
         return true;
     }
     catch (const cv::Exception& e) {
@@ -189,7 +189,7 @@ QList<HandDetection> HandDetector::detect(const cv::Mat& image)
             m_noMotionFrames++;
             if (m_noMotionFrames >= m_requiredStableFrames && !m_triggered) {
                 m_triggered = true;
-                qDebug() << "🎯 CAPTURE TRIGGERED! Closed hand gesture detected!";
+                qDebug() << "CAPTURE TRIGGERED! Closed hand gesture detected!";
             }
         } else {
             m_noMotionFrames = 0;
@@ -369,7 +369,7 @@ bool HandDetector::loadReferenceFistShape(const QString& imagePath)
     cv::Mat refImage = cv::imread(imagePath.toStdString(), cv::IMREAD_GRAYSCALE);
     
     if (refImage.empty()) {
-        qDebug() << "⚠️ Could not load reference fist image from:" << imagePath;
+        qDebug() << "Could not load reference fist image from:" << imagePath;
         return false;
     }
     
@@ -382,7 +382,7 @@ bool HandDetector::loadReferenceFistShape(const QString& imagePath)
     cv::findContours(binary, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
     
     if (contours.empty()) {
-        qDebug() << "⚠️ No contours found in reference fist image";
+        qDebug() << "No contours found in reference fist image";
         return false;
     }
     
@@ -400,7 +400,7 @@ bool HandDetector::loadReferenceFistShape(const QString& imagePath)
     m_referenceFistContour = contours[maxIdx];
     m_hasReferenceFist = true;
     
-    qDebug() << "✅ Reference fist loaded! Contour points:" << m_referenceFistContour.size() 
+    qDebug() << "Reference fist loaded! Contour points:" << m_referenceFistContour.size() 
              << "Area:" << maxArea;
     
     return true;
@@ -430,7 +430,7 @@ void HandDetector::createGenericFistReference()
     
     m_hasReferenceFist = true;
     
-    qDebug() << "✅ Generic fist reference created with" << m_referenceFistContour.size() << "points";
+    qDebug() << "Generic fist reference created with" << m_referenceFistContour.size() << "points";
 }
 
 bool HandDetector::isFistByShapeMatching(const std::vector<cv::Point>& contour)
@@ -438,7 +438,7 @@ bool HandDetector::isFistByShapeMatching(const std::vector<cv::Point>& contour)
     if (!m_hasReferenceFist || m_referenceFistContour.empty()) {
         static int noRefWarning = 0;
         if (++noRefWarning % 30 == 0) {
-            qDebug() << "⚠️ No reference fist loaded - cannot use shape matching!";
+            qDebug() << "No reference fist loaded - cannot use shape matching!";
         }
         return false;
     }
@@ -461,15 +461,15 @@ bool HandDetector::isFistByShapeMatching(const std::vector<cv::Point>& contour)
     // ALWAYS log when testing shapes with detailed results
     QString result;
     if (similarity < 0.10) {
-        result = "✅ PERFECT MATCH! ✊";
+        result = "PERFECT MATCH! ✊";
     } else if (similarity < m_shapeSimilarityThreshold) {
-        result = "✅ YES (fist detected) ✊";
+        result = "YES (fist detected) ✊";
     } else if (similarity < 0.60) {
-        result = "❌ NO (similarity too high - not a fist)";
+        result = "NO (similarity too high - not a fist)";
     } else if (similarity < 0.85) {
-        result = "❌ NO (very different - likely open hand)";
+        result = "NO (very different - likely open hand)";
     } else {
-        result = "❌ NO (completely different - likely face/body)";
+        result = "NO (completely different - likely face/body)";
     }
     
     qDebug() << "🔍 ASL Shape Match - Similarity:" << QString::number(similarity, 'f', 4)
@@ -494,7 +494,7 @@ double HandDetector::calculateShapeSimilarity(const std::vector<cv::Point>& cont
         double similarity = cv::matchShapes(contour1, contour2, cv::CONTOURS_MATCH_I1, 0);
         return similarity;
     } catch (const cv::Exception& e) {
-        qWarning() << "⚠️ Shape matching error:" << e.what();
+        qWarning() << "Shape matching error:" << e.what();
         return 999.9;
     }
 }
@@ -691,7 +691,7 @@ bool HandDetector::shouldTriggerCapture()
     // QUICK: Trigger after hand has been closed for 1 second
     if (m_handClosed && !m_triggered && m_handClosedTimer.elapsed() >= 1000) { // 1 second
         m_triggered = true;
-        qDebug() << "🎯 TRIGGER READY! Hand closed for 1+ seconds (QUICK MODE)";
+        qDebug() << "TRIGGER READY! Hand closed for 1+ seconds (QUICK MODE)";
         return true;
     }
     
@@ -793,7 +793,7 @@ QList<HandDetection> HandDetector::detectHandGestures(const cv::Mat& image)
     
     // If no skin detected, try more lenient detection
     if (skinPixels < 100) {
-        qDebug() << "⚠️ Very few skin pixels detected - trying alternative detection";
+        qDebug() << "Very few skin pixels detected - trying alternative detection";
         // Try a more lenient skin detection for poor lighting
         cv::Mat hsv;
         cv::cvtColor(resized, hsv, cv::COLOR_BGR2HSV);
@@ -825,7 +825,7 @@ QList<HandDetection> HandDetector::detectHandGestures(const cv::Mat& image)
         if (!contours.empty()) {
             qDebug() << "🔍 Found" << contours.size() << "potential hand contour(s)";
         } else {
-            qDebug() << "⚠️ NO contours found!";
+            qDebug() << "NO contours found!";
         }
     }
     
@@ -891,7 +891,7 @@ QList<HandDetection> HandDetector::detectHandGestures(const cv::Mat& image)
         
         if (!isFist) {
             rejectedByFistCheck++;
-            qDebug() << "   ❌ NOT A FIST! (failed shape matching)";
+            qDebug() << "   NOT A FIST! (failed shape matching)";
             continue; // Skip anything that's not a fist
         }
         
@@ -931,7 +931,7 @@ QList<HandDetection> HandDetector::detectHandGestures(const cv::Mat& image)
                 
                 qDebug() << "✅✊ FIST DETECTION ADDED! Confidence:" << confidence;
             } else {
-                qDebug() << "⚠️ Fist found but confidence too low:" << confidence << "(need > 0.3)";
+                qDebug() << "Fist found but confidence too low:" << confidence << "(need > 0.3)";
             }
         } else {
             qDebug() << "   Fist shape but failed hand shape validation";

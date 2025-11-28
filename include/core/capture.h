@@ -39,7 +39,7 @@
 #include "algorithms/lighting_correction/lighting_corrector.h"
 #include <array>
 
-// 🚀 GPU Memory Pool for optimized CUDA operations
+//  GPU Memory Pool for optimized CUDA operations
 class GPUMemoryPool {
 private:
     // Pre-allocated GPU buffers for triple buffering
@@ -48,11 +48,11 @@ private:
     cv::cuda::GpuMat gpuDetectionBuffers[2];    // Detection buffers
     cv::cuda::GpuMat gpuTempBuffers[2];         // Temporary processing buffers
     
-    // 🚀 Guided Filtering GPU buffers for edge-blending
+    //  Guided Filtering GPU buffers for edge-blending
     cv::cuda::GpuMat gpuGuidedFilterBuffers[4]; // Guided filter processing buffers
     cv::cuda::GpuMat gpuBoxFilterBuffers[2];    // Box filter intermediate buffers
     
-    // 🚀 Edge Blurring GPU buffers for enhanced edge processing
+    //  Edge Blurring GPU buffers for enhanced edge processing
     cv::cuda::GpuMat gpuEdgeBlurBuffers[3];     // Edge blurring processing buffers
     cv::cuda::GpuMat gpuEdgeDetectionBuffers[2]; // Edge detection intermediate buffers
     
@@ -73,11 +73,11 @@ private:
     int currentDetBuffer = 0;
     int currentTempBuffer = 0;
     
-    // 🚀 Guided Filtering buffer rotation indices
+    //  Guided Filtering buffer rotation indices
     int currentGuidedFilterBuffer = 0;
     int currentBoxFilterBuffer = 0;
     
-    // 🚀 Edge Blurring buffer rotation indices
+    //  Edge Blurring buffer rotation indices
     int currentEdgeBlurBuffer = 0;
     int currentEdgeDetectionBuffer = 0;
     
@@ -100,11 +100,11 @@ public:
     cv::cuda::GpuMat& getNextDetectionBuffer();
     cv::cuda::GpuMat& getNextTempBuffer();
     
-    // 🚀 Guided Filtering buffer management
+    //  Guided Filtering buffer management
     cv::cuda::GpuMat& getNextGuidedFilterBuffer();
     cv::cuda::GpuMat& getNextBoxFilterBuffer();
     
-    // 🚀 Edge Blurring buffer management
+    //  Edge Blurring buffer management
     cv::cuda::GpuMat& getNextEdgeBlurBuffer();
     cv::cuda::GpuMat& getNextEdgeDetectionBuffer();
     
@@ -277,7 +277,10 @@ private slots:
     void onHandTriggeredCapture();
     void onHandDetectionFinished();
     
-    // 🚀 Asynchronous Recording Slots
+    //  Asynchronous Video Processing Slot
+    void onVideoProcessingFinished();
+    
+    //  Asynchronous Recording Slots
     void processRecordingFrame();
 
 private:
@@ -444,11 +447,11 @@ private:
 
     cv::Mat m_selectedTemplate;
 
-    // 🚀 GPU Memory Pool for optimized CUDA operations
+    //  GPU Memory Pool for optimized CUDA operations
     GPUMemoryPool m_gpuMemoryPool;
     bool m_gpuMemoryPoolInitialized;
     
-    // 🚀 Asynchronous Recording System
+    //  Asynchronous Recording System
     QThread *m_recordingThread;
     QTimer *m_recordingFrameTimer;
     QMutex m_recordingMutex;
@@ -466,7 +469,7 @@ private:
     cv::Mat createSegmentedFrame(const cv::Mat &frame, const std::vector<cv::Rect> &detections);
     cv::Mat enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect &detection);
     
-    // 🚀 Lightweight Processing for Recording Performance
+    //  Lightweight Processing for Recording Performance
     cv::Mat createLightweightSegmentedFrame(const cv::Mat &frame);
     
     // Phase 2A: GPU-Only Processing Methods
@@ -514,7 +517,7 @@ private:
     void printPerformanceStats();
     // --- END PERFORMANCE MONITORING ---
 
-    // 🚀 Asynchronous Recording Methods
+    //  Asynchronous Recording Methods
     void initializeRecordingSystem();
     void cleanupRecordingSystem();
     void queueFrameForRecording(const cv::Mat &frame);
@@ -534,7 +537,7 @@ private:
                                           const cv::Mat &rawPersonMask, 
                                           const cv::Mat &backgroundFrame = cv::Mat());
     
-    // 🚀 Optimized Async Lighting Processing (POST-PROCESSING ONLY)
+    //  Optimized Async Lighting Processing (POST-PROCESSING ONLY)
     void initializeAsyncLightingSystem();
     void cleanupAsyncLightingSystem();
     // REMOVED: Real-time lighting methods - lighting only applied in post-processing
@@ -542,7 +545,7 @@ private:
     // Lighting Correction Member
     LightingCorrector *m_lightingCorrector;
     
-    // 🚀 Simplified Lighting Processing (POST-PROCESSING ONLY)
+    //  Simplified Lighting Processing (POST-PROCESSING ONLY)
     QThread *m_lightingProcessingThread;      // Keep for future use if needed
     QFutureWatcher<QList<QPixmap>> *m_lightingWatcher; // Keep for future use if needed
     QMutex m_lightingMutex;                   // Thread safety for lighting operations
@@ -590,13 +593,13 @@ private:
     int m_greenMaskOpen; // morph open kernel size
     int m_greenMaskClose;// morph close kernel size
     
-    // 🚀 GPU Green Screen Filter Cache (prevent memory allocation on every frame)
+    //  GPU Green Screen Filter Cache (prevent memory allocation on every frame)
     cv::Ptr<cv::cuda::CannyEdgeDetector> m_greenScreenCannyDetector;
     cv::Ptr<cv::cuda::Filter> m_greenScreenMorphOpen;
     cv::Ptr<cv::cuda::Filter> m_greenScreenMorphClose;
     cv::Ptr<cv::cuda::Filter> m_greenScreenGaussianBlur;
     
-    // 🎯 Temporal green screen mask smoothing
+    // Temporal green screen mask smoothing
     mutable cv::Mat m_lastGreenScreenMask;
     mutable int m_greenScreenMaskStableCount;
 
