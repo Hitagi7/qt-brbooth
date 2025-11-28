@@ -104,7 +104,7 @@ bool HandDetector::initialize()
         // Load reference fist shape for ASL-style matching
         QString fistRefPath = "templates/hand_gestures/fist_reference.png";
         if (loadReferenceFistShape(fistRefPath)) {
-            qDebug() << "✊ ASL-STYLE SHAPE MATCHING ENABLED with reference fist image!";
+            qDebug() << "ASL-STYLE SHAPE MATCHING ENABLED with reference fist image!";
         } else {
             qDebug() << "No reference fist found - creating generic fist contour";
             // Create a simple generic fist contour (circle-ish shape)
@@ -239,7 +239,7 @@ int HandDetector::getPerformanceMode() const
 
 bool HandDetector::isHandClosed(const std::vector<cv::Point>& contour)
 {
-    // ✊ PROVEN FINGER COUNTING ALGORITHM
+    // PROVEN FINGER COUNTING ALGORITHM
     // This is the industry-standard method used in successful hand gesture systems
     // 
     // HOW IT WORKS:
@@ -323,7 +323,7 @@ bool HandDetector::isHandClosed(const std::vector<cv::Point>& contour)
     // Debug output every 30 frames
     static int debugCounter = 0;
     if (++debugCounter % 30 == 0) {
-        qDebug() << "🖐️ Finger Analysis: Fingers=" << fingerCount 
+        qDebug() << "Finger Analysis: Fingers=" << fingerCount 
                  << "| Valid defects=" << validDefectCount 
                  << "| Total defects=" << defects.size()
                  << "| Area=" << area;
@@ -344,7 +344,7 @@ bool HandDetector::isHandClosed(const std::vector<cv::Point>& contour)
     
     // Always log fist detection (not throttled)
     if (isFist) {
-        qDebug() << "✊ FIST CONFIRMED! Extended fingers: 0 | Total defects:" << defects.size() << "| Area:" << area;
+        qDebug() << "FIST CONFIRMED! Extended fingers: 0 | Total defects:" << defects.size() << "| Area:" << area;
     } else {
         static int notFistCount = 0;
         if (++notFistCount % 30 == 0) {
@@ -452,7 +452,7 @@ bool HandDetector::isFistByShapeMatching(const std::vector<cv::Point>& contour)
     
     // ASL-STYLE SHAPE MATCHING THRESHOLD (VERY LENIENT):
     // 0.00 = Identical shapes
-    // 0.01-0.40 = Similar enough (ANY FIST) ✊ ← VERY LENIENT!
+    // 0.01-0.40 = Similar enough (ANY FIST) ← VERY LENIENT!
     // 0.41-0.60 = Somewhat similar (other hand gestures)
     // 0.61-0.80 = Different shapes (open hand, pointing)
     // 0.81+ = Completely different (face, body, objects)
@@ -472,7 +472,7 @@ bool HandDetector::isFistByShapeMatching(const std::vector<cv::Point>& contour)
         result = "NO (completely different - likely face/body)";
     }
     
-    qDebug() << "🔍 ASL Shape Match - Similarity:" << QString::number(similarity, 'f', 4)
+    qDebug() << "ASL Shape Match - Similarity:" << QString::number(similarity, 'f', 4)
              << "| Threshold:" << m_shapeSimilarityThreshold
              << "|" << result;
     
@@ -699,7 +699,7 @@ bool HandDetector::shouldTriggerCapture()
     static int debugCounter = 0;
     if (++debugCounter % 60 == 0) { // Every 60 frames for more frequent updates
         if (m_handClosed) {
-            qDebug() << "🔍 Trigger check - m_handClosed:" << m_handClosed 
+            qDebug() << "Trigger check - m_handClosed:" << m_handClosed 
                      << "m_triggered:" << m_triggered
                      << "Elapsed:" << m_handClosedTimer.elapsed() << "ms"
                      << "Required: 1000ms"
@@ -725,12 +725,12 @@ void HandDetector::resetGestureState()
     m_handClosed = false;
     m_closedFrameCount = 0;
     m_handClosedTimer.invalidate();
-    qDebug() << "🔄 Gesture state reset - ready for new detection";
+    qDebug() << "Gesture state reset - ready for new detection";
 }
 
 void HandDetector::updateHandState(bool isClosed)
 {
-    qDebug() << "🖐️ updateHandState called - isClosed:" << isClosed << "m_handClosed:" << m_handClosed;
+    qDebug() << "updateHandState called - isClosed:" << isClosed << "m_handClosed:" << m_handClosed;
     
     if (isClosed) {
         if (!m_handClosed) {
@@ -738,10 +738,10 @@ void HandDetector::updateHandState(bool isClosed)
             m_handClosed = true;
             m_handClosedTimer.start();
             m_closedFrameCount = 0;
-            qDebug() << "🖐️ Hand closed - Starting trigger timer...";
+            qDebug() << "Hand closed - Starting trigger timer...";
         }
         m_closedFrameCount++;
-        qDebug() << "🖐️ Hand still closed - Frame count:" << m_closedFrameCount;
+        qDebug() << "Hand still closed - Frame count:" << m_closedFrameCount;
     } else {
         if (m_handClosed) {
             // Hand opened, reset timer
@@ -749,7 +749,7 @@ void HandDetector::updateHandState(bool isClosed)
             m_handClosedTimer.invalidate();
             m_closedFrameCount = 0;
             m_triggered = false; // Reset trigger state when hand opens
-            qDebug() << "🖐️ Hand opened - Resetting trigger timer and trigger state";
+            qDebug() << "Hand opened - Resetting trigger timer and trigger state";
         }
     }
 }
@@ -788,7 +788,7 @@ QList<HandDetection> HandDetector::detectHandGestures(const cv::Mat& image)
     
     static int skinDebugCount = 0;
     if (++skinDebugCount % 30 == 0) {
-        qDebug() << "🔍 Skin detection - Pixels:" << skinPixels << "Ratio:" << QString::number(skinRatio, 'f', 3);
+        qDebug() << "Skin detection - Pixels:" << skinPixels << "Ratio:" << QString::number(skinRatio, 'f', 3);
     }
     
     // If no skin detected, try more lenient detection
@@ -806,7 +806,7 @@ QList<HandDetection> HandDetector::detectHandGestures(const cv::Mat& image)
         cv::bitwise_or(skinMask, skinMask2, skinMask);
         
         int newSkinPixels = cv::countNonZero(skinMask);
-        qDebug() << "🔍 After lenient detection - Pixels:" << newSkinPixels << "Ratio:" << (double)newSkinPixels / (skinMask.rows * skinMask.cols);
+        qDebug() << "After lenient detection - Pixels:" << newSkinPixels << "Ratio:" << (double)newSkinPixels / (skinMask.rows * skinMask.cols);
     }
     
     // Apply morphological operations to clean up the mask
@@ -823,7 +823,7 @@ QList<HandDetection> HandDetector::detectHandGestures(const cv::Mat& image)
     static int contourDebugCount = 0;
     if (++contourDebugCount % 30 == 0) {
         if (!contours.empty()) {
-            qDebug() << "🔍 Found" << contours.size() << "potential hand contour(s)";
+            qDebug() << "Found" << contours.size() << "potential hand contour(s)";
         } else {
             qDebug() << "NO contours found!";
         }
@@ -880,12 +880,12 @@ QList<HandDetection> HandDetector::detectHandGestures(const cv::Mat& image)
             rejectedByZone++;
             static int faceRejectLog = 0;
             if (++faceRejectLog % 30 == 0) {
-                qDebug() << "🚫 LIKELY FACE (large + center-upper) - Area:" << area << "- REJECTED";
+                qDebug() << "LIKELY FACE (large + center-upper) - Area:" << area << "- REJECTED";
             }
             continue;
         }
         
-        // ✊ ASL-STYLE SHAPE MATCHING for FIST DETECTION
+        // ASL-STYLE SHAPE MATCHING for FIST DETECTION
         // Uses Hu Moments to compare shape against reference fist
         bool isFist = isFistByShapeMatching(contour);
         
@@ -895,7 +895,7 @@ QList<HandDetection> HandDetector::detectHandGestures(const cv::Mat& image)
             continue; // Skip anything that's not a fist
         }
         
-        qDebug() << "   ✅✊ IS A FIST! Proceeding to validation...";
+        qDebug() << "   IS A FIST! Proceeding to validation...";
         
         // This IS a fist! Now check if it's a valid hand shape
         if (isHandShape(contour, resized)) {
@@ -915,7 +915,7 @@ QList<HandDetection> HandDetector::detectHandGestures(const cv::Mat& image)
             // Calculate confidence for this FIST
             double confidence = calculateHandConfidence(contour, resized);
             
-            qDebug() << "✊ FIST VALIDATED! Confidence:" << confidence << "| Area:" << area;
+            qDebug() << "FIST VALIDATED! Confidence:" << confidence << "| Area:" << area;
             
             if (confidence > 0.3) { // Lower confidence threshold for better detection
                 HandDetection detection;
@@ -929,7 +929,7 @@ QList<HandDetection> HandDetector::detectHandGestures(const cv::Mat& image)
                 
                 detections.append(detection);
                 
-                qDebug() << "✅✊ FIST DETECTION ADDED! Confidence:" << confidence;
+                qDebug() << "FIST DETECTION ADDED! Confidence:" << confidence;
             } else {
                 qDebug() << "Fist found but confidence too low:" << confidence << "(need > 0.3)";
             }
@@ -941,7 +941,7 @@ QList<HandDetection> HandDetector::detectHandGestures(const cv::Mat& image)
     // Debug summary every 30 frames
     static int summaryCount = 0;
     if (++summaryCount % 30 == 0 && contourCount > 0) {
-        qDebug() << "📊 DETECTION SUMMARY: Total contours=" << contours.size()
+        qDebug() << "DETECTION SUMMARY: Total contours=" << contours.size()
                  << "| Rejected by size=" << rejectedBySize
                  << "| Rejected by zone=" << rejectedByZone
                  << "| Rejected by fist check=" << rejectedByFistCheck

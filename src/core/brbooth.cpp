@@ -38,7 +38,7 @@ BRBooth::BRBooth(QWidget *parent)
     // Check CUDA availability at startup
     int cudaDevices = cv::cuda::getCudaEnabledDeviceCount();
     if (cudaDevices > 0) {
-        qDebug() << "🎮 CUDA GPU Acceleration: ENABLED (" << cudaDevices << " device(s) found)";
+        qDebug() << "CUDA GPU Acceleration: ENABLED (" << cudaDevices << " device(s) found)";
         cv::cuda::setDevice(0);
         cv::cuda::DeviceInfo deviceInfo(0);
         qDebug() << "   GPU: " << deviceInfo.name();
@@ -392,9 +392,9 @@ BRBooth::BRBooth(QWidget *parent)
     }
 
     if (confirmPage && capturePage) {
-        // 🎬 NEW FLOW: After dynamic recording, show confirm page instead of loading directly
+        // NEW FLOW: After dynamic recording, show confirm page instead of loading directly
         connect(capturePage, &Capture::showConfirmPage, this, [this]() {
-            qDebug() << "🎬 Dynamic recording complete - showing confirm page";
+            qDebug() << "Dynamic recording complete - showing confirm page";
             ui->stackedWidget->setCurrentIndex(confirmPageIndex);
         });
         
@@ -699,11 +699,11 @@ void BRBooth::showCapturePage()
         qDebug() << "Dynamic template mode: Video background will be restored by showEvent()";
     }
 
-    // 🔄 CRITICAL FIX: Always reset capture page slider when navigating to capture page
+    // CRITICAL FIX: Always reset capture page slider when navigating to capture page
     // This ensures the slider is reset to default (0 = 100% scale) regardless of navigation path
     if (capturePage) {
         capturePage->resetCapturePage();
-        qDebug() << "🔄 Capture page reset (slider returned to default) - navigation path handled";
+        qDebug() << "Capture page reset (slider returned to default) - navigation path handled";
     }
 
     ui->stackedWidget->setCurrentIndex(capturePageIndex);

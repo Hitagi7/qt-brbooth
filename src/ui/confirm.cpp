@@ -104,9 +104,9 @@ void Confirm::setVideo(const QList<QPixmap> &frames, double fps)
 	m_currentFrameIndex = 0;
 	m_videoFPS = fps > 0 ? fps : 30.0;
 
-	qDebug() << "🎬 Confirm: Set video with" << frames.size() << "frames at" << fps << "fps";
-	qDebug() << "🎬 Confirm: Using FPS:" << m_videoFPS << "for playback";
-	qDebug() << "🎬 Confirm: Calculated interval:" << qMax(1, static_cast<int>(1000.0 / m_videoFPS)) << "ms";
+	qDebug() << "Confirm: Set video with" << frames.size() << "frames at" << fps << "fps";
+	qDebug() << "Confirm: Using FPS:" << m_videoFPS << "for playback";
+	qDebug() << "Confirm: Calculated interval:" << qMax(1, static_cast<int>(1000.0 / m_videoFPS)) << "ms";
 
 	// Display first frame immediately
 	if (!m_videoFrames.isEmpty()) {

@@ -164,7 +164,7 @@ void Final::refreshDisplay()
             // Use the stored video FPS for correct playback speed
             int playbackIntervalMs = qMax(1, static_cast<int>(1000.0 / m_videoFPS));
             videoPlaybackTimer->start(playbackIntervalMs);
-            qDebug() << "🎬 Video timer restarted in refreshDisplay()";
+            qDebug() << "Video timer restarted in refreshDisplay()";
         }
     }
     // If no video frames, but a single image is loaded
@@ -220,7 +220,7 @@ void Final::showEvent(QShowEvent *event)
     
     // Reset video playback to the beginning when the final page is shown
     if (!m_videoFrames.isEmpty()) {
-        qDebug() << "🎬 Final page shown - resetting video to beginning";
+        qDebug() << "Final page shown - resetting video to beginning";
         
         // Stop current playback
         if (videoPlaybackTimer->isActive()) {
@@ -244,7 +244,7 @@ void Final::showEvent(QShowEvent *event)
         int playbackIntervalMs = qMax(1, static_cast<int>(1000.0 / m_videoFPS));
         videoPlaybackTimer->start(playbackIntervalMs);
         
-        qDebug() << "🎬 Video reset to frame 0 and playback restarted with preserved scaling";
+        qDebug() << "Video reset to frame 0 and playback restarted with preserved scaling";
     }
 }
 
@@ -315,7 +315,7 @@ void Final::setVideo(const QList<QPixmap> &frames, double fps)
         int playbackIntervalMs = qMax(1, static_cast<int>(1000.0 / fps));
         videoPlaybackTimer->start(playbackIntervalMs);
         
-        qDebug() << "🎬 Video starts from frame 0 with preserved scaling, timer interval:" << playbackIntervalMs << "ms";
+        qDebug() << "Video starts from frame 0 with preserved scaling, timer interval:" << playbackIntervalMs << "ms";
     } else {
         qWarning() << "No video frames provided for playback!";
         ui->videoLabel->clear(); // Clear display if no frames
@@ -354,7 +354,7 @@ void Final::setVideoWithComparison(const QList<QPixmap> &frames, const QList<QPi
         int playbackIntervalMs = qMax(1, static_cast<int>(1000.0 / fps));
         videoPlaybackTimer->start(playbackIntervalMs);
         
-        qDebug() << "🎬 Video with comparison starts from frame 0 with preserved scaling, timer interval:" << playbackIntervalMs << "ms";
+        qDebug() << "Video with comparison starts from frame 0 with preserved scaling, timer interval:" << playbackIntervalMs << "ms";
     } else {
         qWarning() << "No video frames provided for comparison playback!";
         ui->videoLabel->clear(); // Clear display if no frames
@@ -409,7 +409,7 @@ void Final::playNextFrame()
     // Loop video playback
     if (m_currentFrameIndex >= m_videoFrames.size()) {
         m_currentFrameIndex = 0;
-        qDebug() << "🔄 Video looped back to frame 0";
+        qDebug() << "Video looped back to frame 0";
     }
 
     // FIX: Get and display the current frame as-is (preserve capture interface scaling)
