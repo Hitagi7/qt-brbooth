@@ -16,6 +16,7 @@ class Dynamic;
 class Final;
 class Loading;
 class Confirm;
+class Idle;
 class Camera; // Forward declare Camera worker class
 
 QT_BEGIN_NAMESPACE
@@ -45,10 +46,17 @@ private slots:
     void showBackgroundPage();
     void showCapturePage();
     void showFinalOutputPage();
+    void showIdlePage();
     
     // GIF management
     void startLandingPageGif();
     void stopLandingPageGif();
+    
+    // Idle mode management
+    void onIdleTimeout();
+    void resetIdleTimer();
+    void startIdleTimer();
+    void stopIdleTimer();
     
 
 
@@ -76,6 +84,7 @@ private:
     Final *finalOutputPage;
     Loading *loadingPage;
     Confirm *confirmPage;
+    Idle *idlePage;
 
     // Indices for the stacked widget pages
     int landingPageIndex;
@@ -86,6 +95,7 @@ private:
     int loadingPageIndex;
     int confirmPageIndex;
     int finalOutputPageIndex;
+    int idlePageIndex;
 
     // To keep track of the page visited before going to Capture or Final, for "back" navigation
     int lastVisitedPageIndex;
@@ -95,5 +105,11 @@ private:
     
     // Transition tracking
     bool m_transitioningToCapture;
+    
+    // Idle mode tracking
+    QTimer *m_idleTimer;
+    int m_pageBeforeIdle;
+    bool m_isIdleModeActive;
+    bool m_idleTimerEnabled;
 };
 #endif // BRBOOTH_H

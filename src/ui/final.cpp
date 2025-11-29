@@ -4,6 +4,7 @@
 #include <QMouseEvent>
 #include <QRegularExpression>
 #include <QStyle>
+#include <QPainter>
 #include "ui/iconhover.h" // Assuming this is your custom class for button hover effects
 #include "ui_final.h"  // Generated UI header
 #include <QMessageBox>
@@ -438,12 +439,40 @@ void Final::on_save_clicked()
         saveVideoToFile();
     } else {
         // No video frames, proceed with saving an image
-        // Use the currently displayed pixmap from ui->videoLabel
+        // Create composite image with foreground overlay if present
         QPixmap imageToSave = ui->videoLabel->pixmap();
 
         if (imageToSave.isNull()) {
             QMessageBox::warning(this, "Save Image", "No image to save.");
             return;
+        }
+        
+        // Composite the foreground overlay on top if present
+        if (overlayImageLabel && !overlayImageLabel->isHidden() && !overlayImageLabel->pixmap().isNull()) {
+            qDebug() << "Compositing foreground overlay into saved image";
+            
+            // Create a new pixmap for the composite
+            QPixmap composite = imageToSave.copy();
+            
+            // Draw the foreground overlay on top
+            QPainter painter(&composite);
+            painter.setRenderHint(QPainter::Antialiasing);
+            painter.setRenderHint(QPainter::SmoothPixmapTransform);
+            
+            // Get the overlay pixmap and scale it to match the base image size
+            QPixmap overlayPixmap = overlayImageLabel->pixmap();
+            QPixmap scaledOverlay = overlayPixmap.scaled(composite.size(), 
+                                                         Qt::IgnoreAspectRatio, 
+                                                         Qt::SmoothTransformation);
+            
+            // Draw the overlay on top of the base image
+            painter.drawPixmap(0, 0, scaledOverlay);
+            painter.end();
+            
+            imageToSave = composite;
+            qDebug() << "Foreground overlay composited successfully";
+        } else {
+            qDebug() << "No foreground overlay to composite";
         }
 
         QString downloadsPath = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
@@ -619,6 +648,20 @@ bool Final::saveVideoFramesToFile(const QList<QPixmap> &frames, const QString &f
         return false;
     }
 
+    // Check if we need to composite foreground overlay
+    bool hasOverlay = overlayImageLabel && !overlayImageLabel->isHidden() && !overlayImageLabel->pixmap().isNull();
+    QPixmap scaledOverlay;
+    
+    if (hasOverlay) {
+        qDebug() << "Compositing foreground overlay into video frames";
+        // Pre-scale the overlay to match frame size for efficiency
+        QPixmap overlayPixmap = overlayImageLabel->pixmap();
+        QSize frameSize = frames.first().size();
+        scaledOverlay = overlayPixmap.scaled(frameSize, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    } else {
+        qDebug() << "No foreground overlay to composite for video";
+    }
+
     // Get frame size from the first pixmap
     QSize frameSize = frames.first().size();
     int width = frameSize.width();
@@ -658,8 +701,19 @@ bool Final::saveVideoFramesToFile(const QList<QPixmap> &frames, const QString &f
 
     // Write each frame with optimized conversion
     for (const QPixmap &pixmap : frames) {
+        // Composite foreground overlay if present
+        QPixmap frameToSave = pixmap;
+        if (hasOverlay) {
+            frameToSave = pixmap.copy();
+            QPainter painter(&frameToSave);
+            painter.setRenderHint(QPainter::Antialiasing);
+            painter.setRenderHint(QPainter::SmoothPixmapTransform);
+            painter.drawPixmap(0, 0, scaledOverlay);
+            painter.end();
+        }
+        
         // Convert QPixmap to QImage with optimized format
-        QImage image = pixmap.toImage().convertToFormat(QImage::Format_RGB888);
+        QImage image = frameToSave.toImage().convertToFormat(QImage::Format_RGB888);
         if (image.isNull()) {
             qWarning() << "Failed to convert QPixmap to QImage during video saving.";
             continue;

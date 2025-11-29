@@ -49,6 +49,7 @@ SOURCES += \
     src/ui/foreground.cpp \
     src/ui/dynamic.cpp \
     src/ui/final.cpp \
+    src/ui/idle.cpp \
     src/ui/iconhover.cpp \
     src/ui/ui_manager.cpp \
     src/algorithms/hand_detection/hand_detector.cpp \
@@ -68,6 +69,7 @@ HEADERS += \
     include/ui/foreground.h \
     include/ui/dynamic.h \
     include/ui/final.h \
+    include/ui/idle.h \
     include/ui/iconhover.h \
     include/ui/ui_manager.h \
     include/algorithms/hand_detection/hand_detector.h \
@@ -82,6 +84,7 @@ FORMS += \
     ui/confirm.ui \
     ui/dynamic.ui \
     ui/final.ui \
+    ui/idle.ui \
     ui/loading.ui \
     ui/foreground.ui
 
