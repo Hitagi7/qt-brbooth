@@ -210,6 +210,9 @@ public:
     void setPersonDetectionConfidenceThreshold(double threshold);
     double getPersonDetectionConfidenceThreshold() const;
     void togglePersonDetection();
+    
+    // System monitor integration
+    void setSystemMonitor(class SystemMonitor* monitor);
     void updatePersonDetectionButton();
     double getPersonDetectionProcessingTime() const;
     bool isGPUAvailable() const;
@@ -335,6 +338,9 @@ private:
     void drawHandBoundingBoxes(cv::Mat &frame, const QList<HandDetection> &detections);
     void initializeHandDetection();
     void enableHandDetection(bool enable);
+    
+    // System monitor for accuracy tracking
+    class SystemMonitor* m_systemMonitor;
     
     // Status overlay for key presses
     QLabel* statusOverlay = nullptr;

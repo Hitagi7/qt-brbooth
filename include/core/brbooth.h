@@ -18,6 +18,7 @@ class Loading;
 class Confirm;
 class Idle;
 class Camera; // Forward declare Camera worker class
+class SystemMonitor; // Forward declare SystemMonitor class
 
 QT_BEGIN_NAMESPACE
 namespace Ui { class BRBooth; }
@@ -33,6 +34,9 @@ public:
     
     // CUDA test function
     void testCudaFunctionality();
+    
+    // System monitor access
+    SystemMonitor* getSystemMonitor() const { return m_systemMonitor; }
 
 protected:
     void resizeEvent(QResizeEvent *event) override;
@@ -111,5 +115,8 @@ private:
     int m_pageBeforeIdle;
     bool m_isIdleModeActive;
     bool m_idleTimerEnabled;
+    
+    // System monitoring
+    SystemMonitor *m_systemMonitor;
 };
 #endif // BRBOOTH_H

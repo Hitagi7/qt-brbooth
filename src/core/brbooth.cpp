@@ -24,7 +24,10 @@
 #include <QFile>
 #include <QShortcut>
 #include "core/videotemplate.h"
+#include "core/system_monitor.h"
 #include <chrono>
+#include <csignal>
+#include <cstdlib>
 
 BRBooth::BRBooth(QWidget *parent)
     : QMainWindow(parent)
@@ -234,6 +237,12 @@ BRBooth::BRBooth(QWidget *parent)
     capturePage = new Capture(this, foregroundPage, cameraWorker, cameraThread);
     ui->stackedWidget->addWidget(capturePage);
     capturePageIndex = ui->stackedWidget->indexOf(capturePage);
+    
+    // Connect system monitor to capture page for accuracy tracking
+    if (capturePage && m_systemMonitor) {
+        capturePage->setSystemMonitor(m_systemMonitor);
+        qDebug() << "SystemMonitor connected to Capture page for accuracy tracking";
+    }
 
     finalOutputPage = new Final(this);
     ui->stackedWidget->addWidget(finalOutputPage);
@@ -272,7 +281,14 @@ BRBooth::BRBooth(QWidget *parent)
     m_isIdleModeActive = false;
     m_idleTimerEnabled = false;
 
-
+    // Initialize system monitor
+    m_systemMonitor = new SystemMonitor(this);
+    if (m_systemMonitor->initialize()) {
+        m_systemMonitor->startMonitoring(5000); // 5 seconds interval
+        qDebug() << "SystemMonitor: Started monitoring with 5-second interval";
+    } else {
+        qWarning() << "SystemMonitor: Failed to initialize";
+    }
 
     // Start the landing page GIF since we're on the landing page initially
     startLandingPageGif();
@@ -576,6 +592,12 @@ BRBooth::BRBooth(QWidget *parent)
 
 BRBooth::~BRBooth()
 {
+    // Save statistics before cleanup
+    if (m_systemMonitor) {
+        qDebug() << "Saving final statistics before shutdown...";
+        m_systemMonitor->saveStatisticsToText();
+    }
+    
     // Clean up camera thread and worker in BRBooth destructor
     emit stopCameraWorker(); // Signal to worker to stop
     cameraThread->quit();    // Tell thread to exit event loop

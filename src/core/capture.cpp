@@ -43,6 +43,7 @@
 #include <chrono>
 #include <QFutureWatcher>
 #include "algorithms/lighting_correction/lighting_corrector.h"
+#include "core/system_monitor.h"
 
 //  Forward declarations for guided filtering functions
 static cv::Mat guidedFilterGrayAlphaCPU(const cv::Mat &guideBGR, const cv::Mat &hardMask, int radius, float eps);
@@ -220,6 +221,7 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     , m_lastHandDetectionTime(0.0)
     , m_handDetectionFPS(0)
     , m_lastHandDetections()
+    , m_systemMonitor(nullptr)
     , m_handDetectionFuture()
     , m_handDetectionWatcher(nullptr)
     , m_captureReady(false)
@@ -4334,6 +4336,11 @@ double Capture::getPersonDetectionConfidenceThreshold() const
     return 0.0; // Default threshold
 }
 
+void Capture::setSystemMonitor(SystemMonitor* monitor)
+{
+    m_systemMonitor = monitor;
+}
+
 void Capture::togglePersonDetection()
 {
     // Toggle segmentation on/off
@@ -5462,6 +5469,18 @@ void Capture::onHandDetectionFinished()
     {
         QMutexLocker locker(&m_handDetectionMutex);
         m_lastHandDetections = detections;
+    }
+
+    // Update accuracy tracking for system monitor
+    if (m_systemMonitor && !detections.isEmpty()) {
+        // Use the highest confidence detection as accuracy metric
+        double maxConfidence = 0.0;
+        for (const auto& detection : detections) {
+            if (detection.confidence > maxConfidence) {
+                maxConfidence = detection.confidence;
+            }
+        }
+        m_systemMonitor->updateAccuracy(maxConfidence);
     }
 
     // FIST GESTURE TRIGGER LOGIC

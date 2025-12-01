@@ -43,6 +43,7 @@ SOURCES += \
     src/core/brbooth.cpp \
     src/core/camera.cpp \
     src/core/capture.cpp \
+    src/core/system_monitor.cpp \
     src/ui/loading.cpp \
     src/ui/confirm.cpp \
     src/ui/background.cpp \
@@ -61,6 +62,7 @@ HEADERS += \
     include/core/brbooth.h \
     include/core/camera.h \
     include/core/capture.h \
+    include/core/system_monitor.h \
     include/core/videotemplate.h \
     include/core/common_types.h \
     include/ui/loading.h \

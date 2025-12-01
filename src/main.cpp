@@ -9,6 +9,43 @@
 #include <opencv2/cudaimgproc.hpp>
 #include <opencv2/cudawarping.hpp>
 #include <opencv2/cudafilters.hpp>
+#include "core/system_monitor.h"
+#include <csignal>
+#include <cstdlib>
+#include <windows.h>
+
+// Global pointer to system monitor for crash handler
+static SystemMonitor* g_systemMonitor = nullptr;
+static BRBooth* g_brbooth = nullptr;
+
+// Crash handler function
+void crashHandler(int signal)
+{
+    qDebug() << "CRASH DETECTED! Signal:" << signal;
+    qDebug() << "Attempting to save statistics...";
+    
+    if (g_systemMonitor) {
+        g_systemMonitor->saveStatisticsToText();
+        qDebug() << "Statistics saved to text file";
+    }
+    
+    // Exit
+    std::exit(1);
+}
+
+// Windows exception handler
+LONG WINAPI exceptionHandler(EXCEPTION_POINTERS* exceptionInfo)
+{
+    qDebug() << "WINDOWS EXCEPTION DETECTED! Code:" << exceptionInfo->ExceptionRecord->ExceptionCode;
+    qDebug() << "Attempting to save statistics...";
+    
+    if (g_systemMonitor) {
+        g_systemMonitor->saveStatisticsToText();
+        qDebug() << "Statistics saved to text file";
+    }
+    
+    return EXCEPTION_EXECUTE_HANDLER;
+}
 
 int main(int argc, char *argv[])
 {
@@ -125,7 +162,26 @@ int main(int argc, char *argv[])
     qDebug() << "Summary: CUDA Available:" << cudaAvailable << "| CUDA DNN:" << cudaDnnAvailable;
 
     qRegisterMetaType<VideoTemplate>("Video Template");
+    
+    // Set up crash handlers
+    std::signal(SIGABRT, crashHandler);
+    std::signal(SIGSEGV, crashHandler);
+    std::signal(SIGFPE, crashHandler);
+    std::signal(SIGILL, crashHandler);
+    SetUnhandledExceptionFilter(exceptionHandler);
+    
     BRBooth w;
+    g_brbooth = &w;
+    
+    // Get system monitor from BRBooth for crash handler
+    g_systemMonitor = w.getSystemMonitor();
+    
     w.showFullScreen();
-    return a.exec();
+    int result = a.exec();
+    
+    // Clean up
+    g_brbooth = nullptr;
+    g_systemMonitor = nullptr;
+    
+    return result;
 }
