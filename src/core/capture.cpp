@@ -8,6 +8,8 @@
 #include <QPixmap>
 #include <QTimer>
 #include <QPropertyAnimation>
+#include <QGraphicsOpacityEffect>
+#include <QEasingCurve>
 #include <vector>
 #include <QFont>
 #include <QResizeEvent>
@@ -177,6 +179,9 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     , cameraWorker(existingCameraWorker)
     , countdownTimer(nullptr)
     , countdownLabel(nullptr)
+    , flashOverlayLabel(nullptr)
+    , flashAnimation(nullptr)
+    , recordingTimerLabel(nullptr)
     , countdownValue(0)
     , m_currentCaptureMode(ImageCaptureMode)
     , m_isRecording(false)
@@ -549,6 +554,43 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
         "color:white; background-color: rgba(0, 0, 0, 150); border-radius: 20px;");
     countdownLabel->setFixedSize(200, 200);
     countdownLabel->hide();
+
+    // Flash overlay for capture animation
+    flashOverlayLabel = new QLabel(ui->overlayWidget);
+    flashOverlayLabel->setStyleSheet("background-color: white;");
+    flashOverlayLabel->resize(ui->overlayWidget->size());
+    flashOverlayLabel->move(0, 0);
+    flashOverlayLabel->hide();
+    flashOverlayLabel->lower(); // Place behind other overlays
+    
+    // Create flash animation
+    QGraphicsOpacityEffect *flashEffect = new QGraphicsOpacityEffect(flashOverlayLabel);
+    flashOverlayLabel->setGraphicsEffect(flashEffect);
+    flashAnimation = new QPropertyAnimation(flashEffect, "opacity", this);
+    flashAnimation->setDuration(150); // 150ms flash animation (faster)
+    flashAnimation->setEasingCurve(QEasingCurve::OutCubic);
+    
+    // Connect animation finished signal to hide overlay (only once)
+    connect(flashAnimation, &QPropertyAnimation::finished, this, [this]() {
+        if (flashOverlayLabel) {
+            flashOverlayLabel->hide();
+        }
+    });
+
+    // Recording timer label (top right corner)
+    recordingTimerLabel = new QLabel(ui->overlayWidget);
+    recordingTimerLabel->setAlignment(Qt::AlignCenter);
+    QFont timerFont = recordingTimerLabel->font();
+    timerFont.setPointSize(24);
+    timerFont.setBold(true);
+    recordingTimerLabel->setFont(timerFont);
+    recordingTimerLabel->setStyleSheet(
+        "color: white; "
+        "background-color: rgba(255, 0, 0, 200); "
+        "border: 3px solid red; "
+        "border-radius: 10px; "
+        "padding: 10px 20px;");
+    recordingTimerLabel->hide();
 
     qDebug() << "Capture UI initialized. Loading Camera...";
 }
@@ -1191,14 +1233,20 @@ void Capture::updateCountdown()
     } else {
         countdownTimer->stop();
         countdownLabel->hide();
-
+        
         if (m_currentCaptureMode == ImageCaptureMode) {
-            performImageCapture();
+            // Show flash animation immediately
+            showCaptureFlash();
+            
+            // Take the picture after a brief delay (during flash)
+            QTimer::singleShot(50, this, [this]() {
+                performImageCapture();
 
-            // Reset capture button for next capture and re-enable hand detection
-            ui->capture->setEnabled(true);
-            enableHandDetection(true);
-            qDebug() << "Capture completed - hand detection re-enabled for next capture";
+                // Reset capture button for next capture and re-enable hand detection
+                ui->capture->setEnabled(true);
+                enableHandDetection(true);
+                qDebug() << "Capture completed - hand detection re-enabled for next capture";
+            });
         } else if (m_currentCaptureMode == VideoRecordMode) {
             startRecording();
         }
@@ -1214,6 +1262,21 @@ void Capture::updateRecordTimer()
                  << m_currentVideoTemplate.durationSeconds << " seconds)";
         stopRecording();
     } else {
+        // Update recording timer label
+        if (recordingTimerLabel) {
+            int remainingSeconds = m_currentVideoTemplate.durationSeconds - m_recordedSeconds;
+            int minutes = remainingSeconds / 60;
+            int seconds = remainingSeconds % 60;
+            QString timeText = QString("%1:%2").arg(minutes, 2, 10, QChar('0'))
+                                                .arg(seconds, 2, 10, QChar('0'));
+            recordingTimerLabel->setText(timeText);
+            recordingTimerLabel->adjustSize();
+            // Reposition in case size changed
+            int x = width() - recordingTimerLabel->width() - 20;
+            int y = 20;
+            recordingTimerLabel->move(x, y);
+        }
+        
         // Show progress every 2 seconds or when near completion
         if (m_recordedSeconds % 2 == 0 ||
             m_recordedSeconds >= m_currentVideoTemplate.durationSeconds - 2) {
@@ -1458,6 +1521,20 @@ void Capture::resizeEvent(QResizeEvent *event)
         int x = (width() - countdownLabel->width()) / 2;
         int y = (height() - countdownLabel->height()) / 2;
         countdownLabel->move(x, y);
+    }
+    
+    // Resize flash overlay to cover entire screen
+    if (flashOverlayLabel) {
+        flashOverlayLabel->resize(size());
+        flashOverlayLabel->move(0, 0);
+    }
+    
+    // Position recording timer label in top right corner
+    if (recordingTimerLabel) {
+        recordingTimerLabel->adjustSize();
+        int x = width() - recordingTimerLabel->width() - 20;
+        int y = 20;
+        recordingTimerLabel->move(x, y);
     }
 
     // Center the status overlay when window is resized
@@ -1744,6 +1821,28 @@ void Capture::startRecording()
     // SCALING PRESERVATION: Store the current scaling factor for post-processing
     m_recordedPersonScaleFactor = m_personScaleFactor;
     qDebug() << "SCALING: Stored scaling factor" << m_recordedPersonScaleFactor << "for post-processing";
+    
+    // Show recording indicators: red border and timer
+    if (ui->videoLabel) {
+        ui->videoLabel->setStyleSheet("background-color: #333; color: white; border-radius: 10px; border: 5px solid red;");
+    }
+    
+    // Show and initialize recording timer label
+    if (recordingTimerLabel) {
+        int totalSeconds = m_currentVideoTemplate.durationSeconds;
+        int minutes = totalSeconds / 60;
+        int seconds = totalSeconds % 60;
+        QString timeText = QString("%1:%2").arg(minutes, 2, 10, QChar('0'))
+                                            .arg(seconds, 2, 10, QChar('0'));
+        recordingTimerLabel->setText(timeText);
+        recordingTimerLabel->adjustSize();
+        // Position in top right
+        int x = width() - recordingTimerLabel->width() - 20;
+        int y = 20;
+        recordingTimerLabel->move(x, y);
+        recordingTimerLabel->show();
+        recordingTimerLabel->raise();
+    }
 
     // Choose recording FPS: use template's native FPS for dynamic video backgrounds, else camera FPS
     if (m_useDynamicVideoBackground && m_videoFrameRate > 0.0) {
@@ -1788,6 +1887,15 @@ void Capture::stopRecording()
     recordTimer->stop();
     recordingFrameTimer->stop();
     m_isRecording = false;
+    
+    // Hide recording indicators: remove red border and hide timer
+    if (ui->videoLabel) {
+        ui->videoLabel->setStyleSheet("background-color: #333; color: white; border-radius: 10px;"); // Remove red border, keep other styles
+    }
+    
+    if (recordingTimerLabel) {
+        recordingTimerLabel->hide();
+    }
 
     qDebug() << " DIRECT CAPTURE RECORDING: Stopped. Captured " + QString::number(m_recordedFrames.size())
                     + " frames.";
@@ -1875,6 +1983,38 @@ void Capture::startPostProcessing()
         // Show final output page immediately
         emit showFinalOutputPage();
         qDebug() << " No processing needed - showing final output page";
+    }
+}
+
+void Capture::showCaptureFlash()
+{
+    if (!flashOverlayLabel || !flashAnimation) {
+        return;
+    }
+    
+    // Ensure flash overlay is properly sized
+    flashOverlayLabel->resize(ui->overlayWidget->size());
+    flashOverlayLabel->move(0, 0);
+    
+    // Show flash overlay
+    flashOverlayLabel->show();
+    flashOverlayLabel->raise(); // Bring to front
+    
+    // Set initial opacity to 0
+    QGraphicsOpacityEffect *effect = qobject_cast<QGraphicsOpacityEffect*>(flashOverlayLabel->graphicsEffect());
+    if (effect) {
+        effect->setOpacity(0.0);
+        
+        // Stop any ongoing animation
+        if (flashAnimation->state() == QPropertyAnimation::Running) {
+            flashAnimation->stop();
+        }
+        
+        // Animate flash: fade in quickly, then fade out
+        flashAnimation->setStartValue(0.0);
+        flashAnimation->setKeyValueAt(0.3, 0.8); // Peak at 30% of duration
+        flashAnimation->setEndValue(0.0);
+        flashAnimation->start();
     }
 }
 

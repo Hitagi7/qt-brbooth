@@ -291,6 +291,7 @@ private:
     void performImageCapture();
     void startRecording();
     void stopRecording();
+    void showCaptureFlash();  // Show flash animation when taking picture
 
     Ui::Capture *ui;
 
@@ -301,6 +302,9 @@ private:
 
     QTimer *countdownTimer;
     QLabel *countdownLabel;
+    QLabel *flashOverlayLabel;  // Flash overlay for capture animation
+    QPropertyAnimation *flashAnimation;  // Animation for flash effect
+    QLabel *recordingTimerLabel;  // Timer label showing remaining recording time
     int countdownValue;
 
     CaptureMode m_currentCaptureMode;
