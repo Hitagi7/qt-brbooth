@@ -29,21 +29,45 @@ Idle::~Idle()
 
 void Idle::setupWalkthroughLabels()
 {
-    // Main vertical container to center everything
-    QVBoxLayout *outerLayout = new QVBoxLayout(this);
+    // Get layouts from UI file
+    QVBoxLayout *outerLayout = qobject_cast<QVBoxLayout*>(this->layout());
+    if (!outerLayout) {
+        qWarning() << "Could not find outerLayout in UI file";
+        return;
+    }
+    
     outerLayout->setAlignment(Qt::AlignCenter);
-    outerLayout->setContentsMargins(20, 20, 20, 20);
-    outerLayout->setSpacing(0);
     
-    outerLayout->addStretch(2);
+    // Find the steps layout from UI
+    QHBoxLayout *stepsLayout = nullptr;
+    for (int i = 0; i < outerLayout->count(); i++) {
+        QLayoutItem *item = outerLayout->itemAt(i);
+        if (item && item->layout()) {
+            QHBoxLayout *hLayout = qobject_cast<QHBoxLayout*>(item->layout());
+            if (hLayout) {
+                stepsLayout = hLayout;
+                break;
+            }
+        }
+    }
     
-    // Horizontal layout for the steps
-    QHBoxLayout *stepsLayout = new QHBoxLayout();
+    if (!stepsLayout) {
+        qWarning() << "Could not find stepsLayout in UI file";
+        return;
+    }
+    
     stepsLayout->setAlignment(Qt::AlignCenter);
-    stepsLayout->setSpacing(5);
+    
+    // Get title label from UI file
+    m_titleLabel = ui->titleLabel;
     
     // Step 1
-    m_step1Label = new QLabel("🎭\n\nStep 1\n\nSelect STATIC\nor DYNAMIC", this);
+    m_step1Label = new QLabel("<div style='text-align: center;'>"
+                              "<div style='font-size: 64px; margin-bottom: 10px;'>🎭</div>"
+                              "<div style='font-size: 28px; font-weight: bold; margin: 10px 0;'>Step 1</div>"
+                              "<div style='font-size: 20px; line-height: 1.4;'>Select STATIC<br>or DYNAMIC</div>"
+                              "</div>", this);
+    m_step1Label->setTextFormat(Qt::RichText);
     m_step1Label->setAlignment(Qt::AlignCenter);
     m_step1Label->setWordWrap(true);
     m_step1Label->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
@@ -55,11 +79,22 @@ void Idle::setupWalkthroughLabels()
     QLabel *arrow1 = new QLabel("➡️", this);
     arrow1->setAlignment(Qt::AlignCenter);
     arrow1->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
-    arrow1->setStyleSheet("QLabel { font-size: 96px; color: #0bc200; background-color: transparent; }");
+    arrow1->setProperty("class", "arrowLabel");
+    arrow1->setStyleSheet("QLabel {"
+                         "  font-size: 96px;"
+                         "  color: #0bc200;"
+                         "  background-color: transparent;"
+                         "  font-weight: bold;"
+                         "}");
     stepsLayout->addWidget(arrow1, 0);
     
     // Step 2
-    m_step2Label = new QLabel("🖼️\n\nStep 2\n\nChoose your\nfavorite template", this);
+    m_step2Label = new QLabel("<div style='text-align: center;'>"
+                              "<div style='font-size: 64px; margin-bottom: 10px;'>🖼️</div>"
+                              "<div style='font-size: 28px; font-weight: bold; margin: 10px 0;'>Step 2</div>"
+                              "<div style='font-size: 20px; line-height: 1.4;'>Choose your<br>favorite template</div>"
+                              "</div>", this);
+    m_step2Label->setTextFormat(Qt::RichText);
     m_step2Label->setAlignment(Qt::AlignCenter);
     m_step2Label->setWordWrap(true);
     m_step2Label->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
@@ -71,11 +106,22 @@ void Idle::setupWalkthroughLabels()
     QLabel *arrow2 = new QLabel("➡️", this);
     arrow2->setAlignment(Qt::AlignCenter);
     arrow2->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
-    arrow2->setStyleSheet("QLabel { font-size: 96px; color: #0bc200; background-color: transparent; }");
+    arrow2->setProperty("class", "arrowLabel");
+    arrow2->setStyleSheet("QLabel {"
+                         "  font-size: 96px;"
+                         "  color: #0bc200;"
+                         "  background-color: transparent;"
+                         "  font-weight: bold;"
+                         "}");
     stepsLayout->addWidget(arrow2, 0);
     
     // Step 3
-    m_step3Label = new QLabel("📸\n\nStep 3\n\nGet ready\nfor the camera", this);
+    m_step3Label = new QLabel("<div style='text-align: center;'>"
+                              "<div style='font-size: 64px; margin-bottom: 10px;'>📸</div>"
+                              "<div style='font-size: 28px; font-weight: bold; margin: 10px 0;'>Step 3</div>"
+                              "<div style='font-size: 20px; line-height: 1.4;'>Get ready<br>for the camera</div>"
+                              "</div>", this);
+    m_step3Label->setTextFormat(Qt::RichText);
     m_step3Label->setAlignment(Qt::AlignCenter);
     m_step3Label->setWordWrap(true);
     m_step3Label->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
@@ -87,11 +133,22 @@ void Idle::setupWalkthroughLabels()
     QLabel *arrow3 = new QLabel("➡️", this);
     arrow3->setAlignment(Qt::AlignCenter);
     arrow3->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
-    arrow3->setStyleSheet("QLabel { font-size: 96px; color: #0bc200; background-color: transparent; }");
+    arrow3->setProperty("class", "arrowLabel");
+    arrow3->setStyleSheet("QLabel {"
+                         "  font-size: 96px;"
+                         "  color: #0bc200;"
+                         "  background-color: transparent;"
+                         "  font-weight: bold;"
+                         "}");
     stepsLayout->addWidget(arrow3, 0);
     
     // Step 4
-    m_step4Label = new QLabel("✨\n\nStep 4\n\nStrike a pose\nand capture!", this);
+    m_step4Label = new QLabel("<div style='text-align: center;'>"
+                              "<div style='font-size: 64px; margin-bottom: 10px;'>✨</div>"
+                              "<div style='font-size: 28px; font-weight: bold; margin: 10px 0;'>Step 4</div>"
+                              "<div style='font-size: 20px; line-height: 1.4;'>Strike a pose<br>and capture!</div>"
+                              "</div>", this);
+    m_step4Label->setTextFormat(Qt::RichText);
     m_step4Label->setAlignment(Qt::AlignCenter);
     m_step4Label->setWordWrap(true);
     m_step4Label->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
@@ -103,11 +160,22 @@ void Idle::setupWalkthroughLabels()
     QLabel *arrow4 = new QLabel("➡️", this);
     arrow4->setAlignment(Qt::AlignCenter);
     arrow4->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
-    arrow4->setStyleSheet("QLabel { font-size: 96px; color: #0bc200; background-color: transparent; }");
+    arrow4->setProperty("class", "arrowLabel");
+    arrow4->setStyleSheet("QLabel {"
+                         "  font-size: 96px;"
+                         "  color: #0bc200;"
+                         "  background-color: transparent;"
+                         "  font-weight: bold;"
+                         "}");
     stepsLayout->addWidget(arrow4, 0);
     
     // Step 5
-    m_step5Label = new QLabel("💾\n\nStep 5\n\nSave or retake\nyour photo!", this);
+    m_step5Label = new QLabel("<div style='text-align: center;'>"
+                              "<div style='font-size: 64px; margin-bottom: 10px;'>💾</div>"
+                              "<div style='font-size: 28px; font-weight: bold; margin: 10px 0;'>Step 5</div>"
+                              "<div style='font-size: 20px; line-height: 1.4;'>Save or retake<br>your photo!</div>"
+                              "</div>", this);
+    m_step5Label->setTextFormat(Qt::RichText);
     m_step5Label->setAlignment(Qt::AlignCenter);
     m_step5Label->setWordWrap(true);
     m_step5Label->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
@@ -115,16 +183,7 @@ void Idle::setupWalkthroughLabels()
     m_step5Label->setGraphicsEffect(m_step5Effect);
     stepsLayout->addWidget(m_step5Label, 1);
     
-    outerLayout->addLayout(stepsLayout, 3);
-    
-    outerLayout->addStretch(2);
-    
-    // Set background style with animated gradient
-    this->setStyleSheet("QWidget#Idle {"
-                       "  background: qlineargradient(x1:0, y1:0, x2:1, y2:1,"
-                       "    stop:0 #0f0c29, stop:0.4 #302b63, stop:0.8 #24243e, stop:1 #0f0c29);"
-                       "}");
-    
+    // Background style is already set in the .ui file
     // Initially hide all steps
     hideAllSteps();
 }
@@ -233,15 +292,17 @@ void Idle::showStep(int step)
 
 void Idle::updateWalkthroughStep()
 {
-    showStep(m_currentStep);
+    // Move to next step before showing it
     m_currentStep = (m_currentStep + 1) % 5; // Cycle through 5 steps
+    showStep(m_currentStep);
 }
 
 void Idle::startWalkthrough()
 {
     qDebug() << "Starting idle mode walkthrough animation";
     m_currentStep = 0;
-    showStep(0);
+    showStep(0); // Show first step immediately
+    // Start timer - when it fires, it will move to step 1
     m_walkthroughTimer->start(3000); // Change step every 3 seconds
 }
 
@@ -278,9 +339,30 @@ void Idle::updateFontSizes()
     int screenHeight = this->height();
     
     // Base font sizes scale with screen size
-    int titleFontSize = qMax(24, qMin(56, screenHeight / 18));
+    int titleFontSize = qMax(32, qMin(72, screenHeight / 15));
     int stepFontSize = qMax(18, qMin(42, screenHeight / 22));
     Q_UNUSED(screenWidth); // Suppress unused variable warning
+    
+    // Update title font - keep same style as "Select Output Type" but scale font size
+    if (m_titleLabel) {
+        int scaledFontSize = qMax(40, qMin(70, screenHeight / 18));
+        int scaledWidth = qMax(500, qMin(800, screenWidth / 2));
+        int scaledHeight = qMax(100, qMin(150, screenHeight / 8));
+        
+        m_titleLabel->setMinimumSize(scaledWidth, scaledHeight);
+        m_titleLabel->setMaximumSize(scaledWidth, scaledHeight);
+        m_titleLabel->setStyleSheet(QString("#titleLabel {"
+                                            "  color: #FFF;"
+                                            "  text-align: center;"
+                                            "  font-family: 'Roboto Condensed';"
+                                            "  font-style: italic;"
+                                            "  font-weight: 700;"
+                                            "  font-size: %1px;"
+                                            "  background-color: #0BC200;"
+                                            "  border-radius: 9px;"
+                                            "  border-bottom: 2px solid #020202;"
+                                            "}").arg(scaledFontSize));
+    }
     
     // Update step label styles
     QString normalStyle = getStepStyle(stepFontSize);
@@ -313,39 +395,39 @@ void Idle::updateFontSizes()
 
 QString Idle::getStepStyle(int fontSize)
 {
-    int borderRadius = qMax(10, fontSize / 2);
-    int padding = qMax(15, fontSize / 2);
+    int borderRadius = qMax(20, fontSize / 2 + 8);
+    int padding = qMax(25, fontSize / 2 + 10);
     
     return QString("QLabel {"
-                  "  font-family: 'Roboto Condensed', sans-serif;"
-                  "  font-size: %1px;"
-                  "  font-weight: bold;"
+                  "  font-family: 'Roboto Condensed', 'Arial', sans-serif;"
                   "  color: white;"
-                  "  background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
-                  "    stop:0 rgba(11, 194, 0, 200),"
-                  "    stop:1 rgba(8, 150, 0, 200));"
-                  "  border: 3px solid rgba(255, 255, 255, 100);"
-                  "  border-radius: %2px;"
-                  "  padding: %3px;"
-                  "}").arg(fontSize).arg(borderRadius).arg(padding);
+                  "  background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
+                  "    stop:0 rgba(11, 194, 0, 220),"
+                  "    stop:0.5 rgba(11, 194, 0, 200),"
+                  "    stop:1 rgba(8, 150, 0, 220));"
+                  "  border: 3px solid rgba(255, 255, 255, 120);"
+                  "  border-radius: %1px;"
+                  "  padding: %2px;"
+                  "  min-height: 220px;"
+                  "}").arg(borderRadius).arg(padding);
 }
 
 QString Idle::getHighlightStepStyle(int fontSize)
 {
-    int borderRadius = qMax(12, fontSize / 2);
-    int padding = qMax(18, fontSize / 2);
+    int borderRadius = qMax(25, fontSize / 2 + 12);
+    int padding = qMax(30, fontSize / 2 + 12);
     
     return QString("QLabel {"
-                  "  font-family: 'Roboto Condensed', sans-serif;"
-                  "  font-size: %1px;"
-                  "  font-weight: bold;"
+                  "  font-family: 'Roboto Condensed', 'Arial', sans-serif;"
                   "  color: white;"
-                  "  background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
+                  "  background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
                   "    stop:0 rgba(11, 194, 0, 255),"
-                  "    stop:1 rgba(9, 170, 0, 255));"
-                  "  border: 5px solid rgba(255, 255, 255, 230);"
-                  "  border-radius: %2px;"
-                  "  padding: %3px;"
-                  "}").arg(fontSize).arg(borderRadius).arg(padding);
+                  "    stop:0.5 rgba(15, 220, 0, 255),"
+                  "    stop:1 rgba(11, 194, 0, 255));"
+                  "  border: 5px solid rgba(255, 255, 255, 250);"
+                  "  border-radius: %1px;"
+                  "  padding: %2px;"
+                  "  min-height: 240px;"
+                  "}").arg(borderRadius).arg(padding);
 }
 

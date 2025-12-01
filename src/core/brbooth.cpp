@@ -266,7 +266,7 @@ BRBooth::BRBooth(QWidget *parent)
     // Initialize idle mode tracking
     m_idleTimer = new QTimer(this);
     m_idleTimer->setSingleShot(true);
-    m_idleTimer->setInterval(30000); // 30 seconds before idle mode
+    m_idleTimer->setInterval(15000); // 15 seconds before idle mode
     connect(m_idleTimer, &QTimer::timeout, this, &BRBooth::onIdleTimeout);
     m_pageBeforeIdle = -1;
     m_isIdleModeActive = false;
@@ -923,7 +923,7 @@ void BRBooth::startIdleTimer()
     if (!m_isIdleModeActive) {
         m_idleTimerEnabled = true;
         m_idleTimer->start();
-        qDebug() << "▶️ IDLE TIMER STARTED (30 seconds) - Enabled:" << m_idleTimerEnabled;
+        qDebug() << "▶️ IDLE TIMER STARTED (15 seconds) - Enabled:" << m_idleTimerEnabled;
     } else {
         qDebug() << "⚠️ Cannot start idle timer - already in idle mode";
     }

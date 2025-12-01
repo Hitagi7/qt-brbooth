@@ -7,6 +7,9 @@
 #include <QPropertyAnimation>
 #include <QGraphicsOpacityEffect>
 #include <QEasingCurve>
+#include <QShowEvent>
+#include <QHideEvent>
+#include <QResizeEvent>
 
 QT_BEGIN_NAMESPACE
 namespace Ui { class Idle; }
@@ -47,6 +50,7 @@ private:
     QLabel *m_step5Label = nullptr;
     QLabel *m_subtitleLabel = nullptr;
     QLabel *m_bottomLabel = nullptr;
+    QLabel *m_titleLabel = nullptr;
     
     // Opacity effects for fade in/out
     QGraphicsOpacityEffect *m_step1Effect = nullptr;
@@ -68,4 +72,3 @@ private:
 };
 
 #endif // IDLE_H
-
