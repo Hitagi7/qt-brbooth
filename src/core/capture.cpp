@@ -1331,9 +1331,8 @@ void Capture::setupDebugDisplay()
     debugWidget->move(10, 10); // Position in top-left corner
     debugWidget->resize(350, 80); // Compact size without keybind instructions
     debugWidget->raise(); // Ensure it's on top
-    debugWidget->setVisible(true); // Make sure it's visible
+    debugWidget->setVisible(false); // Hidden by default - press 'D' to toggle
 
-    debugWidget->show(); // Show debug widget so user can enable segmentation and hand detection
 
     // Force debug display update to show correct initial state
     updateDebugDisplay();
@@ -1467,11 +1466,11 @@ void Capture::resizeEvent(QResizeEvent *event)
 
 
 
-    // Ensure debug widget is visible and properly positioned
+    // Ensure debug widget is properly positioned (but keep current visibility state)
     if (debugWidget) {
         debugWidget->move(10, 10);
         debugWidget->raise();
-        debugWidget->setVisible(true);
+        // Don't force visibility - respect user's toggle state
     }
 
     updateOverlayStyles();
