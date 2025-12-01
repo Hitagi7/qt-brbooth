@@ -206,6 +206,9 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     , m_hogDetector()
     , m_hogDetectorDaimler(cv::Size(48, 96), cv::Size(16, 16), cv::Size(8, 8), cv::Size(8, 8), 9)
     , m_bgSubtractor()
+    , m_subtractionReferenceImage()
+    , m_subtractionReferenceImage2()
+    , m_subtractionBlendWeight(0.5)  // Default: equal blend
     , m_useGPU(false)
     , m_useCUDA(false)
     , m_gpuUtilized(false)
@@ -3855,15 +3858,91 @@ cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect 
     // If no valid edge contours found, use background subtraction approach
     if (validContours.empty()) {
         qDebug() << "No valid edge contours, trying background subtraction";
-        // CRASH FIX: Check if background subtractor is initialized
-        if (!m_bgSubtractor) {
-            qWarning() << "Background subtractor not initialized, cannot perform segmentation";
-            // Return empty mask - let caller handle this gracefully
-            return cv::Mat::zeros(roi.size(), CV_8UC1);
-        }
-        // Use background subtraction for motion-based segmentation
+        
         cv::Mat fgMask;
-        m_bgSubtractor->apply(roi, fgMask);
+        
+        // Check if static reference image(s) are available - use them for subtraction
+        if (!m_subtractionReferenceImage.empty() || !m_subtractionReferenceImage2.empty()) {
+            cv::Mat refResized;
+            
+            // If both reference images are available, blend them
+            if (!m_subtractionReferenceImage.empty() && !m_subtractionReferenceImage2.empty()) {
+                cv::Mat ref1, ref2;
+                if (m_subtractionReferenceImage.size() != roi.size()) {
+                    cv::resize(m_subtractionReferenceImage, ref1, roi.size(), 0, 0, cv::INTER_LINEAR);
+                } else {
+                    ref1 = m_subtractionReferenceImage;
+                }
+                if (m_subtractionReferenceImage2.size() != roi.size()) {
+                    cv::resize(m_subtractionReferenceImage2, ref2, roi.size(), 0, 0, cv::INTER_LINEAR);
+                } else {
+                    ref2 = m_subtractionReferenceImage2;
+                }
+                
+                // Blend the two reference images: weight * ref2 + (1-weight) * ref1
+                double alpha = m_subtractionBlendWeight;
+                double beta = 1.0 - alpha;
+                cv::addWeighted(ref1, beta, ref2, alpha, 0.0, refResized);
+            } else if (!m_subtractionReferenceImage.empty()) {
+                // Use only first reference image
+                if (m_subtractionReferenceImage.size() != roi.size()) {
+                    cv::resize(m_subtractionReferenceImage, refResized, roi.size(), 0, 0, cv::INTER_LINEAR);
+                } else {
+                    refResized = m_subtractionReferenceImage;
+                }
+            } else {
+                // Use only second reference image
+                if (m_subtractionReferenceImage2.size() != roi.size()) {
+                    cv::resize(m_subtractionReferenceImage2, refResized, roi.size(), 0, 0, cv::INTER_LINEAR);
+                } else {
+                    refResized = m_subtractionReferenceImage2;
+                }
+            }
+            
+            if (m_useCUDA) {
+                try {
+                    // GPU-accelerated absolute difference
+                    cv::cuda::GpuMat gpu_roi, gpu_ref, gpu_diff;
+                    gpu_roi.upload(roi);
+                    gpu_ref.upload(refResized);
+                    
+                    cv::cuda::absdiff(gpu_roi, gpu_ref, gpu_diff);
+                    
+                    // Convert to grayscale and threshold
+                    cv::cuda::GpuMat gpu_gray;
+                    cv::cuda::cvtColor(gpu_diff, gpu_gray, cv::COLOR_BGR2GRAY);
+                    
+                    cv::cuda::GpuMat gpu_mask;
+                    cv::cuda::threshold(gpu_gray, gpu_mask, 30, 255, cv::THRESH_BINARY);
+                    
+                    gpu_mask.download(fgMask);
+                } catch (...) {
+                    // Fallback to CPU
+                    cv::Mat diff;
+                    cv::absdiff(roi, refResized, diff);
+                    cv::Mat gray;
+                    cv::cvtColor(diff, gray, cv::COLOR_BGR2GRAY);
+                    cv::threshold(gray, fgMask, 30, 255, cv::THRESH_BINARY);
+                }
+            } else {
+                // CPU static reference subtraction
+                cv::Mat diff;
+                cv::absdiff(roi, refResized, diff);
+                cv::Mat gray;
+                cv::cvtColor(diff, gray, cv::COLOR_BGR2GRAY);
+                cv::threshold(gray, fgMask, 30, 255, cv::THRESH_BINARY);
+            }
+            qDebug() << "Using static reference image(s) for background subtraction";
+        } else {
+            // CRASH FIX: Check if background subtractor is initialized
+            if (!m_bgSubtractor) {
+                qWarning() << "Background subtractor not initialized, cannot perform segmentation";
+                // Return empty mask - let caller handle this gracefully
+                return cv::Mat::zeros(roi.size(), CV_8UC1);
+            }
+            // Use MOG2 background subtraction for motion-based segmentation
+            m_bgSubtractor->apply(roi, fgMask);
+        }
 
         // GPU-accelerated morphological operations for full body
         if (m_useCUDA) {
@@ -4411,6 +4490,87 @@ cv::Mat Capture::getMotionMask(const cv::Mat &frame)
 {
     cv::Mat fgMask;
 
+    // Check if static reference image(s) are available - use them for subtraction
+    if (!m_subtractionReferenceImage.empty() || !m_subtractionReferenceImage2.empty()) {
+        cv::Mat refResized;
+        
+        // If both reference images are available, blend them
+        if (!m_subtractionReferenceImage.empty() && !m_subtractionReferenceImage2.empty()) {
+            cv::Mat ref1, ref2;
+            if (m_subtractionReferenceImage.size() != frame.size()) {
+                cv::resize(m_subtractionReferenceImage, ref1, frame.size(), 0, 0, cv::INTER_LINEAR);
+            } else {
+                ref1 = m_subtractionReferenceImage;
+            }
+            if (m_subtractionReferenceImage2.size() != frame.size()) {
+                cv::resize(m_subtractionReferenceImage2, ref2, frame.size(), 0, 0, cv::INTER_LINEAR);
+            } else {
+                ref2 = m_subtractionReferenceImage2;
+            }
+            
+            // Blend the two reference images: weight * ref2 + (1-weight) * ref1
+            double alpha = m_subtractionBlendWeight;
+            double beta = 1.0 - alpha;
+            cv::addWeighted(ref1, beta, ref2, alpha, 0.0, refResized);
+        } else if (!m_subtractionReferenceImage.empty()) {
+            // Use only first reference image
+            if (m_subtractionReferenceImage.size() != frame.size()) {
+                cv::resize(m_subtractionReferenceImage, refResized, frame.size(), 0, 0, cv::INTER_LINEAR);
+            } else {
+                refResized = m_subtractionReferenceImage;
+            }
+        } else {
+            // Use only second reference image
+            if (m_subtractionReferenceImage2.size() != frame.size()) {
+                cv::resize(m_subtractionReferenceImage2, refResized, frame.size(), 0, 0, cv::INTER_LINEAR);
+            } else {
+                refResized = m_subtractionReferenceImage2;
+            }
+        }
+        
+        if (m_useCUDA) {
+            try {
+                // GPU-accelerated absolute difference
+                cv::cuda::GpuMat gpu_frame, gpu_ref, gpu_diff;
+                gpu_frame.upload(frame);
+                gpu_ref.upload(refResized);
+                
+                cv::cuda::absdiff(gpu_frame, gpu_ref, gpu_diff);
+                
+                // Convert to grayscale and threshold
+                cv::cuda::GpuMat gpu_gray;
+                cv::cuda::cvtColor(gpu_diff, gpu_gray, cv::COLOR_BGR2GRAY);
+                
+                cv::cuda::GpuMat gpu_mask;
+                cv::cuda::threshold(gpu_gray, gpu_mask, 30, 255, cv::THRESH_BINARY);
+                
+                gpu_mask.download(fgMask);
+            } catch (...) {
+                // Fallback to CPU
+                cv::Mat diff;
+                cv::absdiff(frame, refResized, diff);
+                cv::Mat gray;
+                cv::cvtColor(diff, gray, cv::COLOR_BGR2GRAY);
+                cv::threshold(gray, fgMask, 30, 255, cv::THRESH_BINARY);
+            }
+        } else {
+            // CPU static reference subtraction
+            cv::Mat diff;
+            cv::absdiff(frame, refResized, diff);
+            cv::Mat gray;
+            cv::cvtColor(diff, gray, cv::COLOR_BGR2GRAY);
+            cv::threshold(gray, fgMask, 30, 255, cv::THRESH_BINARY);
+        }
+        
+        // Apply morphological operations
+        cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
+        cv::morphologyEx(fgMask, fgMask, cv::MORPH_OPEN, kernel);
+        cv::morphologyEx(fgMask, fgMask, cv::MORPH_CLOSE, kernel);
+        
+        return fgMask;
+    }
+
+    // Fallback to MOG2 background subtractor if no static reference
     if (m_useCUDA) {
         // CUDA-accelerated background subtraction using cv::cuda::BackgroundSubtractorMOG2
         try {
@@ -6439,6 +6599,78 @@ void Capture::setReferenceTemplate(const QString &templatePath)
             qWarning() << "Could not resolve reference template path:" << templatePath;
         }
     }
+}
+
+void Capture::setSubtractionReferenceImage(const QString &imagePath)
+{
+    if (imagePath.isEmpty()) {
+        m_subtractionReferenceImage.release();
+        qDebug() << "Subtraction reference image cleared";
+        return;
+    }
+    
+    // Try to resolve the path
+    QString resolvedPath = resolveTemplatePath(imagePath);
+    if (resolvedPath.isEmpty()) {
+        // Try direct path
+        if (QFile::exists(imagePath)) {
+            resolvedPath = imagePath;
+        } else {
+            qWarning() << "Could not resolve subtraction reference image path:" << imagePath;
+            m_subtractionReferenceImage.release();
+            return;
+        }
+    }
+    
+    // Load the reference image
+    cv::Mat refImage = cv::imread(resolvedPath.toStdString());
+    if (!refImage.empty()) {
+        m_subtractionReferenceImage = refImage;
+        qDebug() << "Subtraction reference image loaded from:" << resolvedPath
+                 << "Size:" << m_subtractionReferenceImage.cols << "x" << m_subtractionReferenceImage.rows;
+    } else {
+        qWarning() << "Failed to load subtraction reference image from:" << resolvedPath;
+        m_subtractionReferenceImage.release();
+    }
+}
+
+void Capture::setSubtractionReferenceImage2(const QString &imagePath)
+{
+    if (imagePath.isEmpty()) {
+        m_subtractionReferenceImage2.release();
+        qDebug() << "Subtraction reference image 2 cleared";
+        return;
+    }
+    
+    // Try to resolve the path
+    QString resolvedPath = resolveTemplatePath(imagePath);
+    if (resolvedPath.isEmpty()) {
+        // Try direct path
+        if (QFile::exists(imagePath)) {
+            resolvedPath = imagePath;
+        } else {
+            qWarning() << "Could not resolve subtraction reference image 2 path:" << imagePath;
+            m_subtractionReferenceImage2.release();
+            return;
+        }
+    }
+    
+    // Load the reference image
+    cv::Mat refImage = cv::imread(resolvedPath.toStdString());
+    if (!refImage.empty()) {
+        m_subtractionReferenceImage2 = refImage;
+        qDebug() << "Subtraction reference image 2 loaded from:" << resolvedPath
+                 << "Size:" << m_subtractionReferenceImage2.cols << "x" << m_subtractionReferenceImage2.rows;
+    } else {
+        qWarning() << "Failed to load subtraction reference image 2 from:" << resolvedPath;
+        m_subtractionReferenceImage2.release();
+    }
+}
+
+void Capture::setSubtractionReferenceBlendWeight(double weight)
+{
+    m_subtractionBlendWeight = std::max(0.0, std::min(1.0, weight));
+    qDebug() << "Subtraction reference blend weight set to:" << m_subtractionBlendWeight;
 }
 
 // Forward declaration to ensure availability before use

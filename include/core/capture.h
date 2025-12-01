@@ -444,6 +444,9 @@ private:
     cv::HOGDescriptor m_hogDetectorDaimler;  // CPU fallback
     cv::Ptr<cv::cuda::HOG> m_cudaHogDetector;  // CUDA-accelerated HOG detection
     cv::Ptr<cv::BackgroundSubtractorMOG2> m_bgSubtractor;
+    cv::Mat m_subtractionReferenceImage;  // Static reference image for background subtraction
+    cv::Mat m_subtractionReferenceImage2;  // Second static reference image for background subtraction
+    double m_subtractionBlendWeight;  // Weight for blending two reference images (0.0-1.0)
     bool m_useGPU;
     bool m_useCUDA;
     bool m_gpuUtilized;
@@ -533,6 +536,11 @@ private:
     void initializeLightingCorrection();
     bool isGPULightingAvailable() const;
     void setReferenceTemplate(const QString &templatePath);
+    
+    // Background Subtraction Reference Image
+    void setSubtractionReferenceImage(const QString &imagePath);
+    void setSubtractionReferenceImage2(const QString &imagePath);
+    void setSubtractionReferenceBlendWeight(double weight);  // Weight for blending (0.0 = use only first, 1.0 = use only second, 0.5 = equal blend)
     cv::Mat createPersonMaskFromSegmentedFrame(const cv::Mat &segmentedFrame);
     cv::Mat applyPersonColorMatching(const cv::Mat &segmentedFrame);
     cv::Mat applyLightingToRawPersonRegion(const cv::Mat &personRegion, const cv::Mat &personMask);
