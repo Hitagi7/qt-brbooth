@@ -5,6 +5,8 @@
 #include <QTextStream>
 #include <QStandardPaths>
 #include <QCoreApplication>
+#include <QtCore/qmath.h>
+#include <algorithm>
 #include <windows.h>
 #include <pdh.h>
 #include <psapi.h>
@@ -337,14 +339,16 @@ void SystemMonitor::updateFPS(double fps)
     
     // Simple volatile write - thread-safe on x86/x64, no locks, no crashes
     // Volatile ensures the write is not optimized away and is visible to other threads
-    if (fps > 0.0 && fps < 1000.0) { // Sanity check: FPS should be reasonable
+    // Cap at reasonable maximum (200 FPS) to prevent outliers from skewing statistics
+    double cappedFPS = (fps > 200.0) ? 200.0 : fps;
+    if (cappedFPS > 0.0 && cappedFPS <= 200.0) { // Sanity check: FPS should be reasonable (0-200 range)
         qDebug() << "SystemMonitor: About to write to m_latestFPS, current value:" << m_latestFPS;
         
         // Use memcpy as a safer alternative to direct assignment
-        double tempFPS = fps;
+        double tempFPS = cappedFPS;
         std::memcpy(const_cast<double*>(&m_latestFPS), &tempFPS, sizeof(double));
         
-        qDebug() << "SystemMonitor: FPS updated to:" << fps << "Verification read:" << m_latestFPS;
+        qDebug() << "SystemMonitor: FPS updated to:" << cappedFPS << "(original:" << fps << ") Verification read:" << m_latestFPS;
     } else {
         qDebug() << "SystemMonitor: Invalid FPS value rejected:" << fps;
     }

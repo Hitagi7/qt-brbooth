@@ -394,6 +394,7 @@ private:
     double m_lastPersonDetectionTime;
     cv::Mat m_currentFrame;
     cv::Mat m_lastSegmentedFrame;
+    int m_segmentedFrameCounter;  // Track unique frames for accurate FPS measurement
     mutable QMutex m_personDetectionMutex;
     QElapsedTimer m_personDetectionTimer;
     cv::Ptr<cv::BackgroundSubtractorMOG2> m_bgSubtractor;
@@ -412,6 +413,7 @@ private:
     //  GPU Memory Pool for optimized CUDA operations
     GPUMemoryPool m_gpuMemoryPool;
     bool m_gpuMemoryPoolInitialized;
+    bool m_firstFrameHandled;  // Track if first frame has been processed
     
     //  Asynchronous Recording System
     QThread *m_recordingThread;

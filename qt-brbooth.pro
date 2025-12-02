@@ -44,6 +44,11 @@ SOURCES += \
     src/core/camera.cpp \
     src/core/capture.cpp \
     src/core/capture_dynamic.cpp \
+    src/core/capture_green_screen.cpp \
+    src/core/capture_segmentation.cpp \
+    src/core/capture_lighting.cpp \
+    src/core/capture_edge_blending.cpp \
+    src/core/gpu_memory_pool.cpp \
     src/core/system_monitor.cpp \
     src/ui/loading.cpp \
     src/ui/confirm.cpp \
@@ -60,6 +65,7 @@ HEADERS += \
     include/core/brbooth.h \
     include/core/camera.h \
     include/core/capture.h \
+    include/core/capture_edge_blending.h \
     include/core/system_monitor.h \
     include/core/videotemplate.h \
     include/core/common_types.h \
