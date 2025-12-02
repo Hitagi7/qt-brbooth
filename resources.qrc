@@ -5,7 +5,6 @@
         <file>pics/1.png</file>
         <file>pics/2.png</file>
         <file>pics/3.png</file>
-        <file>pics/4.png</file>
         <file>pics/5.png</file>
         <file>pics/6.png</file>
         <file>pics/bg.jpg</file>
@@ -16,6 +15,7 @@
         <file>pics/bg5.png</file>
         <file>pics/bg6.png</file>
         <file>pics/staticlandingbg.png</file>
+        <file>pics/4.png</file>
     </qresource>
     <qresource prefix="/fonts">
         <file>Fonts/static/RobotoCondensed-BoldItalic.ttf</file>
@@ -26,23 +26,12 @@
         <file>Icons/camera.svg</file>
         <file>Icons/save.svg</file>
     </qresource>
-
-    <!-- Commented out video resources to prevent memory issues during compilation -->
-    <!--
-    <qresource prefix="/videos">
-        <file>videos/video1.mp4</file>
-        <file>videos/video2.mp4</file>
-        <file>videos/video3.mp4</file>
-        <file>videos/video4.mp4</file>
-        <file>videos/video5.mp4</file>
-    </qresource>
-    -->
     <qresource prefix="/foreground">
         <file>templates/foreground/1.png</file>
         <file>templates/foreground/2.png</file>
         <file>templates/foreground/3.png</file>
-        <file>templates/foreground/4.png</file>
         <file>templates/foreground/5.png</file>
+        <file>templates/foreground/4.png</file>
     </qresource>
     <qresource prefix="/background">
         <file>templates/background/bg1.png</file>
@@ -51,8 +40,6 @@
         <file>templates/background/bg4.png</file>
         <file>templates/background/bg5.png</file>
     </qresource>
-
-
     <qresource prefix="/gif">
         <file>gif templates/dynamicbg1.gif</file>
         <file>gif templates/dynamicbg2.gif</file>
@@ -60,14 +47,4 @@
         <file>gif templates/dynamicbg4.gif</file>
         <file>gif templates/dynamicbg5.gif</file>
     </qresource>
-    <!-- Commented out dynamic video resources to prevent memory issues during compilation -->
-    <!--
-    <qresource prefix="/dynamic">
-        <file>templates/dynamic/vidtemplate1.mp4</file>
-        <file>templates/dynamic/vidtemplate2.mp4</file>
-        <file>templates/dynamic/vidtemplate3.mp4</file>
-        <file>templates/dynamic/vidtemplate4.mp4</file>
-        <file>templates/dynamic/vidtemplate5.mp4</file>
-    </qresource>
-    -->
 </RCC>

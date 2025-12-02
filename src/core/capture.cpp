@@ -2,7 +2,7 @@
 #include "core/camera.h"
 #include "ui/foreground.h"
 #include "ui_capture.h"
-#include "algorithms/hand_detection/hand_detector.h"
+// Hand detection removed per user request
 #include <QDebug>
 #include <QImage>
 #include <QPixmap>
@@ -219,20 +219,11 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     , m_useGPU(false)
     , m_useCUDA(false)
     , m_gpuUtilized(false)
-    , m_handDetector(new HandDetector())
-    , m_showHandDetection(true)
-    , m_handDetectionEnabled(false)
-    , m_handDetectionMutex()
-    , m_handDetectionTimer()
-    , m_lastHandDetectionTime(0.0)
-    , m_handDetectionFPS(0)
+    // Hand detection completely removed
     , m_systemMonitor(nullptr)
-    , m_lastHandDetections()
     , m_cudaUtilized(false)
     , m_personDetectionWatcher(nullptr)
     , m_lastDetections()
-    , m_handDetectionFuture()
-    , m_handDetectionWatcher(nullptr)
     , m_captureReady(false)
     , m_segmentationEnabledInCapture(false)
     , m_selectedBackgroundTemplate()
@@ -263,7 +254,7 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     , debugWidget(nullptr)
     , debugLabel(nullptr)
     , m_recordingThreadActive(false)
-    , handDetectionLabel(nullptr)
+    // Hand detection UI removed
     , m_recordingFrameQueue()
     , m_recordingStream()
     , debugUpdateTimer(nullptr)
@@ -313,6 +304,12 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     , m_bgColorInvCovReady(false)
 
 {
+    // Initialize cv::Ptr members to nullptr (cannot be default-constructed)
+    m_greenScreenCannyDetector = nullptr;
+    m_greenScreenMorphOpen = nullptr;
+    m_greenScreenMorphClose = nullptr;
+    m_greenScreenGaussianBlur = nullptr;
+    
     ui->setupUi(this);
     // Dynamic video background defaults
     m_useDynamicVideoBackground = false;
@@ -490,15 +487,7 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     initializePersonDetection();
 
     // Initialize Hand Detection (disabled by default)
-    qDebug() << "Constructor: Setting m_handDetectionEnabled = false";
-    m_handDetectionEnabled = false;
-    qDebug() << "Constructor: Before initializeHandDetection(), m_handDetectionEnabled = " << m_handDetectionEnabled;
-    initializeHandDetection();
-    qDebug() << "Constructor: After initializeHandDetection(), m_handDetectionEnabled = " << m_handDetectionEnabled;
-    // Ensure it stays disabled after initialization
-    m_handDetectionEnabled = false;
-    qDebug() << "Constructor: Final setting, m_handDetectionEnabled = " << m_handDetectionEnabled;
-    qDebug() << "Constructor: Hand detection is DISABLED by default as requested";
+    // Hand detection completely removed
     m_captureReady = true;  // Start with capture ready
     // Initialize MediaPipe-like tracker
     // TODO: Initialize hand tracker when available
@@ -534,13 +523,7 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     connect(m_personDetectionWatcher, &QFutureWatcher<cv::Mat>::finished,
             this, &Capture::onPersonDetectionFinished);
 
-    // Initialize async processing for hand detection
-    m_handDetectionWatcher = new QFutureWatcher<QList<HandDetection>>(this);
-    connect(m_handDetectionWatcher, &QFutureWatcher<QList<HandDetection>>::finished,
-            this, &Capture::onHandDetectionFinished);
-
-    // Connect hand detection signal to slot for thread-safe UI updates
-    connect(this, &Capture::handTriggeredCapture, this, &Capture::onHandTriggeredCapture);
+    // Hand detection completely removed
 
     ui->capture->setEnabled(true);
 
@@ -605,9 +588,7 @@ Capture::~Capture()
     if (foreground) {
         disconnect(foreground, nullptr, this, nullptr);
     }
-    if (m_handDetector) {
-        disconnect(m_handDetector, nullptr, this, nullptr);
-    }
+    // Hand detection removed
 
     if (debugUpdateTimer) {
         disconnect(debugUpdateTimer, nullptr, this, nullptr);
@@ -639,10 +620,9 @@ Capture::~Capture()
     // Clean up debug widgets
     if (debugWidget){ delete debugWidget; debugWidget = nullptr; }
     if (debugLabel){ delete debugLabel; debugLabel = nullptr; }
-    if (handDetectionLabel){ delete handDetectionLabel; handDetectionLabel = nullptr; }
+    // Hand detection UI removed
 
-    // Clean up hand detector
-    if (m_handDetector){ delete m_handDetector; m_handDetector = nullptr; }
+    // Hand detection removed
     
     // Clean up lighting corrector
     if (m_lightingCorrector){ 
@@ -810,19 +790,7 @@ void Capture::updateCameraFeed(const QImage &image)
             m_personDetectionWatcher->setFuture(future);
         }
 
-        // Process hand detection in background (non-blocking) - only after initial frames
-        if (m_handDetectionEnabled && frameCount > 30 && !m_handDetectionWatcher->isRunning()) {
-            QMutexLocker locker(&m_handDetectionMutex);
-            m_currentFrame = qImageToCvMat(image);
-
-            // Process hand detection in background thread
-            QFuture<QList<HandDetection>> future = QtConcurrent::run([this]() {
-                return m_handDetector->detect(m_currentFrame);
-            });
-
-            // Set the future to the watcher for async processing
-            m_handDetectionWatcher->setFuture(future);
-        }
+        // Hand detection removed
     }
 
     // --- Performance stats (always run for every valid frame received) ---
@@ -1210,10 +1178,7 @@ void Capture::on_capture_clicked()
         return;
     }
 
-    // Keep hand detection state as set by user
-        if (m_handDetector) {
-            m_handDetector->resetGestureState();
-    }
+    // Hand detection removed
 
     // If hand detection is already enabled, then start the countdown
     ui->capture->setEnabled(false);
@@ -1261,10 +1226,8 @@ void Capture::updateCountdown()
             QTimer::singleShot(50, this, [this]() {
                 performImageCapture();
 
-                // Reset capture button for next capture and re-enable hand detection
+                // Reset capture button for next capture
                 ui->capture->setEnabled(true);
-                enableHandDetection(true);
-                qDebug() << "Capture completed - hand detection re-enabled for next capture";
             });
         } else if (m_currentCaptureMode == VideoRecordMode) {
             startRecording();
@@ -1390,7 +1353,7 @@ cv::Mat Capture::qImageToCvMat(const QImage &image)
 }
 void Capture::setupDebugDisplay()
 {
-    qDebug() << "setupDebugDisplay called - m_handDetectionEnabled:" << m_handDetectionEnabled;
+    qDebug() << "setupDebugDisplay called";
     
     // Create debug widget
     debugWidget = new QWidget(this);
@@ -1426,21 +1389,13 @@ void Capture::setupDebugDisplay()
     
     // Force another update after a short delay to ensure correct display
     QTimer::singleShot(100, [this]() {
-        qDebug() << "Force refresh - m_handDetectionEnabled:" << m_handDetectionEnabled;
         updateDebugDisplay();
     });
 
     qDebug() << "Debug display setup complete - FPS, GPU, and CUDA status should be visible";
-    qDebug() << "Final hand detection state:" << m_handDetectionEnabled;
 }
 
-void Capture::enableHandDetectionForCapture()
-{
-    // Don't force hand detection to be enabled - respect user preference
-    // enableHandDetection(true);  // Removed - let user control hand detection
-    qDebug() << "enableHandDetectionForCapture called - hand detection state:" << m_handDetectionEnabled;
-    enableSegmentationInCapture();
-}
+// Hand detection completely removed - enableHandDetectionForCapture removed
 
 void Capture::setCaptureReady(bool ready)
 {
@@ -1481,21 +1436,15 @@ void Capture::resetCapturePage()
     ui->capture->setEnabled(true);
     qDebug() << "Capture button reset to enabled";
 
-    // Reset hand detection state (keep user preference)
+    // Hand detection removed
     m_captureReady = true;
-    if (m_handDetector) {
-        m_handDetector->resetGestureState();
-        qDebug() << "Hand detection state reset";
-    }
 
     // Reset segmentation state for capture interface
     enableSegmentationInCapture();
     qDebug() << "Segmentation reset for capture interface";
 
-    // Reset all detection state
-    m_lastHandDetections.clear();
-    m_handDetectionFPS = 0.0;
-    m_lastHandDetectionTime = 0.0;
+    // Hand detection removed
+    // Hand detection removed
 
     // BUG FIX: Don't reset capture mode - preserve user's mode selection (static/dynamic)
     // The mode should only be changed when user explicitly selects a different template type
@@ -1651,13 +1600,7 @@ void Capture::keyPressEvent(QKeyEvent *event)
                             break;
         case Qt::Key_H:
             // Toggle hand detection
-            if (m_handDetectionEnabled) {
-                enableHandDetection(false);
-                qDebug() << "Hand Detection DISABLED via 'H' key";
-            } else {
-                enableHandDetection(true);
-                qDebug() << "Hand Detection ENABLED via 'H' key";
-            }
+            // Hand detection removed - 'H' key disabled
             updateDebugDisplay();
             break;
         case Qt::Key_F12:
@@ -1677,9 +1620,7 @@ void Capture::showEvent(QShowEvent *event)
     // Camera is now managed continuously by brbooth.cpp, no need to start it here
     // Just enable segmentation after a short delay (hand detection is user-controlled)
     QTimer::singleShot(100, [this]() {
-        if (m_handDetector) {
-            m_handDetector->resetGestureState();
-        }
+        // Hand detection removed
         enableSegmentationInCapture();
         qDebug() << "Segmentation ENABLED for capture interface";
         qDebug() << "Hand detection is DISABLED by default - use debug menu to enable";
@@ -1708,38 +1649,7 @@ void Capture::hideEvent(QHideEvent *event)
     // This prevents lag when returning to capture page
 }
 
-void Capture::drawHandBoundingBoxes(cv::Mat &/*frame*/, const QList<HandDetection> &detections)
-{
-    // REMOVED: No more bounding box drawing to avoid conflicts with segmentation
-    // Only show gesture status in console for debugging
-    for (const auto& detection : detections) {
-        if (detection.confidence >= m_handDetector->getConfidenceThreshold()) {
-            // Check if capture should be triggered - automatically start countdown when hand closed
-            if (m_handDetector->shouldTriggerCapture()) {
-                qDebug() << "HAND CLOSED DETECTED! Automatically triggering capture...";
-                qDebug() << "Segmentation enabled:" << m_segmentationEnabledInCapture;
-
-                // Emit signal to trigger capture in main thread (thread-safe)
-                emit handTriggeredCapture();
-            }
-
-            // Show gesture status in console only
-            bool isOpen = m_handDetector->isHandOpen(detection.landmarks);
-            bool isClosed = m_handDetector->isHandClosed(detection.landmarks);
-            double closureRatio = m_handDetector->calculateHandClosureRatio(detection.landmarks);
-
-            // Update hand state for trigger logic
-            m_handDetector->updateHandState(isClosed);
-
-            if (isOpen || isClosed) {
-                QString gestureStatus = isOpen ? "OPEN" : "CLOSED";
-                qDebug() << "Hand detected - Gesture:" << gestureStatus
-                         << "Confidence:" << static_cast<int>(detection.confidence * 100) << "%"
-                         << "Closure ratio:" << closureRatio;
-            }
-        }
-    }
-}
+// Hand detection completely removed - drawHandBoundingBoxes implementation removed
 
 
 
@@ -1750,7 +1660,7 @@ void Capture::updateDebugDisplay()
     updateCount++;
     
     // Always log hand detection state for debugging
-    qDebug() << "updateDebugDisplay #" << updateCount << "- m_handDetectionEnabled:" << m_handDetectionEnabled;
+        qDebug() << "updateDebugDisplay #" << updateCount;
     
     if (updateCount % 10 == 0) { // Log every 5 seconds (10 updates * 500ms)
         qDebug() << "Debug display update #" << updateCount << "FPS:" << m_currentFPS << "GPU:" << m_useGPU << "CUDA:" << m_useCUDA;
@@ -1759,33 +1669,14 @@ void Capture::updateDebugDisplay()
     if (debugLabel) {
         QString peopleDetected = QString::number(m_lastDetections.size());
         QString segmentationStatus = m_segmentationEnabledInCapture ? "ON" : "OFF";
-        QString handStatus = m_handDetectionEnabled ? "ON" : "OFF";
         QString aiFPS = m_segmentationEnabledInCapture ? QString::number(m_personDetectionFPS, 'f', 1) : "0.0";
         
-        // Debug: Log the exact values being used
-        static int debugCount = 0;
-        if (debugCount < 5) {
-            qDebug() << "DEBUG DISPLAY VALUES:";
-            qDebug() << "  - m_handDetectionEnabled:" << m_handDetectionEnabled;
-            qDebug() << "  - handStatus string:" << handStatus;
-            qDebug() << "  - segmentationStatus:" << segmentationStatus;
-            debugCount++;
-        }
-        
-        QString debugInfo = QString("FPS: %1 | People: %2 | Seg: %3 | Hand: %4 | Person FPS: %5")
+        QString debugInfo = QString("FPS: %1 | People: %2 | Seg: %3 | Person FPS: %4")
                            .arg(QString::number(m_currentFPS, 'f', 1))
                            .arg(peopleDetected)
                            .arg(segmentationStatus)
-                           .arg(handStatus)
                            .arg(aiFPS);
         debugLabel->setText(debugInfo);
-        
-        // Debug output to verify hand detection state
-        static int debugCount2 = 0;
-        if (debugCount2 < 10) { // Log first 10 times to see startup behavior
-            qDebug() << "Debug display - m_handDetectionEnabled:" << m_handDetectionEnabled << "Display:" << handStatus;
-            debugCount2++;
-        }
     }
 
 
@@ -1799,14 +1690,22 @@ void Capture::startRecording()
     }
 
     // CRASH FIX: Ensure background subtractor is initialized before recording in segmentation mode
-    if (m_segmentationEnabledInCapture && !m_bgSubtractor) {
+    // OPTIMIZATION: Only create if not already initialized (should be initialized in initializePersonDetection)
+    if (m_segmentationEnabledInCapture && m_bgSubtractor.empty()) {
         qWarning() << "Background subtractor not initialized, initializing now...";
-        m_bgSubtractor = cv::createBackgroundSubtractorMOG2(500, 16, false);
-        if (!m_bgSubtractor) {
-            qWarning() << "Failed to create background subtractor!";
-            QMessageBox::warning(this, "Recording Error", "Failed to initialize segmentation system. Please restart the application.");
-            ui->capture->setEnabled(true);
-            return;
+        // Ensure person detection is initialized first (this will also initialize background subtractor)
+        qWarning() << "Person detection may not be initialized, calling initializePersonDetection()...";
+        initializePersonDetection();
+        // Double-check after initialization
+        if (m_bgSubtractor.empty()) {
+            qWarning() << "Background subtractor still not initialized after initializePersonDetection, creating directly...";
+            m_bgSubtractor = cv::createBackgroundSubtractorMOG2(500, 16, false);
+            if (m_bgSubtractor.empty()) {
+                qWarning() << "Failed to create background subtractor!";
+                QMessageBox::warning(this, "Recording Error", "Failed to initialize segmentation system. Please restart the application.");
+                ui->capture->setEnabled(true);
+                return;
+            }
         }
     }
 
@@ -1953,55 +1852,110 @@ void Capture::startPostProcessing()
 {
     qDebug() << " Starting post-processing after user confirmation";
     
+    // CRASH PREVENTION: Validate recorded frames
     if (m_recordedFrames.isEmpty()) {
         qWarning() << " No recorded frames available for post-processing";
         return;
     }
     
-    // Send original frames to loading page for background preview
-    qDebug() << "Sending original frames to loading page for background preview";
-    emit videoRecordedForLoading(m_originalRecordedFrames, m_adjustedRecordingFPS);
+    // CRASH PREVENTION: Validate original recorded frames
+    if (m_originalRecordedFrames.isEmpty()) {
+        qWarning() << " No original recorded frames available - using recorded frames";
+        m_originalRecordedFrames = m_recordedFrames;
+    }
     
-    //  Show loading UI (now has original frame background)
-    qDebug() << "Showing loading UI with original frame background";
-    emit showLoadingPage();
+    // CRASH PREVENTION: Validate FPS
+    if (m_adjustedRecordingFPS <= 0) {
+        qWarning() << " Invalid FPS:" << m_adjustedRecordingFPS << "- using default 30";
+        m_adjustedRecordingFPS = 30.0;
+    }
     
-    if (m_hasVideoLightingComparison) {
-        qDebug() << "Starting ASYNC lighting correction for enhanced output";
+    try {
+        // Send original frames to loading page for background preview
+        qDebug() << "Sending original frames to loading page for background preview";
+        emit videoRecordedForLoading(m_originalRecordedFrames, m_adjustedRecordingFPS);
         
-        //  ASYNC POST-PROCESSING: Apply lighting correction in background thread
-        qDebug() << "Post-processing recorded video with lighting correction (per-frame) - ASYNC MODE";
+        //  Show loading UI (now has original frame background)
+        qDebug() << "Showing loading UI with original frame background";
+        emit showLoadingPage();
         
-        // Check if watcher is available
-        if (!m_lightingWatcher) {
-            qWarning() << " Lighting watcher not initialized! Falling back to synchronous processing";
-            QList<QPixmap> processedFrames = processRecordedVideoWithLighting(m_recordedFrames, m_adjustedRecordingFPS);
-            emit videoRecordedWithComparison(processedFrames, m_originalRecordedFrames, m_adjustedRecordingFPS);
-            emit showFinalOutputPage();
-            return;
-        }
-        
-        // Run processing in background thread using QtConcurrent
-        QFuture<QList<QPixmap>> future = QtConcurrent::run(
-            [this]() {
-                return processRecordedVideoWithLighting(m_recordedFrames, m_adjustedRecordingFPS);
+        if (m_hasVideoLightingComparison) {
+            qDebug() << "Starting ASYNC lighting correction for enhanced output";
+            
+            //  ASYNC POST-PROCESSING: Apply lighting correction in background thread
+            qDebug() << "Post-processing recorded video with lighting correction (per-frame) - ASYNC MODE";
+            
+            // Check if watcher is available
+            if (!m_lightingWatcher) {
+                qWarning() << " Lighting watcher not initialized! Falling back to synchronous processing";
+                try {
+                    QList<QPixmap> processedFrames = processRecordedVideoWithLighting(m_recordedFrames, m_adjustedRecordingFPS);
+                    if (!processedFrames.isEmpty()) {
+                        emit videoRecordedWithComparison(processedFrames, m_originalRecordedFrames, m_adjustedRecordingFPS);
+                    } else {
+                        qWarning() << " Processed frames empty, using original frames";
+                        emit videoRecorded(m_recordedFrames, m_adjustedRecordingFPS);
+                    }
+                    emit showFinalOutputPage();
+                } catch (const std::exception& e) {
+                    qWarning() << " Synchronous processing failed:" << e.what() << "- using original frames";
+                    emit videoRecorded(m_recordedFrames, m_adjustedRecordingFPS);
+                    emit showFinalOutputPage();
+                }
+                return;
             }
-        );
-        
-        // Set the future on the watcher (will trigger onVideoProcessingFinished when done)
-        m_lightingWatcher->setFuture(future);
-        
-        qDebug() << " Video processing started in background thread - UI will remain responsive";
-        
-    } else {
-        qDebug() << "No lighting correction needed - sending original frames to final output";
-        
-        // Send original frames to final output page
+            
+            // CRASH PREVENTION: Check if previous processing is still running
+            if (m_lightingWatcher->isRunning()) {
+                qWarning() << " Previous processing still running, cancelling and restarting";
+                m_lightingWatcher->cancel();
+                m_lightingWatcher->waitForFinished(); // Wait for completion
+            }
+            
+            // CRASH PREVENTION: Make local copies of data needed for processing
+            QList<QPixmap> localRecordedFrames = m_recordedFrames;
+            double localFPS = m_adjustedRecordingFPS;
+            
+            // Run processing in background thread using QtConcurrent
+            QFuture<QList<QPixmap>> future = QtConcurrent::run(
+                [this, localRecordedFrames, localFPS]() {
+                    try {
+                        return processRecordedVideoWithLighting(localRecordedFrames, localFPS);
+                    } catch (const std::exception& e) {
+                        qWarning() << " Exception in background processing:" << e.what();
+                        return QList<QPixmap>(); // Return empty list on error
+                    } catch (...) {
+                        qWarning() << " Unknown exception in background processing";
+                        return QList<QPixmap>(); // Return empty list on error
+                    }
+                }
+            );
+            
+            // Set the future on the watcher (will trigger onVideoProcessingFinished when done)
+            m_lightingWatcher->setFuture(future);
+            
+            qDebug() << " Video processing started in background thread - UI will remain responsive";
+            
+        } else {
+            qDebug() << "No lighting correction needed - sending original frames to final output";
+            
+            // Send original frames to final output page
+            emit videoRecorded(m_recordedFrames, m_adjustedRecordingFPS);
+            
+            // Show final output page immediately
+            emit showFinalOutputPage();
+            qDebug() << " No processing needed - showing final output page";
+        }
+    } catch (const std::exception& e) {
+        qWarning() << " Exception in startPostProcessing:" << e.what();
+        // Fallback: send original frames
         emit videoRecorded(m_recordedFrames, m_adjustedRecordingFPS);
-        
-        // Show final output page immediately
         emit showFinalOutputPage();
-        qDebug() << " No processing needed - showing final output page";
+    } catch (...) {
+        qWarning() << " Unknown exception in startPostProcessing";
+        // Fallback: send original frames
+        emit videoRecorded(m_recordedFrames, m_adjustedRecordingFPS);
+        emit showFinalOutputPage();
     }
 }
 
@@ -2916,7 +2870,13 @@ void Capture::initializePersonDetection()
     qDebug() << "===== CUDA HOG INITIALIZATION COMPLETE =====";
 
     // Initialize background subtractor for motion detection (matching peopledetect_v1.cpp)
-    m_bgSubtractor = cv::createBackgroundSubtractorMOG2(500, 16, false);
+    // OPTIMIZATION: Only create if not already initialized to avoid recreating unnecessarily
+    if (m_bgSubtractor.empty()) {
+        m_bgSubtractor = cv::createBackgroundSubtractorMOG2(500, 16, false);
+        qDebug() << "Background subtractor initialized in initializePersonDetection()";
+    } else {
+        qDebug() << "Background subtractor already initialized, skipping recreation";
+    }
 
     //  Initialize GPU Memory Pool for optimized CUDA operations
     if (!m_gpuMemoryPoolInitialized && cv::cuda::getCudaEnabledDeviceCount() > 0) {
@@ -3107,6 +3067,12 @@ std::vector<cv::Rect> Capture::runCudaHogPass(const cv::Mat &frame,
     }
 
     try {
+        // CRASH PREVENTION: Validate frame has 3 channels before BGR2GRAY conversion
+        if (frame.empty() || frame.channels() != 3) {
+            qWarning() << "Invalid frame for CUDA HOG: empty or not 3 channels";
+            return std::vector<cv::Rect>();
+        }
+        
         cv::cuda::GpuMat gpuFrame;
         gpuFrame.upload(frame);
 
@@ -3927,6 +3893,12 @@ cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect 
             cv::cuda::GpuMat gpu_roi;
             gpu_roi.upload(roi);
 
+            // CRASH PREVENTION: Validate ROI has 3 channels before BGR2GRAY conversion
+            if (roi.empty() || roi.channels() != 3) {
+                qWarning() << "Invalid ROI for GPU processing: empty or not 3 channels";
+                return roiMask; // Return empty mask
+            }
+
             // Convert to grayscale on GPU
             cv::cuda::GpuMat gpu_gray;
             cv::cuda::cvtColor(gpu_roi, gpu_gray, cv::COLOR_BGR2GRAY);
@@ -3954,6 +3926,11 @@ cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect 
         } catch (const cv::Exception& e) {
             qWarning() << "CUDA edge detection failed, falling back to CPU:" << e.what();
             // Fallback to CPU processing
+            // CRASH PREVENTION: Validate ROI has 3 channels before BGR2GRAY conversion
+            if (roi.empty() || roi.channels() != 3) {
+                qWarning() << "Invalid ROI for CPU fallback: empty or not 3 channels";
+                return roiMask; // Return empty mask
+            }
             cv::Mat gray;
             cv::cvtColor(roi, gray, cv::COLOR_BGR2GRAY);
             cv::Mat blurred;
@@ -3964,6 +3941,11 @@ cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect 
         }
     } else {
         // CPU fallback
+        // CRASH PREVENTION: Validate ROI has 3 channels before BGR2GRAY conversion
+        if (roi.empty() || roi.channels() != 3) {
+            qWarning() << "Invalid ROI for CPU processing: empty or not 3 channels";
+            return edges; // Return empty edges
+        }
         cv::Mat gray;
         cv::cvtColor(roi, gray, cv::COLOR_BGR2GRAY);
         cv::Mat blurred;
@@ -4079,6 +4061,12 @@ cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect 
                     // Fallback to CPU
                     cv::Mat diff;
                     cv::absdiff(roi, refResized, diff);
+                    // CRASH PREVENTION: Validate diff has 3 channels before BGR2GRAY conversion
+                    if (diff.empty() || diff.channels() != 3) {
+                        qWarning() << "Invalid diff for CPU processing: empty or not 3 channels";
+                        fgMask = cv::Mat::zeros(roi.size(), CV_8UC1);
+                        return fgMask; // Return empty mask
+                    }
                     cv::Mat gray;
                     cv::cvtColor(diff, gray, cv::COLOR_BGR2GRAY);
                     cv::threshold(gray, fgMask, 30, 255, cv::THRESH_BINARY);
@@ -4380,6 +4368,12 @@ cv::Mat Capture::enhancedSilhouetteSegmentGPUOnly(const cv::cuda::GpuMat &gpuFra
     cv::cuda::GpuMat gpuRoi = gpuFrame(expandedRect);
         cv::cuda::GpuMat gpuRoiMask(gpuRoi.size(), CV_8UC1, cv::Scalar(0));
 
+        // CRASH PREVENTION: Validate gpuRoi has 3 channels before BGR2GRAY conversion
+        if (gpuRoi.empty() || gpuRoi.channels() != 3) {
+            qWarning() << "Invalid gpuRoi for GPU processing: empty or not 3 channels";
+            return cv::Mat::zeros(gpuFrame.size(), CV_8UC1); // Return empty mask
+        }
+        
         // Use standard GPU processing without memory pool
     cv::cuda::GpuMat gpuGray, gpuEdges;
     cv::cuda::cvtColor(gpuRoi, gpuGray, cv::COLOR_BGR2GRAY);
@@ -4429,6 +4423,12 @@ cv::Mat Capture::enhancedSilhouetteSegmentGPUOnly(const cv::cuda::GpuMat &gpuFra
     cv::cuda::Stream& detectionStream = m_gpuMemoryPool.getDetectionStream();
     cv::cuda::Stream& segmentationStream = m_gpuMemoryPool.getSegmentationStream();
 
+    // CRASH PREVENTION: Validate gpuRoi has 3 channels before BGR2GRAY conversion
+    if (gpuRoi.empty() || gpuRoi.channels() != 3) {
+        qWarning() << "Invalid gpuRoi for GPU memory pool processing: empty or not 3 channels";
+        return cv::Mat::zeros(gpuFrame.size(), CV_8UC1); // Return empty mask
+    }
+    
     // Step 1: GPU Color Conversion (async)
     cv::cuda::GpuMat& gpuGray = m_gpuMemoryPool.getNextTempBuffer();
     cv::cuda::GpuMat& gpuEdges = m_gpuMemoryPool.getNextDetectionBuffer();
@@ -4696,6 +4696,30 @@ cv::Mat Capture::getMotionMask(const cv::Mat &frame)
                 
                 cv::cuda::absdiff(gpu_frame, gpu_ref, gpu_diff);
                 
+                // CRASH PREVENTION: Validate diff has 3 channels before BGR2GRAY conversion
+                if (gpu_diff.empty() || gpu_diff.channels() != 3) {
+                    qWarning() << "Invalid diff for GPU processing: empty or not 3 channels";
+                    // Fallback to CPU
+                    cv::Mat diff;
+                    cv::absdiff(frame, refResized, diff);
+                    if (diff.channels() == 3) {
+                        cv::Mat gray;
+                        cv::cvtColor(diff, gray, cv::COLOR_BGR2GRAY);
+                        cv::threshold(gray, fgMask, 30, 255, cv::THRESH_BINARY);
+                    } else {
+                        qWarning() << "Diff is not 3 channels, using empty mask";
+                        fgMask = cv::Mat::zeros(frame.size(), CV_8UC1);
+                    }
+                    return fgMask; // Return empty mask
+                }
+                
+                // CRASH PREVENTION: Validate gpu_diff has 3 channels before BGR2GRAY conversion
+                if (gpu_diff.empty() || gpu_diff.channels() != 3) {
+                    qWarning() << "Invalid gpu_diff for GPU processing: empty or not 3 channels";
+                    fgMask = cv::Mat::zeros(frame.size(), CV_8UC1);
+                    return fgMask; // Return empty mask
+                }
+                
                 // Convert to grayscale and threshold
                 cv::cuda::GpuMat gpu_gray;
                 cv::cuda::cvtColor(gpu_diff, gpu_gray, cv::COLOR_BGR2GRAY);
@@ -4708,6 +4732,12 @@ cv::Mat Capture::getMotionMask(const cv::Mat &frame)
                 // Fallback to CPU
                 cv::Mat diff;
                 cv::absdiff(frame, refResized, diff);
+                // CRASH PREVENTION: Validate diff has 3 channels before BGR2GRAY conversion
+                if (diff.empty() || diff.channels() != 3) {
+                    qWarning() << "Invalid diff for CPU fallback: empty or not 3 channels";
+                    fgMask = cv::Mat::zeros(frame.size(), CV_8UC1);
+                    return fgMask; // Return empty mask
+                }
                 cv::Mat gray;
                 cv::cvtColor(diff, gray, cv::COLOR_BGR2GRAY);
                 cv::threshold(gray, fgMask, 30, 255, cv::THRESH_BINARY);
@@ -4716,6 +4746,12 @@ cv::Mat Capture::getMotionMask(const cv::Mat &frame)
             // CPU static reference subtraction
             cv::Mat diff;
             cv::absdiff(frame, refResized, diff);
+            // CRASH PREVENTION: Validate diff has 3 channels before BGR2GRAY conversion
+            if (diff.empty() || diff.channels() != 3) {
+                qWarning() << "Invalid diff for CPU processing: empty or not 3 channels";
+                fgMask = cv::Mat::zeros(frame.size(), CV_8UC1);
+                return fgMask;
+            }
             cv::Mat gray;
             cv::cvtColor(diff, gray, cv::COLOR_BGR2GRAY);
             cv::threshold(gray, fgMask, 30, 255, cv::THRESH_BINARY);
@@ -4976,20 +5012,30 @@ cv::Mat Capture::createGreenScreenPersonMask(const cv::Mat &frame) const
         cv::Mat green = channels[1];
         cv::Mat red = channels[2];
 
-        // For green AND cyan/teal screens: just check that green dominates red
+        // FIXED: Properly detect green/cyan/teal while preserving blue colors
         // Green: G > R, G > B  
         // Cyan/Teal: G > R, B > R, G ≈ B
-        // Both have GREEN > RED, so just check G - R
-        // Dark clothing has similar R, G, B values (G - R is small)
+        // Blue: B > R, B > G (should NOT be removed)
+        cv::Mat blue = channels[0];
         cv::Mat greenDominantR;
         cv::subtract(green, red, greenDominantR);  // G - R
-
-        // G - R > 15 means green or teal background (red is low relative to green)
-        // Higher threshold (15) to preserve dark clothing
+        
+        cv::Mat greenDominantB;
+        cv::subtract(green, blue, greenDominantB);  // G - B
+        
+        // Green/cyan/teal: G > R AND (G > B OR G ≈ B)
+        // This excludes pure blue colors where B > G
+        cv::Mat greenOrTeal;
+        cv::threshold(greenDominantR, greenOrTeal, 15, 255, cv::THRESH_BINARY);  // G > R
+        
+        cv::Mat greenDominatesBlue;
+        cv::threshold(greenDominantB, greenDominatesBlue, -10, 255, cv::THRESH_BINARY);  // G > B - 10 (allows G ≈ B)
+        
+        // Combine: green/teal = (G > R) AND (G > B - 10)
         cv::Mat greenMask;
-        cv::threshold(greenDominantR, greenMask, 15, 255, cv::THRESH_BINARY);
+        cv::bitwise_and(greenOrTeal, greenDominatesBlue, greenMask);
 
-        // Invert: NOT green/teal = person
+        // Invert: NOT green/teal = person (preserves blue colors)
         cv::Mat personMask;
         cv::bitwise_not(greenMask, personMask);
 
@@ -5043,18 +5089,29 @@ cv::cuda::GpuMat Capture::createGreenScreenPersonMaskGPU(const cv::cuda::GpuMat 
         cv::cuda::GpuMat green = channels[1];
         cv::cuda::GpuMat red = channels[2];
 
-        // For green AND cyan/teal screens: just check that green dominates red
+        // FIXED: Properly detect green/cyan/teal while preserving blue colors
         // Green: G > R, G > B  |  Cyan/Teal: G > R, B > R, G ≈ B
-        // Both have GREEN > RED, so just check G - R
+        // Blue: B > R, B > G (should NOT be removed)
+        cv::cuda::GpuMat blue = channels[0];
         cv::cuda::GpuMat greenDominantR;
         cv::cuda::subtract(green, red, greenDominantR);  // G - R
-
-        // G - R > 15 means green or teal background (red is low relative to green)
-        // Higher threshold (15) to preserve dark clothing
+        
+        cv::cuda::GpuMat greenDominantB;
+        cv::cuda::subtract(green, blue, greenDominantB);  // G - B
+        
+        // Green/cyan/teal: G > R AND (G > B OR G ≈ B)
+        // This excludes pure blue colors where B > G
+        cv::cuda::GpuMat greenOrTeal;
+        cv::cuda::threshold(greenDominantR, greenOrTeal, 15, 255, cv::THRESH_BINARY);  // G > R
+        
+        cv::cuda::GpuMat greenDominatesBlue;
+        cv::cuda::threshold(greenDominantB, greenDominatesBlue, -10, 255, cv::THRESH_BINARY);  // G > B - 10 (allows G ≈ B)
+        
+        // Combine: green/teal = (G > R) AND (G > B - 10)
         cv::cuda::GpuMat greenMask;
-        cv::cuda::threshold(greenDominantR, greenMask, 15, 255, cv::THRESH_BINARY);
+        cv::cuda::bitwise_and(greenOrTeal, greenDominatesBlue, greenMask);
 
-        // Invert: NOT green/teal = person
+        // Invert: NOT green/teal = person (preserves blue colors)
         cv::cuda::GpuMat gpuPersonMask;
         cv::cuda::bitwise_not(greenMask, gpuPersonMask);
 
@@ -5653,229 +5710,7 @@ std::vector<cv::Rect> Capture::filterDetectionsByMotion(const std::vector<cv::Re
 }
 
 // Hand Detection Method Implementations
-void Capture::processFrameWithHandDetection(const cv::Mat &frame)
-{
-    if (!m_handDetector || !m_handDetector->isInitialized()) {
-        return;
-    }
-
-    m_handDetectionTimer.start();
-
-    // Process hand detection using the hand_detector.h/.cpp system
-    QList<HandDetection> detections = m_handDetector->detect(frame);
-
-    // Store results with mutex protection
-    {
-        QMutexLocker locker(&m_handDetectionMutex);
-        m_lastHandDetections = detections;
-        m_lastHandDetectionTime = m_handDetectionTimer.elapsed() / 1000.0;
-    }
-
-    // Process hand detection results for trigger logic (only if enabled)
-    if (!m_handDetectionEnabled) {
-        return; // Skip processing if hand detection is disabled
-    }
-
-    for (const auto& detection : detections) {
-        if (detection.confidence >= m_handDetector->getConfidenceThreshold()) {
-            // Check if capture should be triggered - automatically start countdown when hand closed
-            if (m_handDetector->shouldTriggerCapture()) {
-                qDebug() << "HAND CLOSED DETECTED! Automatically triggering capture...";
-                qDebug() << "Segmentation enabled:" << m_segmentationEnabledInCapture;
-
-                // Emit signal to trigger capture in main thread (thread-safe)
-                emit handTriggeredCapture();
-            }
-
-            // Show gesture status in console only
-            bool isOpen = m_handDetector->isHandOpen(detection.landmarks);
-            bool isClosed = m_handDetector->isHandClosed(detection.landmarks);
-            double closureRatio = m_handDetector->calculateHandClosureRatio(detection.landmarks);
-
-            // Update hand state for trigger logic
-            m_handDetector->updateHandState(isClosed);
-
-            if (isOpen || isClosed) {
-                QString gestureStatus = isOpen ? "OPEN" : "CLOSED";
-                qDebug() << "Hand detected - Gesture:" << gestureStatus
-                         << "Confidence:" << static_cast<int>(detection.confidence * 100) << "%"
-                         << "Closure ratio:" << closureRatio;
-            }
-        }
-    }
-
-    // Update FPS calculation
-    static int handDetectionFrameCount = 0;
-    static QElapsedTimer handDetectionFPSTimer;
-
-    if (handDetectionFrameCount == 0) {
-        handDetectionFPSTimer.start();
-    }
-    handDetectionFrameCount++;
-
-    if (handDetectionFrameCount >= 30) { // Update every 30 frames
-        double duration = handDetectionFPSTimer.elapsed() / 1000.0;
-        m_handDetectionFPS = duration > 0 ? handDetectionFrameCount / duration : 0;
-        handDetectionFrameCount = 0;
-        handDetectionFPSTimer.start();
-    }
-}
-
-void Capture::initializeHandDetection()
-{
-    if (!m_handDetector) {
-        m_handDetector = new HandDetector();
-    }
-
-    if (m_handDetector && !m_handDetector->isInitialized()) {
-        bool success = m_handDetector->initialize();
-        if (success) {
-            qDebug() << "Hand detection initialized successfully";
-            qDebug() << "initializeHandDetection: Before setting false, m_handDetectionEnabled = " << m_handDetectionEnabled;
-            m_handDetectionEnabled = false; // Disabled by default
-            qDebug() << "initializeHandDetection: After setting false, m_handDetectionEnabled = " << m_handDetectionEnabled;
-        } else {
-            qDebug() << "Failed to initialize hand detection";
-            qDebug() << "initializeHandDetection: Before setting false (failed), m_handDetectionEnabled = " << m_handDetectionEnabled;
-            m_handDetectionEnabled = false;
-            qDebug() << "initializeHandDetection: After setting false (failed), m_handDetectionEnabled = " << m_handDetectionEnabled;
-        }
-    }
-}
-
-void Capture::startHandTriggeredCountdown()
-{
-    // This slot runs in the main thread and safely updates UI elements
-    if (!countdownTimer || !countdownTimer->isActive()) {
-        qDebug() << "Starting countdown from hand detection signal...";
-        
-        // CRITICAL: Temporarily disable hand detection to prevent loop during countdown
-        // (will be re-enabled after countdown completes)
-        enableHandDetection(false);
-        qDebug() << "🚫 Hand detection temporarily DISABLED during countdown";
-        
-        // Start 5-second countdown for hand-triggered capture (same as button press)
-        ui->capture->setEnabled(false);
-        countdownValue = 5; // 5 second countdown
-        countdownLabel->setText(QString::number(countdownValue));
-        countdownLabel->show();
-        countdownLabel->raise(); // Bring to front
-        countdownTimer->start(1000); // 1 second intervals
-        qDebug() << "5-second countdown automatically started by hand detection!";
-    } else {
-        qDebug() << "Countdown already active, ignoring hand trigger";
-    }
-}
-
-void Capture::onHandTriggeredCapture()
-{
-    // This slot runs in the main thread and safely handles hand detection triggers
-    qDebug() << "Hand triggered capture signal received in main thread";
-    startHandTriggeredCountdown();
-}
-
-void Capture::onHandDetectionFinished()
-{
-    // This slot runs in the main thread when hand detection completes
-    if (!m_handDetectionWatcher || !m_handDetectionEnabled) {
-        return;
-    }
-
-    // Get the detection results from the watcher
-    QList<HandDetection> detections = m_handDetectionWatcher->result();
-    
-    // Store detections for debug display
-    {
-        QMutexLocker locker(&m_handDetectionMutex);
-        m_lastHandDetections = detections;
-    }
-
-    // Update accuracy tracking for system monitor
-    if (m_systemMonitor && !detections.isEmpty()) {
-        // Use the highest confidence detection as accuracy metric
-        double maxConfidence = 0.0;
-        for (const auto& detection : detections) {
-            if (detection.confidence > maxConfidence) {
-                maxConfidence = detection.confidence;
-            }
-        }
-        m_systemMonitor->updateAccuracy(maxConfidence);
-    }
-
-    // FIST GESTURE TRIGGER LOGIC
-    // Track consecutive frames where a fist is detected
-    static int closedFistFrameCount = 0;
-    static bool alreadyTriggered = false;
-    
-    bool fistDetectedThisFrame = false;
-    
-    // Debug: Show what we got
-    if (!detections.isEmpty()) {
-        qDebug() << "📦 Received" << detections.size() << "FIST detection(s) | Confidence threshold:" << m_handDetector->getConfidenceThreshold();
-    }
-    
-    // ALL detections are already FISTS (filtered in detectHandGestures)
-    // Just check if any detection has sufficient confidence
-    for (const auto& detection : detections) {
-        qDebug() << "Checking FIST - Type:" << detection.handType 
-                 << "| Confidence:" << detection.confidence 
-                 << "| isClosed:" << detection.isClosed;
-        
-        if (detection.confidence >= m_handDetector->getConfidenceThreshold()) {
-            // This is a valid FIST with good confidence!
-            fistDetectedThisFrame = true;
-            qDebug() << "VALID FIST CONFIRMED! Confidence:" << detection.confidence;
-            break; // Found a valid fist, no need to check other detections
-        } else {
-            qDebug() << "Fist detected but confidence too low:" << detection.confidence << "<" << m_handDetector->getConfidenceThreshold();
-        }
-    }
-    
-    // Update frame counter based on detection
-    if (fistDetectedThisFrame) {
-        closedFistFrameCount++;
-        qDebug() << "Fist frame count:" << closedFistFrameCount << "/ 2 required";
-        
-        // Trigger capture after 2 frames (prevents false triggers while still fast)
-        if (closedFistFrameCount >= 2 && !alreadyTriggered) {
-            qDebug() << "FIST TRIGGER! 2 consecutive frames - starting capture!";
-            alreadyTriggered = true;
-            emit handTriggeredCapture();
-        }
-    } else {
-        // Reset counter if no fist detected
-        if (closedFistFrameCount > 0) {
-            qDebug() << "Fist lost - resetting counter from" << closedFistFrameCount;
-        }
-        closedFistFrameCount = 0;
-        alreadyTriggered = false; // Allow new triggers
-    }
-}
-void Capture::enableHandDetection(bool enable)
-{
-    m_handDetectionEnabled = enable;
-    qDebug() << "FIST DETECTION" << (enable ? "ENABLED" : "DISABLED") << "- Only detecting FIST gestures!";
-    qDebug() << "enableHandDetection called with enable=" << enable << "from:" << Q_FUNC_INFO;
-
-    if (enable) {
-        // Enable hand detection
-        if (m_handDetector && !m_handDetector->isInitialized()) {
-            initializeHandDetection();
-        }
-        if (m_handDetector) {
-            m_handDetector->resetGestureState();
-            qDebug() << "FIST detector ready - Make a FIST to trigger capture!";
-        }
-    } else {
-        // Disable hand detection
-        if (m_handDetector) {
-            m_handDetector->resetGestureState();
-            qDebug() << "FIST detection disabled";
-        }
-        // Clear any pending detections
-        m_lastHandDetections.clear();
-    }
-}
+// Hand detection completely removed - all method implementations removed
 
 // New method to safely enable processing modes after camera is stable
 void Capture::enableProcessingModes()
@@ -5891,18 +5726,13 @@ void Capture::disableProcessingModes()
 {
     qDebug() << "Disabling heavy processing modes for non-capture pages";
 
-    // Disable hand detection
-    m_handDetectionEnabled = false;
+    // Hand detection removed
 
     // Disable segmentation outside capture interface
     disableSegmentationOutsideCapture();
 
-    // Clear any pending detections
-    m_lastHandDetections.clear();
-
     // Reset processing timers
     m_personDetectionTimer.restart();
-    m_handDetectionTimer.restart();
 
     qDebug() << "Heavy processing modes disabled - camera continues running";
 }
@@ -6126,11 +5956,7 @@ int Capture::getVideoTemplateDuration() const
 //  GPU MEMORY POOL IMPLEMENTATION
 
 GPUMemoryPool::GPUMemoryPool()
-    : morphCloseFilter()
-    , morphOpenFilter()
-    , morphDilateFilter()
-    , cannyDetector()
-    , detectionStream()
+    : detectionStream()
     , segmentationStream()
     , compositionStream()
     , currentFrameBuffer(0)
@@ -6145,6 +5971,11 @@ GPUMemoryPool::GPUMemoryPool()
     , poolWidth(0)
     , poolHeight(0)
 {
+    // Initialize cv::Ptr members to nullptr (cannot be default-constructed)
+    morphCloseFilter = nullptr;
+    morphOpenFilter = nullptr;
+    morphDilateFilter = nullptr;
+    cannyDetector = nullptr;
     qDebug() << " GPU Memory Pool: Constructor called";
 }
 
@@ -6516,32 +6347,100 @@ void Capture::onVideoProcessingFinished()
 {
     qDebug() << " Video processing finished in background thread";
     
-    // Check if watcher is valid
+    // CRASH PREVENTION: Check if watcher is valid
     if (!m_lightingWatcher) {
         qWarning() << " Lighting watcher is null in completion handler";
+        // Fallback: send original frames
+        if (!m_recordedFrames.isEmpty()) {
+            emit videoRecorded(m_recordedFrames, m_adjustedRecordingFPS);
+            emit showFinalOutputPage();
+        }
+        return;
+    }
+    
+    // CRASH PREVENTION: Check if future was cancelled or failed
+    if (m_lightingWatcher->isCanceled()) {
+        qWarning() << " Video processing was cancelled";
+        // Fallback: send original frames
+        if (!m_recordedFrames.isEmpty()) {
+            emit videoRecorded(m_recordedFrames, m_adjustedRecordingFPS);
+            emit showFinalOutputPage();
+        }
         return;
     }
     
     try {
+        // CRASH PREVENTION: Check if future is finished before accessing result
+        if (!m_lightingWatcher->isFinished()) {
+            qWarning() << " Future is not finished yet, waiting...";
+            m_lightingWatcher->waitForFinished(); // Wait for completion
+            if (!m_lightingWatcher->isFinished()) {
+                qWarning() << " Future did not finish";
+                if (!m_recordedFrames.isEmpty()) {
+                    emit videoRecorded(m_recordedFrames, m_adjustedRecordingFPS);
+                    emit showFinalOutputPage();
+                }
+                return;
+            }
+        }
+        
         // Get the processed frames from the background thread
-        QList<QPixmap> processedFrames = m_lightingWatcher->result();
+        QList<QPixmap> processedFrames;
+        try {
+            processedFrames = m_lightingWatcher->result();
+        } catch (const QException& e) {
+            qWarning() << " Exception retrieving processed frames:" << e.what();
+            throw; // Re-throw to be caught by outer catch
+        }
+        
+        // CRASH PREVENTION: Validate processed frames
+        if (processedFrames.isEmpty()) {
+            qWarning() << " Processed frames list is empty, using original frames";
+            if (!m_recordedFrames.isEmpty()) {
+                emit videoRecorded(m_recordedFrames, m_adjustedRecordingFPS);
+                emit showFinalOutputPage();
+            }
+            return;
+        }
         
         qDebug() << " DIRECT CAPTURE RECORDING: Processing complete";
         qDebug() << "Original frames:" << m_originalRecordedFrames.size() 
                  << "Processed frames:" << processedFrames.size();
         
-        // Send processed frames to final output page
-        emit videoRecordedWithComparison(processedFrames, m_originalRecordedFrames, m_adjustedRecordingFPS);
+        // CRASH PREVENTION: Validate original frames before emitting
+        if (m_originalRecordedFrames.isEmpty()) {
+            qWarning() << " Original recorded frames are empty, sending processed frames only";
+            emit videoRecorded(processedFrames, m_adjustedRecordingFPS);
+        } else {
+            // Send processed frames to final output page
+            emit videoRecordedWithComparison(processedFrames, m_originalRecordedFrames, m_adjustedRecordingFPS);
+        }
         
         //  FINAL STEP: Show final output page after all processing is complete
         emit showFinalOutputPage();
         qDebug() << " DIRECT CAPTURE RECORDING: Showing final output page";
         
+    } catch (const QException& e) {
+        qWarning() << " QException retrieving processed frames:" << e.what();
+        // Fallback: send original frames
+        if (!m_recordedFrames.isEmpty()) {
+            emit videoRecorded(m_recordedFrames, m_adjustedRecordingFPS);
+            emit showFinalOutputPage();
+        }
     } catch (const std::exception& e) {
         qWarning() << " Error retrieving processed frames:" << e.what();
         // Fallback: send original frames
-        emit videoRecorded(m_recordedFrames, m_adjustedRecordingFPS);
-        emit showFinalOutputPage();
+        if (!m_recordedFrames.isEmpty()) {
+            emit videoRecorded(m_recordedFrames, m_adjustedRecordingFPS);
+            emit showFinalOutputPage();
+        }
+    } catch (...) {
+        qWarning() << " Unknown exception in onVideoProcessingFinished";
+        // Fallback: send original frames
+        if (!m_recordedFrames.isEmpty()) {
+            emit videoRecorded(m_recordedFrames, m_adjustedRecordingFPS);
+            emit showFinalOutputPage();
+        }
     }
 }
 
@@ -6679,7 +6578,7 @@ void Capture::cleanupResources()
     
     // Clear detection results
     m_lastDetections.clear();
-    m_lastHandDetections.clear();
+    // Hand detection removed
     
     qDebug() << "Capture::cleanupResources - Resource cleanup completed";
 }
@@ -6699,7 +6598,7 @@ void Capture::initializeResources()
     initializePersonDetection();
     
     // Initialize hand detection
-    initializeHandDetection();
+    // Hand detection removed
     
     // Start debug update timer
     if (debugUpdateTimer) {
@@ -7182,6 +7081,13 @@ cv::Mat Capture::applyLightingToRawPersonRegion(const cv::Mat &personRegion, con
 cv::Mat Capture::createPersonMaskFromSegmentedFrame(const cv::Mat &segmentedFrame)
 {
     try {
+        // CRASH PREVENTION: Validate segmentedFrame has 3 channels before BGR2GRAY conversion
+        if (segmentedFrame.empty() || segmentedFrame.channels() != 3) {
+            qWarning() << "Invalid segmentedFrame for mask creation: empty or not 3 channels, channels:" 
+                       << (segmentedFrame.empty() ? 0 : segmentedFrame.channels());
+            return cv::Mat::zeros(segmentedFrame.empty() ? cv::Size(640, 480) : segmentedFrame.size(), CV_8UC1);
+        }
+        
         // Convert to grayscale
         cv::Mat gray;
         cv::cvtColor(segmentedFrame, gray, cv::COLOR_BGR2GRAY);

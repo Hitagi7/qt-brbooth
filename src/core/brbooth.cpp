@@ -528,7 +528,6 @@ BRBooth::BRBooth(QWidget *parent)
             QTimer::singleShot(100, [this]() {
                 if (capturePage) {
                     capturePage->initializeResources();
-                    capturePage->enableHandDetectionForCapture();
                     capturePage->enableSegmentationInCapture();
                     qDebug() << "Resources initialized and processing modes enabled for Capture page";
                 }
@@ -573,7 +572,6 @@ BRBooth::BRBooth(QWidget *parent)
             // Reset the transition flag since we've reached the capture page
             m_transitioningToCapture = false;
 
-            capturePage->enableHandDetectionForCapture(); // Enable hand detection for capture page
             capturePage->enableSegmentationInCapture(); // Enable segmentation for capture page
 
             // Clean up previous page state after capture page is ready (non-blocking)

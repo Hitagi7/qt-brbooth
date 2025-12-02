@@ -14,7 +14,7 @@
 #include <QThread>            // CRUCIAL: For QThread definition and usage
 #include <QTimer>             // Required for QTimer
 #include <QWidget>            // Required for QWidget base class
-#include <QList>              // Required for QList<HandDetection> and QList<QPixmap>
+#include <QList>              // Required for QList<QPixmap>
 #include <QQueue>              // Required for QQueue<cv::Mat>
 #include <QFutureWatcher>
 #include <QtConcurrent>
@@ -31,11 +31,12 @@
 #include <opencv2/cudaimgproc.hpp>
 #include <opencv2/cudawarping.hpp>
 #include <opencv2/cudacodec.hpp>
+#include <opencv2/cudafilters.hpp>  // Required for cv::cuda::Filter
 #include "core/videotemplate.h"   // Your custom VideoTemplate class
 #include "core/camera.h"          // Your custom Camera class
 #include "ui/foreground.h"        // Foreground class
 #include "core/common_types.h"    // Common data structures
-#include "algorithms/hand_detection/hand_detector.h"
+// Hand detection removed per user request
 #include "algorithms/lighting_correction/lighting_corrector.h"
 #include <array>
 
@@ -57,10 +58,11 @@ private:
     cv::cuda::GpuMat gpuEdgeDetectionBuffers[2]; // Edge detection intermediate buffers
     
     // Reusable CUDA filters (create once, use many times)
-    cv::Ptr<cv::cuda::Filter> morphCloseFilter;
-    cv::Ptr<cv::cuda::Filter> morphOpenFilter;
-    cv::Ptr<cv::cuda::Filter> morphDilateFilter;
-    cv::Ptr<cv::cuda::CannyEdgeDetector> cannyDetector;
+    // Note: cv::Ptr cannot be default-constructed, so these are initialized in initialize() method
+    cv::Ptr<cv::cuda::Filter> morphCloseFilter = nullptr;
+    cv::Ptr<cv::cuda::Filter> morphOpenFilter = nullptr;
+    cv::Ptr<cv::cuda::Filter> morphDilateFilter = nullptr;
+    cv::Ptr<cv::cuda::CannyEdgeDetector> cannyDetector = nullptr;
     
     // CUDA streams for parallel processing
     cv::cuda::Stream detectionStream;
@@ -129,7 +131,7 @@ namespace Ui { class Capture; }
 class Foreground; // Forward declaration for Foreground
 
 // Forward declarations
-class HandDetector;
+// HandDetector removed
 
 QT_END_NAMESPACE
 
@@ -164,17 +166,7 @@ public:
     void setVideoTemplateDuration(int durationSeconds);
     int getVideoTemplateDuration() const;
 
-    // Hand Detection Control Methods
-    void setShowHandDetection(bool show);
-    bool getShowHandDetection() const;
-    void setHandDetectionConfidenceThreshold(double threshold);
-    double getHandDetectionConfidenceThreshold() const;
-    QList<HandDetection> getLastHandDetections() const;
-    void toggleHandDetection();
-    void updateHandDetectionButton();
-    double getHandDetectionProcessingTime() const;
-    void enableHandDetectionForCapture(); // Enable hand detection when capture page is shown
-    void setHandDetectionEnabled(bool enabled);
+    // Hand detection completely removed
     void enableProcessingModes(); // Safely enable processing modes after camera is stable
     void disableProcessingModes(); // Disable heavy processing modes for non-capture pages
     
@@ -246,7 +238,7 @@ signals:
     void showFinalOutputPage();
     void personDetectedInFrame();
     void foregroundPathChanged(const QString &foregroundPath);
-    void handTriggeredCapture(); // Signal for hand detection to trigger capture
+    // Hand detection signal removed
 
 private slots:
     void updateCameraFeed(const QImage &frame);
@@ -275,10 +267,7 @@ private slots:
     // Video Playback Timer Slots
     void onVideoPlaybackTimer(); // Handle video frame advancement at native frame rate
 
-    // Hand Detection Slots
-    void startHandTriggeredCountdown();
-    void onHandTriggeredCapture();
-    void onHandDetectionFinished();
+    // Hand detection slots removed
     
     //  Asynchronous Video Processing Slot
     void onVideoProcessingFinished();
@@ -336,12 +325,7 @@ private:
     
 
 
-    // Hand Detection Methods (using hand_detector.h/.cpp)
-    void processFrameWithHandDetection(const cv::Mat &frame);
-    void applyHandDetectionToFrame(cv::Mat &frame);
-    void drawHandBoundingBoxes(cv::Mat &frame, const QList<HandDetection> &detections);
-    void initializeHandDetection();
-    void enableHandDetection(bool enable);
+    // Hand detection methods completely removed
     
     // System monitor for accuracy tracking
     class SystemMonitor* m_systemMonitor;
@@ -359,7 +343,7 @@ private:
 
     
     // Temporarily disabled Hand detection state
-    // bool m_handDetectionEnabled;
+    // Hand detection completely removed
 
     // Debug Display Members
     
@@ -382,27 +366,16 @@ private:
     QPushButton *personDetectionButton;
     QLabel *personSegmentationLabel;
     QPushButton *personSegmentationButton;
-    QLabel *handDetectionLabel;
-    QPushButton *handDetectionButton;
+    // Hand detection UI elements removed
     QTimer *debugUpdateTimer;
     int m_currentFPS;
 
 
 
-    // Hand Detection Members (using hand_detector.h/.cpp)
-    HandDetector *m_handDetector;
-    bool m_showHandDetection;
-    bool m_handDetectionEnabled;  // Add missing member
-    mutable QMutex m_handDetectionMutex;
-    QElapsedTimer m_handDetectionTimer;
-    double m_lastHandDetectionTime;
-    double m_handDetectionFPS;
-    QList<HandDetection> m_lastHandDetections;
-    QFuture<QList<HandDetection>> m_handDetectionFuture;
-    QFutureWatcher<QList<HandDetection>> *m_handDetectionWatcher;
+    // Hand detection members completely removed
     
     // Capture Mode State
-    bool m_captureReady;  // Only allow hand detection to trigger capture when true
+    bool m_captureReady;
     
     // Unified Person Detection and Segmentation Members
     enum DisplayMode { NormalMode, RectangleMode, SegmentationMode };
@@ -548,6 +521,7 @@ private:
     cv::Mat createPersonMaskFromSegmentedFrame(const cv::Mat &segmentedFrame);
     cv::Mat applyPersonColorMatching(const cv::Mat &segmentedFrame);
     cv::Mat applyLightingToRawPersonRegion(const cv::Mat &personRegion, const cv::Mat &personMask);
+    cv::Mat applyVideoOptimizedLighting(const cv::Mat &personRegion, const cv::Mat &personMask, LightingCorrector* lightingCorrector);
     cv::Mat applyPostProcessingLighting();
     QList<QPixmap> processRecordedVideoWithLighting(const QList<QPixmap> &inputFrames, double fps);
     cv::Mat applyDynamicFrameEdgeBlending(const cv::Mat &composedFrame, 
@@ -562,6 +536,24 @@ private:
                                           const cv::Mat &rawPersonRegion,
                                           const cv::Mat &rawPersonMask,
                                           const cv::Mat &backgroundFrame);  // Ultra-simple compositing for dynamic videos
+    
+    // Thread-safe wrapper functions for parallel processing
+    cv::Mat applyDynamicFrameEdgeBlendingSafe(const cv::Mat &composedFrame,
+                                              const cv::Mat &rawPersonRegion,
+                                              const cv::Mat &rawPersonMask,
+                                              const cv::Mat &backgroundFrame,
+                                              LightingCorrector* lightingCorrector,
+                                              double personScaleFactor,
+                                              const cv::Mat &lastTemplateBackground,
+                                              bool useCUDA,
+                                              GPUMemoryPool* gpuMemoryPool);
+    cv::Mat applySimpleDynamicCompositingSafe(const cv::Mat &composedFrame,
+                                              const cv::Mat &rawPersonRegion,
+                                              const cv::Mat &rawPersonMask,
+                                              const cv::Mat &backgroundFrame,
+                                              LightingCorrector* lightingCorrector,
+                                              double personScaleFactor,
+                                              bool useCUDA);
     
     //  Optimized Async Lighting Processing (POST-PROCESSING ONLY)
     void initializeAsyncLightingSystem();

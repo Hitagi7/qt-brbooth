@@ -115,6 +115,14 @@ QList<QPixmap> Capture::processRecordedVideoWithLighting(const QList<QPixmap> &i
     QList<cv::Mat> localPersonMasks = m_recordedRawPersonMasks;
     QList<cv::Mat> localBackgroundFrames = m_recordedBackgroundFrames;
     
+    // CRITICAL: Capture all member variables needed for processing as local copies to ensure thread safety
+    // These are accessed from multiple threads during parallel processing
+    LightingCorrector* localLightingCorrector = m_lightingCorrector; // Pointer is safe to copy
+    double localPersonScaleFactor = m_recordedPersonScaleFactor;
+    cv::Mat localLastTemplateBackground = m_lastTemplateBackground.clone(); // Clone to avoid shared access
+    bool localUseCUDA = m_useCUDA;
+    GPUMemoryPool* localGpuMemoryPool = &m_gpuMemoryPool; // Pointer is safe to copy
+    
     QAtomicInt processedCount(0);
     
     // Progress tracking: Emit initial progress
@@ -123,6 +131,8 @@ QList<QPixmap> Capture::processRecordedVideoWithLighting(const QList<QPixmap> &i
     // OPTIMIZED: Process frames in parallel with thread-safe data access
     // Helper function to process a single frame - uses only local copies, captures this only for member function calls
     auto processFrame = [this, inputFrames, localPersonRegions, localPersonMasks, localBackgroundFrames, 
+                         localLightingCorrector, localPersonScaleFactor, localLastTemplateBackground,
+                         localUseCUDA, localGpuMemoryPool,
                          &processedCount, total](int i) -> QPixmap {
             try {
                 //  CRASH PREVENTION: Validate frame before processing
@@ -175,18 +185,27 @@ QList<QPixmap> Capture::processRecordedVideoWithLighting(const QList<QPixmap> &i
                         }
                         
                         // Apply full edge blending and lighting correction
-                        finalFrame = applyDynamicFrameEdgeBlending(composedCopy,
-                                                                   localPersonRegions[i],
-                                                                   localPersonMasks[i],
-                                                                   bgFrame);
+                        // CRASH PREVENTION: Pass all necessary data as parameters to avoid member variable access
+                        finalFrame = applyDynamicFrameEdgeBlendingSafe(composedCopy,
+                                                                      localPersonRegions[i],
+                                                                      localPersonMasks[i],
+                                                                      bgFrame,
+                                                                      localLightingCorrector,
+                                                                      localPersonScaleFactor,
+                                                                      localLastTemplateBackground,
+                                                                      localUseCUDA,
+                                                                      localGpuMemoryPool);
                         
                         if (finalFrame.empty()) {
                             qWarning() << "Edge blending returned empty frame for frame" << i << "- using simple compositing fallback";
                             // Fallback to simple compositing if edge blending fails
-                            finalFrame = applySimpleDynamicCompositing(composedCopy,
-                                                                       localPersonRegions[i],
-                                                                       localPersonMasks[i],
-                                                                       bgFrame);
+                            finalFrame = applySimpleDynamicCompositingSafe(composedCopy,
+                                                                           localPersonRegions[i],
+                                                                           localPersonMasks[i],
+                                                                           bgFrame,
+                                                                           localLightingCorrector,
+                                                                           localPersonScaleFactor,
+                                                                           localUseCUDA);
                             if (finalFrame.empty()) {
                                 finalFrame = composedCopy;
                             }
@@ -203,10 +222,13 @@ QList<QPixmap> Capture::processRecordedVideoWithLighting(const QList<QPixmap> &i
                             if (bgFrame.empty()) {
                                 bgFrame = cv::Mat::zeros(composedFrame.size(), composedFrame.type());
                             }
-                            finalFrame = applySimpleDynamicCompositing(composedCopy,
-                                                                       localPersonRegions[i],
-                                                                       localPersonMasks[i],
-                                                                       bgFrame);
+                            finalFrame = applySimpleDynamicCompositingSafe(composedCopy,
+                                                                           localPersonRegions[i],
+                                                                           localPersonMasks[i],
+                                                                           bgFrame,
+                                                                           localLightingCorrector,
+                                                                           localPersonScaleFactor,
+                                                                           localUseCUDA);
                             if (finalFrame.empty()) {
                                 finalFrame = composedCopy;
                             }
@@ -294,8 +316,272 @@ QList<QPixmap> Capture::processRecordedVideoWithLighting(const QList<QPixmap> &i
 }
 
 // ============================================================================
+//  THREAD-SAFE HELPER FUNCTIONS
+// ============================================================================
+
+// Thread-safe wrapper for applyLightingToRawPersonRegion
+// This function accesses member variables but is called from main thread context via lambda
+// The lambda captures 'this' pointer, so we need to ensure thread safety
+static cv::Mat applyLightingToRawPersonRegionSafe(const cv::Mat &personRegion, 
+                                                   const cv::Mat &personMask,
+                                                   LightingCorrector* lightingCorrector)
+{
+    // CRASH PREVENTION: Validate inputs
+    if (personRegion.empty() || personMask.empty()) {
+        qWarning() << "Invalid inputs for lighting correction - returning empty mat";
+        return cv::Mat();
+    }
+    
+    if (personRegion.size() != personMask.size()) {
+        qWarning() << "Size mismatch between person region and mask - returning original";
+        return personRegion.clone();
+    }
+    
+    if (!lightingCorrector) {
+        qWarning() << "No lighting corrector provided - returning original";
+        return personRegion.clone();
+    }
+    
+    try {
+        // Apply global lighting correction as a simplified approach
+        // This avoids accessing member variables that might not be thread-safe
+        return lightingCorrector->applyGlobalLightingCorrection(personRegion);
+    } catch (const std::exception& e) {
+        qWarning() << "Lighting correction failed:" << e.what() << "- returning original";
+        return personRegion.clone();
+    }
+}
+
+// ============================================================================
 //  DYNAMIC VIDEO EDGE BLENDING FUNCTIONS
 // ============================================================================
+
+// THREAD-SAFE WRAPPER: Takes all parameters instead of accessing member variables
+cv::Mat Capture::applyDynamicFrameEdgeBlendingSafe(const cv::Mat &composedFrame,
+                                                   const cv::Mat &rawPersonRegion,
+                                                   const cv::Mat &rawPersonMask,
+                                                   const cv::Mat &backgroundFrame,
+                                                   LightingCorrector* lightingCorrector,
+                                                   double personScaleFactor,
+                                                   const cv::Mat &lastTemplateBackground,
+                                                   bool useCUDA,
+                                                   GPUMemoryPool* gpuMemoryPool)
+{
+    // Validate inputs
+    if (composedFrame.empty() || rawPersonRegion.empty() || rawPersonMask.empty()) {
+        qWarning() << "Invalid input data for edge blending, using global correction";
+        if (lightingCorrector) {
+            return lightingCorrector->applyGlobalLightingCorrection(composedFrame);
+        }
+        return composedFrame;
+    }
+    
+    try {
+        // Start with clean background or use provided background frame
+        cv::Mat result;
+        cv::Mat cleanBackground;
+        
+        if (!backgroundFrame.empty()) {
+            cv::resize(backgroundFrame, cleanBackground, composedFrame.size());
+        } else {
+            // Extract background from dynamic template or use clean template
+            if (!lastTemplateBackground.empty()) {
+                cv::resize(lastTemplateBackground, cleanBackground, composedFrame.size());
+            } else {
+                // Fallback to zero background
+                cleanBackground = cv::Mat::zeros(composedFrame.size(), composedFrame.type());
+            }
+        }
+        result = cleanBackground.clone();
+        
+        // VIDEO-SPECIFIC LIGHTING: Use static mode approach but optimized for video
+        // Follows the same algorithm as static mode but with video-optimized parameters
+        cv::Mat lightingCorrectedPerson = applyVideoOptimizedLighting(rawPersonRegion, rawPersonMask, lightingCorrector);
+        
+        // SCALING PRESERVATION: Scale the lighting-corrected person using the recorded scaling factor
+        cv::Mat scaledPerson, scaledMask;
+        
+        // Calculate the scaled size using the recorded scaling factor
+        cv::Size backgroundSize = result.size();
+        cv::Size scaledPersonSize;
+        
+        if (qAbs(personScaleFactor - 1.0) > 0.01) {
+            int scaledWidth = static_cast<int>(backgroundSize.width * personScaleFactor + 0.5);
+            int scaledHeight = static_cast<int>(backgroundSize.height * personScaleFactor + 0.5);
+            
+            //  CRASH PREVENTION: Ensure scaled size is always valid (at least 1x1)
+            scaledWidth = qMax(1, scaledWidth);
+            scaledHeight = qMax(1, scaledHeight);
+            
+            scaledPersonSize = cv::Size(scaledWidth, scaledHeight);
+        } else {
+            scaledPersonSize = backgroundSize;
+        }
+        
+        // Scale person and mask to the calculated size
+        cv::resize(lightingCorrectedPerson, scaledPerson, scaledPersonSize);
+        cv::resize(rawPersonMask, scaledMask, scaledPersonSize);
+        
+        // Calculate centered offset for placing the scaled person
+        cv::Size actualScaledSize(scaledPerson.cols, scaledPerson.rows);
+        int xOffset = (backgroundSize.width - actualScaledSize.width) / 2;
+        int yOffset = (backgroundSize.height - actualScaledSize.height) / 2;
+        
+        // If person is scaled down, place it on a full-size canvas at the centered position
+        cv::Mat fullSizePerson, fullSizeMask;
+        if (actualScaledSize != backgroundSize) {
+            // Create full-size images initialized to zeros
+            fullSizePerson = cv::Mat::zeros(backgroundSize, scaledPerson.type());
+            fullSizeMask = cv::Mat::zeros(backgroundSize, CV_8UC1);
+            
+            // Ensure offsets are valid
+            if (xOffset >= 0 && yOffset >= 0 &&
+                xOffset + actualScaledSize.width <= backgroundSize.width &&
+                yOffset + actualScaledSize.height <= backgroundSize.height) {
+                
+                // Place scaled person at centered position
+                cv::Rect roi(xOffset, yOffset, actualScaledSize.width, actualScaledSize.height);
+                scaledPerson.copyTo(fullSizePerson(roi));
+                
+                // Convert mask to grayscale if needed, then copy to ROI
+                if (scaledMask.type() != CV_8UC1) {
+                    cv::Mat grayMask;
+                    cv::cvtColor(scaledMask, grayMask, cv::COLOR_BGR2GRAY);
+                    grayMask.copyTo(fullSizeMask(roi));
+                } else {
+                    scaledMask.copyTo(fullSizeMask(roi));
+                }
+            } else {
+                qWarning() << "Invalid offset, using direct copy";
+                cv::resize(scaledPerson, fullSizePerson, backgroundSize);
+                cv::resize(scaledMask, fullSizeMask, backgroundSize);
+            }
+        } else {
+            // Person is full size, use as is
+            fullSizePerson = scaledPerson;
+            if (scaledMask.type() != CV_8UC1) {
+                cv::cvtColor(scaledMask, fullSizeMask, cv::COLOR_BGR2GRAY);
+            } else {
+                fullSizeMask = scaledMask;
+            }
+        }
+        
+        // Now use fullSizePerson and fullSizeMask for blending
+        scaledPerson = fullSizePerson;
+        scaledMask = fullSizeMask;
+        
+        // Apply guided filter edge blending
+        cv::Mat binMask;
+        cv::threshold(scaledMask, binMask, 127, 255, cv::THRESH_BINARY);
+        
+        // First: shrink mask slightly to avoid fringe, then hard-copy interior
+        cv::Mat interiorMask;
+        cv::erode(binMask, interiorMask, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(2*2+1, 2*2+1)));
+        scaledPerson.copyTo(result, interiorMask);
+
+        //  ENHANCED: Pre-smooth the mask before guided filtering for better edge quality
+        cv::Mat smoothedBinMask;
+        cv::GaussianBlur(binMask, smoothedBinMask, cv::Size(9, 9), 2.0); // Smooth mask edges first
+        
+        //  CUDA-Accelerated Guided image filtering
+        const int gfRadius = 12; // Increased window size for smoother edges
+        const float gfEps = 5e-3f; // Reduced regularization for better edge preservation
+        
+        // CRASH PREVENTION: Validate GPU memory pool before use
+        cv::Mat alphaFloat;
+        if (gpuMemoryPool && useCUDA && cv::cuda::getCudaEnabledDeviceCount() > 0) {
+            try {
+                cv::cuda::Stream& guidedFilterStream = gpuMemoryPool->getCompositionStream();
+                alphaFloat = guidedFilterGrayAlphaCUDAOptimized(result, smoothedBinMask, gfRadius, gfEps, *gpuMemoryPool, guidedFilterStream);
+            } catch (const cv::Exception& e) {
+                qWarning() << "GPU guided filter failed:" << e.what() << "- using CPU fallback";
+                // CPU fallback would go here if needed
+                alphaFloat = cv::Mat::ones(result.size(), CV_32F);
+            }
+        } else {
+            // CPU fallback
+            alphaFloat = cv::Mat::ones(result.size(), CV_32F);
+        }
+        
+        //  ENHANCED: Apply edge blurring
+        const float edgeBlurRadius = 5.0f; // Increased blur radius for smoother transitions
+        cv::Mat edgeBlurredPerson;
+        if (gpuMemoryPool && useCUDA && cv::cuda::getCudaEnabledDeviceCount() > 0) {
+            try {
+                cv::cuda::Stream& guidedFilterStream = gpuMemoryPool->getCompositionStream();
+                edgeBlurredPerson = applyEdgeBlurringCUDA(scaledPerson, binMask, cleanBackground, edgeBlurRadius, *gpuMemoryPool, guidedFilterStream);
+                if (!edgeBlurredPerson.empty()) {
+                    scaledPerson = edgeBlurredPerson;
+                }
+            } catch (const cv::Exception& e) {
+                qWarning() << "GPU edge blurring failed:" << e.what();
+            }
+        }
+        
+        if (edgeBlurredPerson.empty()) {
+            edgeBlurredPerson = applyEdgeBlurringAlternative(scaledPerson, binMask, edgeBlurRadius);
+            if (!edgeBlurredPerson.empty()) {
+                scaledPerson = edgeBlurredPerson;
+            }
+        }
+        
+        // Build thin inner/outer rings around the boundary
+        cv::Mat inner, outer, ringInner, ringOuter;
+        cv::erode(binMask, inner, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(2*2+1, 2*2+1))); // Wider transition
+        cv::dilate(binMask, outer, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(2*6+1, 2*6+1))); // Wider feather
+        cv::subtract(binMask, inner, ringInner);
+        cv::subtract(outer, binMask, ringOuter);
+        
+        // Clamp strictly
+        alphaFloat.setTo(1.0f, interiorMask > 0);
+        alphaFloat.setTo(0.0f, outer == 0);
+        alphaFloat = alphaFloat * 0.6f; // Less aggressive reduction for smoother blending
+
+        // Composite
+        cv::Mat personF, bgF; 
+        scaledPerson.convertTo(personF, CV_32F); 
+        cleanBackground.convertTo(bgF, CV_32F);
+        std::vector<cv::Mat> a3 = {alphaFloat, alphaFloat, alphaFloat};
+        cv::Mat alpha3; 
+        cv::merge(a3, alpha3);
+        
+        cv::Mat alphaSafe;
+        cv::max(alpha3, 0.05f, alphaSafe);
+        cv::Mat Fclean = (personF - bgF.mul(1.0f - alpha3)).mul(1.0f / alphaSafe);
+        cv::Mat compF = Fclean.mul(alpha3) + bgF.mul(1.0f - alpha3);
+        cv::Mat out8u; 
+        compF.convertTo(out8u, CV_8U);
+        out8u.copyTo(result, ringInner);
+
+        cleanBackground.copyTo(result, ringOuter);
+        
+        //  FINAL EDGE BLURRING
+        const float finalEdgeBlurRadius = 6.0f; // Increased for smoother final edges
+        if (gpuMemoryPool && useCUDA && cv::cuda::getCudaEnabledDeviceCount() > 0) {
+            try {
+                cv::cuda::Stream& finalStream = gpuMemoryPool->getCompositionStream();
+                cv::Mat finalEdgeBlurred = applyEdgeBlurringCUDA(result, binMask, cleanBackground, finalEdgeBlurRadius, *gpuMemoryPool, finalStream);
+                if (!finalEdgeBlurred.empty()) {
+                    result = finalEdgeBlurred;
+                }
+            } catch (const cv::Exception& e) {
+                qWarning() << "Final GPU edge blurring failed:" << e.what();
+            }
+        }
+        
+        return result;
+        
+    } catch (const cv::Exception &e) {
+        qWarning() << "DYNAMIC EDGE BLENDING: Edge blending failed:" << e.what() << "- using global correction";
+        if (lightingCorrector) {
+            return lightingCorrector->applyGlobalLightingCorrection(composedFrame);
+        }
+        return composedFrame;
+    } catch (const std::exception& e) {
+        qWarning() << "DYNAMIC EDGE BLENDING: Exception:" << e.what() << "- using original";
+        return composedFrame;
+    }
+}
 
 cv::Mat Capture::applyDynamicFrameEdgeBlending(const cv::Mat &composedFrame, 
                                                const cv::Mat &rawPersonRegion, 
@@ -328,9 +614,10 @@ cv::Mat Capture::applyDynamicFrameEdgeBlending(const cv::Mat &composedFrame,
         }
         result = cleanBackground.clone();
         
-        // Apply lighting correction to the raw person region (same as static mode - single lighting pass)
-        cv::Mat lightingCorrectedPerson = applyLightingToRawPersonRegion(rawPersonRegion, rawPersonMask);
-        qDebug() << "DYNAMIC: Applied raw person lighting correction (matching static mode)";
+        // VIDEO-SPECIFIC LIGHTING: Use static mode approach but optimized for video
+        // Follows the same algorithm as static mode but with video-optimized parameters
+        cv::Mat lightingCorrectedPerson = applyVideoOptimizedLighting(rawPersonRegion, rawPersonMask, m_lightingCorrector);
+        qDebug() << "DYNAMIC: Applied video-optimized lighting correction (based on static mode)";
         
         // SCALING PRESERVATION: Scale the lighting-corrected person using the recorded scaling factor
         cv::Mat scaledPerson, scaledMask;
@@ -418,16 +705,20 @@ cv::Mat Capture::applyDynamicFrameEdgeBlending(const cv::Mat &composedFrame,
         cv::erode(binMask, interiorMask, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(2*2+1, 2*2+1))); // ~2px shrink
         scaledPerson.copyTo(result, interiorMask);
 
+        //  ENHANCED: Pre-smooth the mask before guided filtering for better edge quality
+        cv::Mat smoothedBinMask;
+        cv::GaussianBlur(binMask, smoothedBinMask, cv::Size(9, 9), 2.0); // Smooth mask edges first
+        
         //  CUDA-Accelerated Guided image filtering to refine a soft alpha only on a thin edge ring
-        const int gfRadius = 8; // window size (reduced for better performance)
-        const float gfEps = 1e-2f; // regularization (increased for better performance)
+        const int gfRadius = 12; // Increased window size for smoother edges
+        const float gfEps = 5e-3f; // Reduced regularization for better edge preservation
         
         // Use GPU memory pool stream and buffers for optimized guided filtering
         cv::cuda::Stream& guidedFilterStream = m_gpuMemoryPool.getCompositionStream();
-        cv::Mat alphaFloat = guidedFilterGrayAlphaCUDAOptimized(result, binMask, gfRadius, gfEps, m_gpuMemoryPool, guidedFilterStream);
+        cv::Mat alphaFloat = guidedFilterGrayAlphaCUDAOptimized(result, smoothedBinMask, gfRadius, gfEps, m_gpuMemoryPool, guidedFilterStream);
         
         //  ENHANCED: Apply edge blurring to create smooth transitions between background and segmented object
-        const float edgeBlurRadius = 3.0f; // Increased blur radius for better background-object transition
+        const float edgeBlurRadius = 5.0f; // Increased blur radius for smoother background-object transition
         cv::Mat edgeBlurredPerson = applyEdgeBlurringCUDA(scaledPerson, binMask, cleanBackground, edgeBlurRadius, m_gpuMemoryPool, guidedFilterStream);
         if (!edgeBlurredPerson.empty()) {
             scaledPerson = edgeBlurredPerson;
@@ -443,16 +734,16 @@ cv::Mat Capture::applyDynamicFrameEdgeBlending(const cv::Mat &composedFrame,
         
         // Build thin inner/outer rings around the boundary for localized updates only
         cv::Mat inner, outer, ringInner, ringOuter;
-        cv::erode(binMask, inner, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(2*1+1, 2*1+1))); // shrink by ~1px for inner ring
-        cv::dilate(binMask, outer, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(2*4+1, 2*4+1))); // expand by ~4px for outer ring
+        cv::erode(binMask, inner, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(2*2+1, 2*2+1))); // shrink by ~2px for inner ring (wider transition)
+        cv::dilate(binMask, outer, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(2*6+1, 2*6+1))); // expand by ~6px for outer ring (wider feather)
         cv::subtract(binMask, inner, ringInner);   // just inside the boundary
         cv::subtract(outer, binMask, ringOuter);   // just outside the boundary
         
         // Clamp strictly
         alphaFloat.setTo(1.0f, interiorMask > 0);  // full person interior remains 1
         alphaFloat.setTo(0.0f, outer == 0); // outside remains 0
-        // Strongly bias ring blend toward template to eliminate colored outlines
-        alphaFloat = alphaFloat * 0.3f;
+        // Less aggressive alpha reduction for smoother blending (was 0.3f, now 0.6f)
+        alphaFloat = alphaFloat * 0.6f;
 
         // Composite only where outer>0 to avoid touching background
         cv::Mat personF, bgF; 
@@ -475,7 +766,7 @@ cv::Mat Capture::applyDynamicFrameEdgeBlending(const cv::Mat &composedFrame,
         cleanBackground.copyTo(result, ringOuter);
         
         //  FINAL EDGE BLURRING: Apply edge blurring to the final composite result
-        const float finalEdgeBlurRadius = 4.0f; // Stronger blur for final result
+        const float finalEdgeBlurRadius = 6.0f; // Increased blur radius for smoother final edges
         cv::cuda::Stream& finalStream = m_gpuMemoryPool.getCompositionStream();
         cv::Mat finalEdgeBlurred = applyEdgeBlurringCUDA(result, binMask, cleanBackground, finalEdgeBlurRadius, m_gpuMemoryPool, finalStream);
         if (!finalEdgeBlurred.empty()) {
@@ -530,13 +821,8 @@ cv::Mat Capture::applyFastEdgeBlendingForVideo(const cv::Mat &composedFrame,
             cleanBackground = cv::Mat::zeros(composedFrame.size(), composedFrame.type());
         }
         
-        // Apply lighting correction to person region (fast path)
-        cv::Mat lightingCorrectedPerson;
-        if (m_lightingCorrector) {
-            lightingCorrectedPerson = applyLightingToRawPersonRegion(rawPersonRegion, rawPersonMask);
-        } else {
-            lightingCorrectedPerson = rawPersonRegion.clone();
-        }
+        // VIDEO-SPECIFIC LIGHTING: Use static mode approach but optimized for video
+        cv::Mat lightingCorrectedPerson = applyVideoOptimizedLighting(rawPersonRegion, rawPersonMask, m_lightingCorrector);
         
         // Scale person if needed (preserve scaling factor)
         cv::Mat scaledPerson, scaledMask;
@@ -567,9 +853,9 @@ cv::Mat Capture::applyFastEdgeBlendingForVideo(const cv::Mat &composedFrame,
         }
         cv::threshold(binMask, binMask, 127, 255, cv::THRESH_BINARY);
         
-        // Step 2: Apply Gaussian blur to mask for smooth edges (fast operation)
+        // Step 2: Apply Gaussian blur to mask for smooth edges
         cv::Mat blurredMask;
-        cv::GaussianBlur(binMask, blurredMask, cv::Size(9, 9), 2.0); // Small blur radius for speed
+        cv::GaussianBlur(binMask, blurredMask, cv::Size(13, 13), 3.0); // Increased blur radius for smoother edges
         
         // Step 3: Normalize mask to [0, 1] range for alpha blending
         cv::Mat alphaMask;
@@ -677,10 +963,14 @@ cv::Mat Capture::applyFastEdgeBlendingForVideo(const cv::Mat &composedFrame,
     }
 }
 
-cv::Mat Capture::applySimpleDynamicCompositing(const cv::Mat &composedFrame,
-                                                const cv::Mat &rawPersonRegion,
-                                                const cv::Mat &rawPersonMask,
-                                                const cv::Mat &backgroundFrame)
+// THREAD-SAFE WRAPPER: Takes all parameters instead of accessing member variables
+cv::Mat Capture::applySimpleDynamicCompositingSafe(const cv::Mat &composedFrame,
+                                                    const cv::Mat &rawPersonRegion,
+                                                    const cv::Mat &rawPersonMask,
+                                                    const cv::Mat &backgroundFrame,
+                                                    LightingCorrector* lightingCorrector,
+                                                    double /*personScaleFactor*/,
+                                                    bool useCUDA)
 {
     // Validate inputs
     if (composedFrame.empty() || rawPersonRegion.empty() || rawPersonMask.empty()) {
@@ -702,21 +992,112 @@ cv::Mat Capture::applySimpleDynamicCompositing(const cv::Mat &composedFrame,
             cv::resize(personMask, personMask, composedFrame.size(), 0, 0, cv::INTER_LINEAR);
         }
         
-        // STEP 1: Apply lighting correction to person region (lightweight, GPU-accelerated)
-        cv::Mat lightingCorrectedPerson;
-        if (m_lightingCorrector) {
-            try {
-                lightingCorrectedPerson = applyLightingToRawPersonRegion(personRegion, personMask);
-                if (lightingCorrectedPerson.empty()) {
-                    lightingCorrectedPerson = personRegion.clone();
-                }
-            } catch (const std::exception& e) {
-                qWarning() << "Lighting correction failed:" << e.what() << "- using original";
-                lightingCorrectedPerson = personRegion.clone();
-            }
+        // STEP 1: VIDEO-SPECIFIC LIGHTING: Use static mode approach but optimized for video
+        cv::Mat lightingCorrectedPerson = applyVideoOptimizedLighting(personRegion, personMask, lightingCorrector);
+        
+        // STEP 2: Create smoothed mask for edge blending
+        cv::Mat binMask;
+        if (personMask.channels() == 3) {
+            cv::cvtColor(personMask, binMask, cv::COLOR_BGR2GRAY);
         } else {
-            lightingCorrectedPerson = personRegion.clone();
+            binMask = personMask.clone();
         }
+        cv::threshold(binMask, binMask, 127, 255, cv::THRESH_BINARY);
+        
+        // Enhanced edge smoothing for better quality
+        cv::Mat smoothedMask;
+        cv::GaussianBlur(binMask, smoothedMask, cv::Size(11, 11), 2.5); // Larger blur for smoother edges
+        
+        // Normalize to [0, 1] for alpha blending
+        cv::Mat alphaMask;
+        smoothedMask.convertTo(alphaMask, CV_32F, 1.0/255.0);
+        
+        // STEP 3: Fast GPU-accelerated alpha blending
+        if (useCUDA && cv::cuda::getCudaEnabledDeviceCount() > 0) {
+            try {
+                cv::cuda::GpuMat gpuBg, gpuPerson, gpuAlpha, gpuResult;
+                gpuBg.upload(bg);
+                gpuPerson.upload(lightingCorrectedPerson);
+                gpuAlpha.upload(alphaMask);
+                
+                cv::cuda::GpuMat gpuBgF, gpuPersonF;
+                gpuBg.convertTo(gpuBgF, CV_32F);
+                gpuPerson.convertTo(gpuPersonF, CV_32F);
+                
+                std::vector<cv::cuda::GpuMat> alphaChannels = {gpuAlpha, gpuAlpha, gpuAlpha};
+                cv::cuda::GpuMat gpuAlpha3;
+                cv::cuda::merge(alphaChannels, gpuAlpha3);
+                
+                cv::cuda::GpuMat gpuResultF, gpuPersonBlended, gpuBgBlended;
+                cv::cuda::multiply(gpuPersonF, gpuAlpha3, gpuPersonBlended);
+                
+                cv::cuda::GpuMat gpuOnes;
+                gpuOnes.create(gpuAlpha3.size(), gpuAlpha3.type());
+                gpuOnes.setTo(cv::Scalar(1.0, 1.0, 1.0));
+                cv::cuda::GpuMat gpuOneMinusAlpha;
+                cv::cuda::subtract(gpuOnes, gpuAlpha3, gpuOneMinusAlpha);
+                cv::cuda::multiply(gpuBgF, gpuOneMinusAlpha, gpuBgBlended);
+                cv::cuda::add(gpuPersonBlended, gpuBgBlended, gpuResultF);
+                gpuResultF.convertTo(gpuResult, CV_8U);
+                
+                cv::Mat result;
+                gpuResult.download(result);
+                return result;
+            } catch (const cv::Exception& e) {
+                qWarning() << "GPU compositing failed:" << e.what() << "- using CPU";
+            }
+        }
+        
+        // CPU fallback
+        cv::Mat personF, bgF;
+        lightingCorrectedPerson.convertTo(personF, CV_32F);
+        bg.convertTo(bgF, CV_32F);
+        
+        std::vector<cv::Mat> alphaChannels = {alphaMask, alphaMask, alphaMask};
+        cv::Mat alpha3;
+        cv::merge(alphaChannels, alpha3);
+        
+        cv::Mat resultF = personF.mul(alpha3) + bgF.mul(cv::Scalar(1.0, 1.0, 1.0) - alpha3);
+        cv::Mat result;
+        resultF.convertTo(result, CV_8U);
+        return result;
+        
+    } catch (const cv::Exception& e) {
+        qWarning() << "Dynamic compositing failed:" << e.what();
+        return composedFrame;
+    } catch (const std::exception& e) {
+        qWarning() << "Dynamic compositing exception:" << e.what();
+        return composedFrame;
+    }
+}
+
+cv::Mat Capture::applySimpleDynamicCompositing(const cv::Mat &composedFrame,
+                                               const cv::Mat &rawPersonRegion,
+                                               const cv::Mat &rawPersonMask,
+                                               const cv::Mat &backgroundFrame)
+{
+    // Validate inputs
+    if (composedFrame.empty() || rawPersonRegion.empty() || rawPersonMask.empty()) {
+        return composedFrame;
+    }
+    
+    try {
+        // Get background - use provided frame or fallback
+        cv::Mat bg = backgroundFrame.empty() ? cv::Mat::zeros(composedFrame.size(), composedFrame.type()) : backgroundFrame.clone();
+        if (bg.size() != composedFrame.size()) {
+            cv::resize(bg, bg, composedFrame.size(), 0, 0, cv::INTER_LINEAR);
+        }
+        
+        // Scale person region to match frame size if needed
+        cv::Mat personRegion = rawPersonRegion;
+        cv::Mat personMask = rawPersonMask;
+        if (personRegion.size() != composedFrame.size()) {
+            cv::resize(personRegion, personRegion, composedFrame.size(), 0, 0, cv::INTER_LINEAR);
+            cv::resize(personMask, personMask, composedFrame.size(), 0, 0, cv::INTER_LINEAR);
+        }
+        
+        // STEP 1: VIDEO-SPECIFIC LIGHTING: Use static mode approach but optimized for video
+        cv::Mat lightingCorrectedPerson = applyVideoOptimizedLighting(personRegion, personMask, m_lightingCorrector);
         
         // STEP 2: Create smoothed mask for edge blending (fast Gaussian blur)
         cv::Mat binMask;
@@ -727,9 +1108,9 @@ cv::Mat Capture::applySimpleDynamicCompositing(const cv::Mat &composedFrame,
         }
         cv::threshold(binMask, binMask, 127, 255, cv::THRESH_BINARY);
         
-        // Fast edge smoothing: small Gaussian blur on mask for smooth edges
+        // Enhanced edge smoothing for better quality
         cv::Mat smoothedMask;
-        cv::GaussianBlur(binMask, smoothedMask, cv::Size(5, 5), 1.0); // Small blur for speed
+        cv::GaussianBlur(binMask, smoothedMask, cv::Size(11, 11), 2.5); // Larger blur for smoother edges
         
         // Normalize to [0, 1] for alpha blending
         cv::Mat alphaMask;
@@ -801,6 +1182,123 @@ cv::Mat Capture::applySimpleDynamicCompositing(const cv::Mat &composedFrame,
     } catch (const cv::Exception& e) {
         qWarning() << "Dynamic compositing failed:" << e.what();
         return composedFrame;
+    }
+}
+
+// ============================================================================
+//  VIDEO-OPTIMIZED LIGHTING CORRECTION (Based on Static Mode Algorithm)
+// ============================================================================
+
+cv::Mat Capture::applyVideoOptimizedLighting(const cv::Mat &personRegion, 
+                                              const cv::Mat &personMask,
+                                              LightingCorrector* lightingCorrector)
+{
+    // VIDEO-SPECIFIC: Follow static mode algorithm but optimized for video processing
+    // This uses the same LAB color space matching as static mode but with video-optimized parameters
+    
+    // CRASH PREVENTION: Validate inputs
+    if (personRegion.empty() || personMask.empty()) {
+        qWarning() << "Invalid inputs for video lighting - returning original";
+        return personRegion.clone();
+    }
+    
+    if (personRegion.size() != personMask.size()) {
+        qWarning() << "Size mismatch for video lighting - returning original";
+        return personRegion.clone();
+    }
+    
+    if (personRegion.type() != CV_8UC3) {
+        qWarning() << "Invalid person region format for video lighting - returning original";
+        return personRegion.clone();
+    }
+    
+    if (personMask.type() != CV_8UC1) {
+        qWarning() << "Invalid mask format for video lighting - returning original";
+        return personRegion.clone();
+    }
+    
+    // Start with exact copy of person region
+    cv::Mat result = personRegion.clone();
+    
+    // If no lighting corrector, return original
+    if (!lightingCorrector) {
+        return result;
+    }
+    
+    try {
+        // Get template reference for color matching (same as static mode)
+        cv::Mat templateRef = lightingCorrector->getReferenceTemplate();
+        
+        if (templateRef.empty()) {
+            // No template: Apply very subtle brightness adjustment for video (even more subtle than static)
+            // VIDEO-OPTIMIZED: More conservative adjustments for video frames
+            for (int y = 0; y < result.rows; y++) {
+                for (int x = 0; x < result.cols; x++) {
+                    if (y < personMask.rows && x < personMask.cols && 
+                        personMask.at<uchar>(y, x) > 0) {  // Person pixel
+                        cv::Vec3b& pixel = result.at<cv::Vec3b>(y, x);
+                        // VIDEO-SPECIFIC: Very subtle changes (less aggressive than static mode)
+                        pixel[0] = cv::saturate_cast<uchar>(pixel[0] * 1.05);  // Very slight blue boost
+                        pixel[1] = cv::saturate_cast<uchar>(pixel[1] * 1.02);  // Very slight green boost
+                        pixel[2] = cv::saturate_cast<uchar>(pixel[2] * 1.04);  // Very slight red boost
+                    }
+                }
+            }
+        } else {
+            // VIDEO-OPTIMIZED: Use same LAB color space matching as static mode but with video-specific parameters
+            cv::resize(templateRef, templateRef, personRegion.size());
+            
+            // Convert to LAB for color matching (same as static mode)
+            cv::Mat personLab, templateLab;
+            cv::cvtColor(personRegion, personLab, cv::COLOR_BGR2Lab);
+            cv::cvtColor(templateRef, templateLab, cv::COLOR_BGR2Lab);
+            
+            // Calculate template statistics (same as static mode)
+            cv::Scalar templateMean, templateStd;
+            cv::meanStdDev(templateLab, templateMean, templateStd);
+            
+            // Apply color matching to person region (same algorithm as static mode)
+            cv::Mat resultLab = personLab.clone();
+            std::vector<cv::Mat> channels;
+            cv::split(resultLab, channels);
+            
+            // Calculate person statistics for comparison
+            cv::Scalar personMean, personStd;
+            cv::meanStdDev(personLab, personMean, personStd);
+            
+            // VIDEO-SPECIFIC: More conservative adjustments than static mode
+            // Static mode uses 15% adjustment, video uses 10% for smoother frame-to-frame transitions
+            for (int c = 0; c < 3; c++) {
+                // Calculate the difference between template and person
+                double lightingDiff = templateMean[c] - personMean[c];
+                
+                // VIDEO-OPTIMIZED: Apply more conservative adjustment (10% vs 15% in static)
+                // This prevents jarring changes between video frames
+                channels[c] = channels[c] + lightingDiff * 0.10;
+            }
+            
+            // VIDEO-SPECIFIC: More conservative brightness adjustment
+            // Static mode uses 10%, video uses 5% for smoother transitions
+            double brightnessDiff = templateMean[0] - personMean[0]; // L channel
+            if (brightnessDiff > 0) {
+                channels[0] = channels[0] + brightnessDiff * 0.05; // Very slight brightness boost
+            }
+            
+            cv::merge(channels, resultLab);
+            cv::cvtColor(resultLab, result, cv::COLOR_Lab2BGR);
+            
+            // Apply mask to ensure only person pixels are affected
+            cv::Mat maskedResult;
+            result.copyTo(maskedResult, personMask);
+            personRegion.copyTo(maskedResult, ~personMask);
+            result = maskedResult;
+        }
+        
+        return result;
+        
+    } catch (const std::exception& e) {
+        qWarning() << "Video lighting correction exception:" << e.what() << "- returning original";
+        return personRegion.clone();
     }
 }
 
