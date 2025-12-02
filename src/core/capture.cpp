@@ -816,6 +816,21 @@ void Capture::updateCameraFeed(const QImage &image)
         m_currentFPS = fpsDuration > 0 ? fpsFrameCount / fpsDuration : targetFPS;
         fpsFrameCount = 0;
         fpsTimer.start();
+        
+        // Update system monitor with current FPS
+        if (m_systemMonitor) {
+            qDebug() << "Capture: Updating SystemMonitor FPS:" << m_currentFPS << "Pointer:" << (void*)m_systemMonitor;
+            try {
+                m_systemMonitor->updateFPS(m_currentFPS);
+                qDebug() << "Capture: SystemMonitor FPS update completed successfully";
+            } catch (const std::exception& e) {
+                qDebug() << "Capture: Exception during FPS update:" << e.what();
+            } catch (...) {
+                qDebug() << "Capture: Unknown exception during FPS update";
+            }
+        } else {
+            qDebug() << "Capture: SystemMonitor is NULL, cannot update FPS:" << m_currentFPS;
+        }
     }
 
     // Print performance stats every targetFPS frames (aligned with actual camera FPS)
@@ -4576,7 +4591,24 @@ double Capture::getPersonDetectionConfidenceThreshold() const
 
 void Capture::setSystemMonitor(SystemMonitor* monitor)
 {
+    qDebug() << "Capture::setSystemMonitor() called with pointer:" << (void*)monitor;
+    
+    if (!monitor) {
+        qWarning() << "Capture::setSystemMonitor() - NULL pointer passed!";
+        m_systemMonitor = nullptr;
+        return;
+    }
+    
+    // Validate pointer alignment (should be at least 8-byte aligned on 64-bit)
+    if (reinterpret_cast<uintptr_t>(monitor) % 8 != 0) {
+        qCritical() << "Capture::setSystemMonitor() - MISALIGNED POINTER!" << (void*)monitor;
+        qCritical() << "This pointer is INVALID and will cause crashes!";
+        m_systemMonitor = nullptr;
+        return;
+    }
+    
     m_systemMonitor = monitor;
+    qDebug() << "Capture::setSystemMonitor() - SystemMonitor set successfully";
 }
 
 void Capture::togglePersonDetection()

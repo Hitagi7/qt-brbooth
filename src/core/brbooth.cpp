@@ -34,8 +34,8 @@ BRBooth::BRBooth(QWidget *parent)
     , ui(new Ui::BRBooth)
     , cameraThread(new QThread(this)) // Initialize cameraThread first
     , cameraWorker(new Camera())      // Initialize cameraWorker second
-    , lastVisitedPageIndex(
-          0) // Initialize lastVisitedPageIndex (will be overwritten by initial showLandingPage)
+    , lastVisitedPageIndex(0) // Initialize lastVisitedPageIndex (will be overwritten by initial showLandingPage)
+    , m_systemMonitor(nullptr) // Initialize system monitor pointer
 {
     qDebug() << "OpenCV Version: " << CV_VERSION;
 
@@ -228,6 +228,18 @@ BRBooth::BRBooth(QWidget *parent)
     foregroundPageIndex = ui->stackedWidget->indexOf(foregroundPage);
     dynamicPageIndex = ui->stackedWidget->indexOf(dynamicPage);
 
+    // Initialize system monitor FIRST (before creating Capture page)
+    m_systemMonitor = new SystemMonitor(this);
+    qDebug() << "BRBooth: SystemMonitor created at address:" << (void*)m_systemMonitor;
+    qDebug() << "BRBooth: SystemMonitor pointer alignment check:" << (reinterpret_cast<uintptr_t>(m_systemMonitor) % 8 == 0 ? "VALID" : "INVALID");
+    
+    if (m_systemMonitor->initialize()) {
+        m_systemMonitor->startMonitoring(5000); // 5 seconds interval
+        qDebug() << "SystemMonitor: Started monitoring with 5-second interval";
+    } else {
+        qWarning() << "SystemMonitor: Failed to initialize";
+    }
+
     // Create new pages and add them to the stacked widget
     backgroundPage = new Background(this);
     ui->stackedWidget->addWidget(backgroundPage);
@@ -238,10 +250,15 @@ BRBooth::BRBooth(QWidget *parent)
     ui->stackedWidget->addWidget(capturePage);
     capturePageIndex = ui->stackedWidget->indexOf(capturePage);
     
-    // Connect system monitor to capture page for FPS tracking
+    // Connect system monitor to capture page for FPS tracking (NOW it exists!)
     if (capturePage && m_systemMonitor) {
+        qDebug() << "BRBooth: About to connect SystemMonitor to Capture";
+        qDebug() << "BRBooth: m_systemMonitor pointer:" << (void*)m_systemMonitor;
+        qDebug() << "BRBooth: capturePage pointer:" << (void*)capturePage;
         capturePage->setSystemMonitor(m_systemMonitor);
         qDebug() << "SystemMonitor connected to Capture page for FPS tracking";
+    } else {
+        qWarning() << "BRBooth: Cannot connect SystemMonitor - capturePage:" << (void*)capturePage << "m_systemMonitor:" << (void*)m_systemMonitor;
     }
 
     finalOutputPage = new Final(this);
@@ -280,15 +297,6 @@ BRBooth::BRBooth(QWidget *parent)
     m_pageBeforeIdle = -1;
     m_isIdleModeActive = false;
     m_idleTimerEnabled = false;
-
-    // Initialize system monitor
-    m_systemMonitor = new SystemMonitor(this);
-    if (m_systemMonitor->initialize()) {
-        m_systemMonitor->startMonitoring(5000); // 5 seconds interval
-        qDebug() << "SystemMonitor: Started monitoring with 5-second interval";
-    } else {
-        qWarning() << "SystemMonitor: Failed to initialize";
-    }
 
     // Start the landing page GIF since we're on the landing page initially
     startLandingPageGif();
