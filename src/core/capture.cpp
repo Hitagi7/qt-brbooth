@@ -249,7 +249,9 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     // Hand detection UI removed
     , m_recordingFrameQueue()
     , debugUpdateTimer(nullptr)
-    , m_currentFPS(0)
+    , m_currentFPS(0.0)
+    , m_processingFpsTimerInitialized(false)
+    , m_lastCalculatedFPS(0.0)
     , m_recordingGpuBuffer()
     , m_cachedPixmap(640, 480)
     // CUDA HOG detector removed
@@ -781,34 +783,77 @@ void Capture::updateCameraFeed(const QImage &image)
 
     // Calculate PROCESSING FPS (system/display rate, not camera input rate)
     // This measures how fast we're actually processing and displaying frames
-    static QElapsedTimer processingFpsTimer;
-    static int processingFrameCount = 0;
-    static bool processingFpsTimerInitialized = false;
-
-    if (!processingFpsTimerInitialized) {
-        processingFpsTimer.start();
-        processingFpsTimerInitialized = true;
+    // Using instance variables and smoothing for cross-device consistency
+    
+    if (!m_processingFpsTimerInitialized) {
+        m_processingFpsTimer.start();
+        m_processingFpsTimerInitialized = true;
+        m_processingFrameCount = 0;
+        m_fpsHistory.clear();
+        m_lastCalculatedFPS = 0.0;
     }
-    processingFrameCount++;
+    m_processingFrameCount++;
 
     // Calculate processing FPS every second (measures actual system performance)
-    if (processingFpsTimer.elapsed() >= 1000) {
-        double fpsDuration = processingFpsTimer.elapsed() / 1000.0;
-        if (fpsDuration > 0) {
-            // This is the actual processing/display FPS, not camera input FPS
-            m_currentFPS = processingFrameCount / fpsDuration;
+    // Use a more robust calculation that works consistently across different devices
+    qint64 elapsedMs = m_processingFpsTimer.elapsed();
+    
+    // Use a minimum of 800ms to avoid timer precision issues on some devices
+    // This ensures we have enough samples for accurate calculation
+    if (elapsedMs >= 800) {
+        double fpsDuration = elapsedMs / 1000.0;
+        if (fpsDuration > 0 && m_processingFrameCount > 0) {
+            // Calculate raw FPS
+            double rawFPS = m_processingFrameCount / fpsDuration;
             
-            // Update system monitor with processing FPS (system performance metric)
-            // updateCameraFeed is already called via Qt::QueuedConnection, so we're in the main thread
-            // Direct call is safe here since we're in the same thread as SystemMonitor
-            if (m_systemMonitor && m_currentFPS > 0.0) {
-                // Direct call is safe - updateCameraFeed runs in main thread via QueuedConnection
-                m_systemMonitor->updateFPS(m_currentFPS);
+            // Clamp to reasonable range first (0-120 FPS) to handle timer anomalies
+            rawFPS = qBound(0.0, rawFPS, 120.0);
+            
+            // Add to history for smoothing (helps with device-specific timer variations)
+            m_fpsHistory.append(rawFPS);
+            if (m_fpsHistory.size() > MAX_FPS_HISTORY) {
+                m_fpsHistory.removeFirst();
+            }
+            
+            // Calculate smoothed/averaged FPS (more accurate and consistent across devices)
+            double sumFPS = 0.0;
+            int validSamples = 0;
+            for (double fps : m_fpsHistory) {
+                if (fps > 0.0) {  // Only count valid samples
+                    sumFPS += fps;
+                    validSamples++;
+                }
+            }
+            
+            if (validSamples > 0) {
+                double smoothedFPS = sumFPS / validSamples;
+                
+                // Apply additional smoothing to prevent sudden jumps between devices
+                // This helps maintain consistency when switching between devices
+                if (m_lastCalculatedFPS > 0.0) {
+                    // Weighted average: 70% new value, 30% old value for stability
+                    m_currentFPS = (smoothedFPS * 0.7) + (m_lastCalculatedFPS * 0.3);
+                } else {
+                    m_currentFPS = smoothedFPS;
+                }
+                
+                m_lastCalculatedFPS = m_currentFPS;
+                
+                // Final clamp to ensure reasonable values
+                m_currentFPS = qBound(0.0, m_currentFPS, 120.0);
+                
+                // Update system monitor with processing FPS (system performance metric)
+                // updateCameraFeed is already called via Qt::QueuedConnection, so we're in the main thread
+                // Direct call is safe here since we're in the same thread as SystemMonitor
+                if (m_systemMonitor && m_currentFPS > 0.0) {
+                    // Direct call is safe - updateCameraFeed runs in main thread via QueuedConnection
+                    m_systemMonitor->updateFPS(m_currentFPS);
+                }
             }
         }
         
-        processingFrameCount = 0;
-        processingFpsTimer.restart();
+        m_processingFrameCount = 0;
+        m_processingFpsTimer.restart();
     }
 
     // Print performance stats every 60 frames (approximately every 2 seconds at 30 FPS)

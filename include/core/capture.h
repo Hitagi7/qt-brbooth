@@ -297,6 +297,14 @@ private:
     int frameCount;
     QElapsedTimer frameTimer;
     int fpsFrameCount;
+    
+    // FPS calculation members (instance variables for cross-device consistency)
+    QElapsedTimer m_processingFpsTimer;
+    int m_processingFrameCount;
+    bool m_processingFpsTimerInitialized;
+    QList<double> m_fpsHistory;  // For smoothing/averaging FPS across devices
+    static const int MAX_FPS_HISTORY = 5;  // Keep last 5 FPS samples for smoothing (reduced for faster response)
+    double m_lastCalculatedFPS;  // Store last calculated FPS to avoid sudden jumps
 
     // pass foreground
     QLabel* overlayImageLabel = nullptr;
@@ -346,7 +354,7 @@ private:
     QPushButton *personSegmentationButton;
     // Hand detection UI elements removed
     QTimer *debugUpdateTimer;
-    int m_currentFPS;
+    double m_currentFPS;
 
 
 
