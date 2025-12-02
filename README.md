@@ -1,6 +1,6 @@
 # Qt BRBooth - Interactive Photo Booth Application
 
-A modern, full-screen photo booth application built with Qt and OpenCV, featuring real-time image processing and hand detection capabilities.
+A modern, full-screen photo booth application built with Qt and OpenCV, featuring real-time image processing capabilities.
 
 ## Overview
 
@@ -16,7 +16,6 @@ Qt BRBooth is an interactive photo booth application that provides a complete us
 - **Image/Video Recording**: Capture photos or record videos with customizable templates
 
 ### Advanced Image Processing
-- **Hand Detection**: Advanced hand tracking and detection capabilities
 - **Background Replacement**: Dynamic background replacement and blending
 - **Template System**: Customizable foreground, background, and video templates
 
@@ -43,9 +42,7 @@ qt-brbooth/
 │   │   ├── final.cpp             # Final output page
 │   │   └── iconhover.cpp         # Icon hover effects
 │   └── algorithms/                # Computer vision algorithms
-│       └── hand_detection/        # Hand detection and tracking
-│           ├── advanced_hand_detector.cpp
-│           └── mediapipe_like_hand_tracker.cpp
+│       └── lighting_correction/   # Lighting correction algorithms
 ├── include/                       # Header files
 │   ├── core/                      # Core headers
 │   │   ├── brbooth.h
@@ -61,8 +58,7 @@ qt-brbooth/
 │   │   ├── iconhover.h
 │   │   └── ui_manager.h
 │   └── algorithms/                # Algorithm headers
-│       ├── advanced_hand_detector.h
-│       └── mediapipe_like_hand_tracker.h
+│       └── lighting_correction/   # Lighting correction headers
 ├── ui/                            # Qt Designer UI files
 │   ├── background.ui
 │   ├── brbooth.ui
@@ -130,11 +126,10 @@ LIBS += -L$$OPENCV_INSTALL_DIR/x64/vc17/lib
 ### Controls
 - **Navigation**: Use on-screen buttons to navigate between pages
 - **Camera Controls**: Start/stop camera, capture images, record videos
-- **Processing Options**: Toggle hand detection, adjust confidence thresholds
+- **Processing Options**: Adjust confidence thresholds
 - **Template Selection**: Browse and select from available templates
 
 ### Processing Features
-- **Hand Detection**: Track and detect hand gestures and positions
 - **Performance Modes**: Adjust processing quality vs. speed
 - **Confidence Thresholds**: Fine-tune detection sensitivity
 
@@ -170,7 +165,6 @@ LIBS += -L$$OPENCV_INSTALL_DIR/x64/vc17/lib
 ### Key Classes
 - `BRBooth`: Main application window and navigation
 - `Capture`: Camera handling and image processing
-- `AdvancedHandDetector`: Hand detection and tracking
 - `Camera`: Camera device management
 
 ### Contributing

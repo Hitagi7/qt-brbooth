@@ -7,6 +7,7 @@
 #include <QMutex>
 #include <QString>
 #include <QDateTime>
+#include <QAtomicInteger>
 #include <memory>
 
 // Forward declarations
@@ -71,9 +72,10 @@ private:
     void* m_gpuQueryHandle;
     void* m_gpuCounterHandle;
     
-    // FPS tracking
-    QList<double> m_fpsSamples;
-    static const int MAX_FPS_SAMPLES = 100;
+    // FPS tracking - using simple volatile double (thread-safe reads/writes on x86/x64)
+    // Atomic operations were causing crashes, using volatile as safer alternative
+    volatile double m_latestFPS;
+    QElapsedTimer m_fpsTrackingTimer;
     
     // Average statistics tracking
     double m_cpuSum;

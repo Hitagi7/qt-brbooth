@@ -36,7 +36,6 @@
 #include "core/camera.h"          // Your custom Camera class
 #include "ui/foreground.h"        // Foreground class
 #include "core/common_types.h"    // Common data structures
-// Hand detection removed per user request
 #include "algorithms/lighting_correction/lighting_corrector.h"
 #include <array>
 
@@ -131,7 +130,6 @@ namespace Ui { class Capture; }
 class Foreground; // Forward declaration for Foreground
 
 // Forward declarations
-// HandDetector removed
 
 QT_END_NAMESPACE
 
@@ -166,7 +164,6 @@ public:
     void setVideoTemplateDuration(int durationSeconds);
     int getVideoTemplateDuration() const;
 
-    // Hand detection completely removed
     void enableProcessingModes(); // Safely enable processing modes after camera is stable
     void disableProcessingModes(); // Disable heavy processing modes for non-capture pages
     
@@ -238,7 +235,6 @@ signals:
     void showFinalOutputPage();
     void personDetectedInFrame();
     void foregroundPathChanged(const QString &foregroundPath);
-    // Hand detection signal removed
 
 private slots:
     void updateCameraFeed(const QImage &frame);
@@ -266,8 +262,6 @@ private slots:
     
     // Video Playback Timer Slots
     void onVideoPlaybackTimer(); // Handle video frame advancement at native frame rate
-
-    // Hand detection slots removed
     
     //  Asynchronous Video Processing Slot
     void onVideoProcessingFinished();
@@ -323,10 +317,6 @@ private:
     // pass foreground
     QLabel* overlayImageLabel = nullptr;
     
-
-
-    // Hand detection methods completely removed
-    
     // System monitor for FPS tracking
     class SystemMonitor* m_systemMonitor;
     
@@ -338,12 +328,6 @@ private:
     
     // Camera initialization tracking
     bool m_cameraFirstInitialized = false;
-    
-
-
-    
-    // Temporarily disabled Hand detection state
-    // Hand detection completely removed
 
     // Debug Display Members
     
@@ -366,14 +350,9 @@ private:
     QPushButton *personDetectionButton;
     QLabel *personSegmentationLabel;
     QPushButton *personSegmentationButton;
-    // Hand detection UI elements removed
     QTimer *debugUpdateTimer;
     int m_currentFPS;
 
-
-
-    // Hand detection members completely removed
-    
     // Capture Mode State
     bool m_captureReady;
     
@@ -417,9 +396,6 @@ private:
     cv::Mat m_lastSegmentedFrame;
     mutable QMutex m_personDetectionMutex;
     QElapsedTimer m_personDetectionTimer;
-    cv::HOGDescriptor m_hogDetector;  // CPU fallback
-    cv::HOGDescriptor m_hogDetectorDaimler;  // CPU fallback
-    cv::Ptr<cv::cuda::HOG> m_cudaHogDetector;  // CUDA-accelerated HOG detection
     cv::Ptr<cv::BackgroundSubtractorMOG2> m_bgSubtractor;
     cv::Mat m_subtractionReferenceImage;  // Static reference image for background subtraction
     cv::Mat m_subtractionReferenceImage2;  // Second static reference image for background subtraction
@@ -455,44 +431,17 @@ private:
     cv::Mat createSegmentedFrame(const cv::Mat &frame, const std::vector<cv::Rect> &detections);
     cv::Mat enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect &detection);
     
-    //  Lightweight Processing for Recording Performance
-    cv::Mat createLightweightSegmentedFrame(const cv::Mat &frame);
-    
     // Phase 2A: GPU-Only Processing Methods
     void initializeGPUOnlyProcessing();
     bool isGPUOnlyProcessingAvailable() const;
     cv::Mat processFrameWithGPUOnlyPipeline(const cv::Mat &frame);
     cv::Mat createSegmentedFrameGPUOnly(const cv::Mat &frame, const std::vector<cv::Rect> &detections);
     cv::Mat enhancedSilhouetteSegmentGPUOnly(const cv::cuda::GpuMat &gpuFrame, const cv::Rect &detection);
-    void validateGPUResults(const cv::Mat &gpuResult, const cv::Mat &cpuResult);
-    std::vector<cv::Rect> runCudaHogMultiPass(const cv::Mat &frame);
-    std::vector<cv::Rect> runCudaHogPass(const cv::Mat &frame,
-                                         double resizeScale,
-                                         double hitThreshold,
-                                         const cv::Size &winStride);
-    std::vector<cv::Rect> runClassicHogPass(const cv::Mat &frame);
-    static std::vector<cv::Rect> nonMaximumSuppression(const std::vector<cv::Rect> &detections,
-                                                       double overlapThreshold);
-    std::vector<cv::Rect> filterDetectionsByMotion(const std::vector<cv::Rect> &detections,
-                                                   const cv::Mat &motionMask,
-                                                   double minOverlapRatio) const;
-    std::vector<cv::Rect> detectPeople(const cv::Mat &frame);
-    cv::Mat getMotionMask(const cv::Mat &frame);
-    void adjustRect(cv::Rect &r) const;
-    // Lightweight temporal smoothing of detections
-    std::vector<cv::Rect> smoothDetections(const std::vector<cv::Rect> &current);
     
     // Green-screen helpers
     cv::Mat createGreenScreenPersonMask(const cv::Mat &frame) const;
     cv::cuda::GpuMat createGreenScreenPersonMaskGPU(const cv::cuda::GpuMat &gpuFrame) const;
     cv::cuda::GpuMat removeGreenSpillGPU(const cv::cuda::GpuMat &gpuFrame, const cv::cuda::GpuMat &gpuMask) const;
-    cv::Mat refineGreenScreenMaskWithContours(const cv::Mat &mask, int minArea = 5000) const;
-    cv::Mat applyTemporalMaskSmoothing(const cv::Mat &currentMask) const;
-    cv::Mat refineWithGrabCut(const cv::Mat &frame, const cv::Mat &initialMask) const;
-    cv::Mat applyDistanceBasedRefinement(const cv::Mat &frame, const cv::Mat &mask) const;
-    cv::Mat createTrimap(const cv::Mat &mask, int erodeSize = 5, int dilateSize = 10) const;
-    cv::Mat customGuidedFilter(const cv::Mat &guide, const cv::Mat &src, int radius, double eps) const;
-    cv::Mat extractPersonWithAlphaMatting(const cv::Mat &frame, const cv::Mat &trimap) const;
     std::vector<cv::Rect> deriveDetectionsFromMask(const cv::Mat &mask) const;
     
     // Helper methods (implemented in .cpp)
@@ -587,20 +536,6 @@ private:
     // Utility functions
     cv::Mat qImageToCvMat(const QImage &image);
     QString resolveTemplatePath(const QString &templatePath);
-    std::array<double, 2> m_cudaHogScales;
-    double m_cudaHogHitThresholdPrimary;
-    double m_cudaHogHitThresholdSecondary;
-    cv::Size m_cudaHogWinStridePrimary;
-    cv::Size m_cudaHogWinStrideSecondary;
-    double m_detectionNmsOverlap;
-    double m_detectionMotionOverlap;
-    // Smoothing state
-    std::vector<cv::Rect> m_prevSmoothedDetections;
-    int m_smoothingHoldFrames;
-    int m_smoothingHoldCounter;
-    // Frame-skipping for detection
-    int m_detectionSkipInterval;
-    int m_detectionSkipCounter;
     
     // Green-screen configuration
     bool m_greenScreenEnabled;

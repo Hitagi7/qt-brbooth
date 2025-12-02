@@ -27,6 +27,7 @@ SystemMonitor::SystemMonitor(QObject *parent)
     , m_cpuCounterHandle(nullptr)
     , m_gpuQueryHandle(nullptr)
     , m_gpuCounterHandle(nullptr)
+    , m_latestFPS(0.0)  // Initialize volatile FPS variable
     , m_peakMemoryGB(0.0)
     , m_initialized(false)
     , m_monitoring(false)
@@ -47,6 +48,10 @@ SystemMonitor::SystemMonitor(QObject *parent)
     m_memorySum = 0.0;
     m_fpsSum = 0.0;
     m_sampleCount = 0;
+    
+    // Initialize FPS tracking (volatile variable, thread-safe on x86/x64)
+    m_latestFPS = 0.0;
+    m_fpsTrackingTimer.start();
     
     connect(m_timer, &QTimer::timeout, this, &SystemMonitor::collectStatistics);
 }
@@ -166,6 +171,10 @@ void SystemMonitor::stopMonitoring()
 
 void SystemMonitor::collectStatistics()
 {
+    // Read FPS from volatile variable (thread-safe read on x86/x64)
+    double currentFPS = m_latestFPS;
+    
+    // Now acquire the main mutex for the rest of the statistics
     QMutexLocker locker(&m_mutex);
     
     Statistics stats;
@@ -185,16 +194,8 @@ void SystemMonitor::collectStatistics()
         stats.peakMemoryGB = m_peakMemoryGB;
     }
     
-    // Calculate average FPS from samples
-    if (m_fpsSamples.isEmpty()) {
-        stats.averageFPS = 0.0;
-    } else {
-        double sum = 0.0;
-        for (double sample : m_fpsSamples) {
-            sum += sample;
-        }
-        stats.averageFPS = sum / m_fpsSamples.size();
-    }
+    // Use the FPS value we read atomically
+    stats.averageFPS = currentFPS > 0.0 ? currentFPS : m_lastStats.averageFPS;
     
     // Update last statistics
     m_lastStats = stats;
@@ -331,21 +332,31 @@ SystemMonitor::Statistics SystemMonitor::getLastStatistics() const
 
 void SystemMonitor::updateFPS(double fps)
 {
-    QMutexLocker locker(&m_mutex);
+    qDebug() << "SystemMonitor::updateFPS() ENTERED with fps:" << fps << "this pointer:" << (void*)this;
+    qDebug() << "SystemMonitor: Address of m_latestFPS:" << (void*)&m_latestFPS;
     
-    // Add new FPS sample
-    m_fpsSamples.append(fps);
-    
-    // Keep only the most recent samples
-    if (m_fpsSamples.size() > MAX_FPS_SAMPLES) {
-        m_fpsSamples.removeFirst();
+    // Simple volatile write - thread-safe on x86/x64, no locks, no crashes
+    // Volatile ensures the write is not optimized away and is visible to other threads
+    if (fps > 0.0 && fps < 1000.0) { // Sanity check: FPS should be reasonable
+        qDebug() << "SystemMonitor: About to write to m_latestFPS, current value:" << m_latestFPS;
+        
+        // Use memcpy as a safer alternative to direct assignment
+        double tempFPS = fps;
+        std::memcpy(const_cast<double*>(&m_latestFPS), &tempFPS, sizeof(double));
+        
+        qDebug() << "SystemMonitor: FPS updated to:" << fps << "Verification read:" << m_latestFPS;
+    } else {
+        qDebug() << "SystemMonitor: Invalid FPS value rejected:" << fps;
     }
+    
+    qDebug() << "SystemMonitor::updateFPS() EXITING";
 }
 
 void SystemMonitor::resetFPSTracking()
 {
-    QMutexLocker locker(&m_mutex);
-    m_fpsSamples.clear();
+    // Simple volatile write
+    m_latestFPS = 0.0;
+    m_fpsTrackingTimer.restart();
 }
 
 void SystemMonitor::saveStatisticsToDocx(const QString& filePath) const
@@ -354,9 +365,18 @@ void SystemMonitor::saveStatisticsToDocx(const QString& filePath) const
     
     QString outputPath = filePath;
     if (outputPath.isEmpty()) {
-        QString appDir = QCoreApplication::applicationDirPath();
+        QString downloadsPath = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
+        if (downloadsPath.isEmpty()) {
+            // Fallback for systems without standard download path
+            downloadsPath = "C:/Downloads";
+        }
+        
         QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss");
-        outputPath = appDir + "/crash_report_" + timestamp + ".docx";
+        QDir dir;
+        if (!dir.exists(downloadsPath)) {
+            dir.mkpath(downloadsPath);
+        }
+        outputPath = downloadsPath + "/crash_report_" + timestamp + ".docx";
     }
     
     // Create a simple DOCX file (DOCX is a ZIP file containing XML)
@@ -475,13 +495,32 @@ void SystemMonitor::saveStatisticsToDocx(const QString& filePath) const
 
 void SystemMonitor::saveStatisticsToText(const QString& filePath) const
 {
+    // Read FPS from volatile variable (thread-safe read)
+    double latestFPS = m_latestFPS;
+    
+    qDebug() << "saveStatisticsToText: Read FPS:" << latestFPS;
+    
+    if (latestFPS == 0.0) {
+        latestFPS = m_lastStats.averageFPS; // Fallback to last known value
+        qDebug() << "saveStatisticsToText: Using fallback FPS:" << latestFPS;
+    }
+    
     QMutexLocker locker(&m_mutex);
     
     QString outputPath = filePath;
     if (outputPath.isEmpty()) {
-        QString appDir = QCoreApplication::applicationDirPath();
+        QString downloadsPath = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
+        if (downloadsPath.isEmpty()) {
+            // Fallback for systems without standard download path
+            downloadsPath = "C:/Downloads";
+        }
+        
         QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss");
-        outputPath = appDir + "/crash_report_" + timestamp + ".txt";
+        QDir dir;
+        if (!dir.exists(downloadsPath)) {
+            dir.mkpath(downloadsPath);
+        }
+        outputPath = downloadsPath + "/crash_report_" + timestamp + ".txt";
     }
     
     QFile file(outputPath);
@@ -502,7 +541,7 @@ void SystemMonitor::saveStatisticsToText(const QString& filePath) const
     out << "CPU Usage: " << QString::number(m_lastStats.cpuUsage, 'f', 2) << "%\n";
     out << "GPU Usage: " << QString::number(m_lastStats.gpuUsage, 'f', 2) << "%\n";
     out << "Peak Memory Usage: " << QString::number(m_lastStats.peakMemoryGB, 'f', 2) << " GB\n";
-    out << "Average FPS: " << QString::number(m_lastStats.averageFPS, 'f', 2) << " FPS\n\n";
+    out << "Average FPS: " << QString::number(latestFPS, 'f', 2) << " FPS\n\n";
     
     out << "PEAK STATISTICS:\n";
     out << "----------------\n";

@@ -6,7 +6,6 @@
 #include "core/camera.h"  // For cvMatToQImage helper function
 #include "ui/foreground.h"
 #include "ui_capture.h"
-#include "algorithms/hand_detection/hand_detector.h"
 #include <QDebug>
 #include <QImage>
 #include <QPixmap>
