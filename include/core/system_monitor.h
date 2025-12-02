@@ -30,16 +30,16 @@ public:
         double cpuUsage;          // CPU usage (%)
         double gpuUsage;          // GPU usage (%)
         double peakMemoryGB;      // Peak memory usage (GB)
-        double accuracy;          // Accuracy metric (%)
+        double averageFPS;        // Average FPS (frames per second)
         QDateTime timestamp;      // When these stats were collected
     };
 
     Statistics getCurrentStatistics() const;
     Statistics getLastStatistics() const;
 
-    // Accuracy tracking
-    void updateAccuracy(double detectionConfidence);
-    void resetAccuracyTracking();
+    // FPS tracking
+    void updateFPS(double fps);
+    void resetFPSTracking();
 
     // Crash handling
     void saveStatisticsToDocx(const QString& filePath = QString()) const;
@@ -63,6 +63,7 @@ private:
     mutable QMutex m_mutex;  // Mutable to allow locking in const methods
     Statistics m_lastStats;
     Statistics m_peakStats;
+    Statistics m_averageStats;
     
     // Windows-specific handles
     void* m_cpuQueryHandle;
@@ -70,9 +71,16 @@ private:
     void* m_gpuQueryHandle;
     void* m_gpuCounterHandle;
     
-    // Accuracy tracking
-    QList<double> m_accuracySamples;
-    static const int MAX_ACCURACY_SAMPLES = 100;
+    // FPS tracking
+    QList<double> m_fpsSamples;
+    static const int MAX_FPS_SAMPLES = 100;
+    
+    // Average statistics tracking
+    double m_cpuSum;
+    double m_gpuSum;
+    double m_memorySum;
+    double m_fpsSum;
+    int m_sampleCount;
     
     // Memory tracking
     double m_peakMemoryGB;

@@ -327,7 +327,7 @@ private:
 
     // Hand detection methods completely removed
     
-    // System monitor for accuracy tracking
+    // System monitor for FPS tracking
     class SystemMonitor* m_systemMonitor;
     
     // Status overlay for key presses

@@ -35,10 +35,18 @@ SystemMonitor::SystemMonitor(QObject *parent)
     m_lastStats.cpuUsage = 0.0;
     m_lastStats.gpuUsage = 0.0;
     m_lastStats.peakMemoryGB = 0.0;
-    m_lastStats.accuracy = 0.0;
+    m_lastStats.averageFPS = 0.0;
     m_lastStats.timestamp = QDateTime::currentDateTime();
     
     m_peakStats = m_lastStats;
+    m_averageStats = m_lastStats;
+    
+    // Initialize average tracking variables
+    m_cpuSum = 0.0;
+    m_gpuSum = 0.0;
+    m_memorySum = 0.0;
+    m_fpsSum = 0.0;
+    m_sampleCount = 0;
     
     connect(m_timer, &QTimer::timeout, this, &SystemMonitor::collectStatistics);
 }
@@ -177,15 +185,15 @@ void SystemMonitor::collectStatistics()
         stats.peakMemoryGB = m_peakMemoryGB;
     }
     
-    // Calculate accuracy from samples
-    if (m_accuracySamples.isEmpty()) {
-        stats.accuracy = 0.0;
+    // Calculate average FPS from samples
+    if (m_fpsSamples.isEmpty()) {
+        stats.averageFPS = 0.0;
     } else {
         double sum = 0.0;
-        for (double sample : m_accuracySamples) {
+        for (double sample : m_fpsSamples) {
             sum += sample;
         }
-        stats.accuracy = sum / m_accuracySamples.size();
+        stats.averageFPS = sum / m_fpsSamples.size();
     }
     
     // Update last statistics
@@ -195,16 +203,42 @@ void SystemMonitor::collectStatistics()
     if (stats.cpuUsage > m_peakStats.cpuUsage) m_peakStats.cpuUsage = stats.cpuUsage;
     if (stats.gpuUsage > m_peakStats.gpuUsage) m_peakStats.gpuUsage = stats.gpuUsage;
     if (stats.peakMemoryGB > m_peakStats.peakMemoryGB) m_peakStats.peakMemoryGB = stats.peakMemoryGB;
-    if (stats.accuracy > m_peakStats.accuracy) m_peakStats.accuracy = stats.accuracy;
+    if (stats.averageFPS > m_peakStats.averageFPS) m_peakStats.averageFPS = stats.averageFPS;
+    
+    // Update average statistics
+    m_cpuSum += stats.cpuUsage;
+    m_gpuSum += stats.gpuUsage;
+    m_memorySum += currentMemory;
+    m_fpsSum += stats.averageFPS;
+    m_sampleCount++;
+    
+    if (m_sampleCount > 0) {
+        m_averageStats.cpuUsage = m_cpuSum / m_sampleCount;
+        m_averageStats.gpuUsage = m_gpuSum / m_sampleCount;
+        m_averageStats.peakMemoryGB = m_memorySum / m_sampleCount;
+        m_averageStats.averageFPS = m_fpsSum / m_sampleCount;
+        m_averageStats.timestamp = stats.timestamp;
+    }
     
     // Log statistics to application output
     qDebug() << "========================================";
     qDebug() << "=== SYSTEM MONITORING STATISTICS ===";
     qDebug() << "Timestamp:" << stats.timestamp.toString("yyyy-MM-dd hh:mm:ss");
+    qDebug() << "--- LAST STATISTICS ---";
     qDebug() << "CPU Usage:" << QString::number(stats.cpuUsage, 'f', 2) << "%";
     qDebug() << "GPU Usage:" << QString::number(stats.gpuUsage, 'f', 2) << "%";
     qDebug() << "Peak Memory Usage:" << QString::number(stats.peakMemoryGB, 'f', 2) << "GB";
-    qDebug() << "Accuracy:" << QString::number(stats.accuracy, 'f', 2) << "%";
+    qDebug() << "Average FPS:" << QString::number(stats.averageFPS, 'f', 2) << "FPS";
+    qDebug() << "--- AVERAGE STATISTICS ---";
+    qDebug() << "Average CPU Usage:" << QString::number(m_averageStats.cpuUsage, 'f', 2) << "%";
+    qDebug() << "Average GPU Usage:" << QString::number(m_averageStats.gpuUsage, 'f', 2) << "%";
+    qDebug() << "Average Memory Usage:" << QString::number(m_averageStats.peakMemoryGB, 'f', 2) << "GB";
+    qDebug() << "Average FPS:" << QString::number(m_averageStats.averageFPS, 'f', 2) << "FPS";
+    qDebug() << "--- PEAK STATISTICS ---";
+    qDebug() << "Peak CPU Usage:" << QString::number(m_peakStats.cpuUsage, 'f', 2) << "%";
+    qDebug() << "Peak GPU Usage:" << QString::number(m_peakStats.gpuUsage, 'f', 2) << "%";
+    qDebug() << "Peak Memory Usage:" << QString::number(m_peakStats.peakMemoryGB, 'f', 2) << "GB";
+    qDebug() << "Peak Average FPS:" << QString::number(m_peakStats.averageFPS, 'f', 2) << "FPS";
     qDebug() << "========================================";
     
     emit statisticsUpdated(stats);
@@ -295,23 +329,23 @@ SystemMonitor::Statistics SystemMonitor::getLastStatistics() const
     return m_lastStats;
 }
 
-void SystemMonitor::updateAccuracy(double detectionConfidence)
+void SystemMonitor::updateFPS(double fps)
 {
     QMutexLocker locker(&m_mutex);
     
-    // Add new sample
-    m_accuracySamples.append(detectionConfidence * 100.0); // Convert to percentage
+    // Add new FPS sample
+    m_fpsSamples.append(fps);
     
     // Keep only the most recent samples
-    if (m_accuracySamples.size() > MAX_ACCURACY_SAMPLES) {
-        m_accuracySamples.removeFirst();
+    if (m_fpsSamples.size() > MAX_FPS_SAMPLES) {
+        m_fpsSamples.removeFirst();
     }
 }
 
-void SystemMonitor::resetAccuracyTracking()
+void SystemMonitor::resetFPSTracking()
 {
     QMutexLocker locker(&m_mutex);
-    m_accuracySamples.clear();
+    m_fpsSamples.clear();
 }
 
 void SystemMonitor::saveStatisticsToDocx(const QString& filePath) const
@@ -376,13 +410,19 @@ void SystemMonitor::saveStatisticsToDocx(const QString& filePath) const
 <w:p><w:r><w:t>CPU Usage: %3%</w:t></w:r></w:p>
 <w:p><w:r><w:t>GPU Usage: %4%</w:t></w:r></w:p>
 <w:p><w:r><w:t>Peak Memory Usage: %5 GB</w:t></w:r></w:p>
-<w:p><w:r><w:t>Accuracy: %6%</w:t></w:r></w:p>
+<w:p><w:r><w:t>Average FPS: %6 FPS</w:t></w:r></w:p>
+<w:p><w:r><w:t></w:t></w:r></w:p>
+<w:p><w:r><w:t>Average Statistics:</w:t></w:r></w:p>
+<w:p><w:r><w:t>Average CPU Usage: %7%</w:t></w:r></w:p>
+<w:p><w:r><w:t>Average GPU Usage: %8%</w:t></w:r></w:p>
+<w:p><w:r><w:t>Average Memory Usage: %9 GB</w:t></w:r></w:p>
+<w:p><w:r><w:t>Average FPS: %10 FPS</w:t></w:r></w:p>
 <w:p><w:r><w:t></w:t></w:r></w:p>
 <w:p><w:r><w:t>Peak Statistics:</w:t></w:r></w:p>
-<w:p><w:r><w:t>Peak CPU Usage: %7%</w:t></w:r></w:p>
-<w:p><w:r><w:t>Peak GPU Usage: %8%</w:t></w:r></w:p>
-<w:p><w:r><w:t>Peak Memory Usage: %9 GB</w:t></w:r></w:p>
-<w:p><w:r><w:t>Peak Accuracy: %10%</w:t></w:r></w:p>
+<w:p><w:r><w:t>Peak CPU Usage: %11%</w:t></w:r></w:p>
+<w:p><w:r><w:t>Peak GPU Usage: %12%</w:t></w:r></w:p>
+<w:p><w:r><w:t>Peak Memory Usage: %13 GB</w:t></w:r></w:p>
+<w:p><w:r><w:t>Peak Average FPS: %14 FPS</w:t></w:r></w:p>
 </w:body>
 </w:document>)")
         .arg(QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm:ss"))
@@ -390,11 +430,15 @@ void SystemMonitor::saveStatisticsToDocx(const QString& filePath) const
         .arg(QString::number(m_lastStats.cpuUsage, 'f', 2))
         .arg(QString::number(m_lastStats.gpuUsage, 'f', 2))
         .arg(QString::number(m_lastStats.peakMemoryGB, 'f', 2))
-        .arg(QString::number(m_lastStats.accuracy, 'f', 2))
+        .arg(QString::number(m_lastStats.averageFPS, 'f', 2))
+        .arg(QString::number(m_averageStats.cpuUsage, 'f', 2))
+        .arg(QString::number(m_averageStats.gpuUsage, 'f', 2))
+        .arg(QString::number(m_averageStats.peakMemoryGB, 'f', 2))
+        .arg(QString::number(m_averageStats.averageFPS, 'f', 2))
         .arg(QString::number(m_peakStats.cpuUsage, 'f', 2))
         .arg(QString::number(m_peakStats.gpuUsage, 'f', 2))
         .arg(QString::number(m_peakStats.peakMemoryGB, 'f', 2))
-        .arg(QString::number(m_peakStats.accuracy, 'f', 2));
+        .arg(QString::number(m_peakStats.averageFPS, 'f', 2));
     
     QFile docFile(tempDocxDir + "/word/document.xml");
     if (docFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
@@ -458,14 +502,14 @@ void SystemMonitor::saveStatisticsToText(const QString& filePath) const
     out << "CPU Usage: " << QString::number(m_lastStats.cpuUsage, 'f', 2) << "%\n";
     out << "GPU Usage: " << QString::number(m_lastStats.gpuUsage, 'f', 2) << "%\n";
     out << "Peak Memory Usage: " << QString::number(m_lastStats.peakMemoryGB, 'f', 2) << " GB\n";
-    out << "Accuracy: " << QString::number(m_lastStats.accuracy, 'f', 2) << "%\n\n";
+    out << "Average FPS: " << QString::number(m_lastStats.averageFPS, 'f', 2) << " FPS\n\n";
     
     out << "PEAK STATISTICS:\n";
     out << "----------------\n";
     out << "Peak CPU Usage: " << QString::number(m_peakStats.cpuUsage, 'f', 2) << "%\n";
     out << "Peak GPU Usage: " << QString::number(m_peakStats.gpuUsage, 'f', 2) << "%\n";
     out << "Peak Memory Usage: " << QString::number(m_peakStats.peakMemoryGB, 'f', 2) << " GB\n";
-    out << "Peak Accuracy: " << QString::number(m_peakStats.accuracy, 'f', 2) << "%\n";
+    out << "Peak Average FPS: " << QString::number(m_peakStats.averageFPS, 'f', 2) << " FPS\n";
     out << "========================================\n";
     
     file.close();

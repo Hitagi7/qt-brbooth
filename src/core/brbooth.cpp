@@ -238,10 +238,10 @@ BRBooth::BRBooth(QWidget *parent)
     ui->stackedWidget->addWidget(capturePage);
     capturePageIndex = ui->stackedWidget->indexOf(capturePage);
     
-    // Connect system monitor to capture page for accuracy tracking
+    // Connect system monitor to capture page for FPS tracking
     if (capturePage && m_systemMonitor) {
         capturePage->setSystemMonitor(m_systemMonitor);
-        qDebug() << "SystemMonitor connected to Capture page for accuracy tracking";
+        qDebug() << "SystemMonitor connected to Capture page for FPS tracking";
     }
 
     finalOutputPage = new Final(this);
