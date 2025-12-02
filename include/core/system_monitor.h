@@ -43,7 +43,6 @@ public:
     void resetFPSTracking();
 
     // Crash handling
-    void saveStatisticsToDocx(const QString& filePath = QString()) const;
     void saveStatisticsToText(const QString& filePath = QString()) const;
 
 signals:

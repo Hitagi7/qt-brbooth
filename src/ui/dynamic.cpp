@@ -681,11 +681,6 @@ void Dynamic::processVideoClick(QObject *buttonObj)
     qDebug() << "Dynamic::processVideoClick - Finished.";
 }
 
-void Dynamic::onPlayerMediaStatusChanged(QMediaPlayer::MediaStatus status)
-{
-    Q_UNUSED(status); // Suppress unused parameter warning
-    qDebug() << "Dynamic::onPlayerMediaStatusChanged - Media status changed to:" << status;
-}
 
 void Dynamic::showOverlayVideo(const QString& videoPath)
 {

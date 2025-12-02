@@ -185,11 +185,11 @@ void Loading::setLoadingTextColor(const QString &templatePath)
 	if (isImage6) {
 		// Black text for image6 (light background) - retain all other styles
 		ui->loadingLabel->setStyleSheet("#loadingLabel { color: #000; text-align: center; font-family: \"Roboto Condensed\"; font-style: italic; font-weight: 700; font-size: 50px; }");
-		qDebug() << "🎨 Loading text color changed to black for image6 background template:" << templatePath;
+		qDebug() << "Loading text color changed to black for image6 background template:" << templatePath;
 	} else {
 		// White text for all other backgrounds (default) - retain all other styles
 		ui->loadingLabel->setStyleSheet("#loadingLabel { color: #FFF; text-align: center; font-family: \"Roboto Condensed\"; font-style: italic; font-weight: 700; font-size: 50px; }");
-		qDebug() << "🎨 Loading text color set to white for background template:" << templatePath;
+		qDebug() << "Loading text color set to white for background template:" << templatePath;
 	}
 }
 

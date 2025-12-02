@@ -449,7 +449,7 @@ BRBooth::BRBooth(QWidget *parent)
         
         // When user clicks back on confirm page, return to capture
         connect(confirmPage, &Confirm::backToCapture, this, [this]() {
-            qDebug() << "🔙 User clicked back - returning to capture from confirm page";
+            qDebug() << "User clicked back - returning to capture from confirm page";
             confirmPage->clearPreview();
             
             // Note: resetCapturePage() is now handled centrally in showCapturePage()
@@ -490,7 +490,7 @@ BRBooth::BRBooth(QWidget *parent)
         qDebug() << "DEBUG: Stacked widget current index changed to:" << index;
 
         // IDLE MODE MANAGEMENT: Enable/disable based on current page
-        qDebug() << "📄 Page changed to index:" << index 
+        qDebug() << "Page changed to index:" << index 
                  << "(landing:" << landingPageIndex 
                  << ", capture:" << capturePageIndex 
                  << ", idle:" << idlePageIndex << ")";
@@ -501,18 +501,18 @@ BRBooth::BRBooth(QWidget *parent)
             index == finalOutputPageIndex) {
             // Disable idle timer on capture, confirm, loading, and final pages
             stopIdleTimer();
-            qDebug() << "🚫 Idle timer disabled for page index:" << index;
+            qDebug() << "Idle timer disabled for page index:" << index;
         } else if (index == landingPageIndex || 
                    index == foregroundPageIndex || 
                    index == backgroundPageIndex || 
                    index == dynamicPageIndex) {
             // Enable idle timer on selection pages
             startIdleTimer();
-            qDebug() << "✅ Idle timer enabled for page index:" << index;
+            qDebug() << "Idle timer enabled for page index:" << index;
         } else if (index == idlePageIndex) {
             // On idle page, stop the timer
             stopIdleTimer();
-            qDebug() << "💤 On idle page, timer stopped";
+            qDebug() << "On idle page, timer stopped";
         }
 
         // OPTIMIZED CAMERA MANAGEMENT: Only start camera when needed
@@ -722,7 +722,7 @@ bool BRBooth::eventFilter(QObject *obj, QEvent *event)
         
         // If we're in idle mode, exit it
         if (m_isIdleModeActive) {
-            qDebug() << "🟢 User activity detected - exiting idle mode, returning to landing page";
+            qDebug() << "User activity detected - exiting idle mode, returning to landing page";
             m_isIdleModeActive = false;
             
             // Always return to landing page when exiting idle mode
@@ -734,7 +734,7 @@ bool BRBooth::eventFilter(QObject *obj, QEvent *event)
         if (m_idleTimerEnabled && !m_isIdleModeActive) {
             // Only reset on significant events (not every mouse move to reduce spam)
             if (eventType != QEvent::MouseMove) {
-                qDebug() << "🔄 User activity detected - resetting idle timer";
+                qDebug() << "User activity detected - resetting idle timer";
             }
             resetIdleTimer();
         }
@@ -917,7 +917,7 @@ void BRBooth::showIdlePage()
 
 void BRBooth::onIdleTimeout()
 {
-    qDebug() << "⏰ IDLE TIMEOUT REACHED - switching to idle mode";
+    qDebug() << "IDLE TIMEOUT REACHED - switching to idle mode";
     
     // Store the current page so we can return to it
     m_pageBeforeIdle = ui->stackedWidget->currentIndex();
@@ -929,11 +929,11 @@ void BRBooth::onIdleTimeout()
         m_pageBeforeIdle == loadingPageIndex || 
         m_pageBeforeIdle == finalOutputPageIndex ||
         m_pageBeforeIdle == idlePageIndex) {
-        qDebug() << "❌ Not entering idle mode - on restricted page:" << m_pageBeforeIdle;
+        qDebug() << "Not entering idle mode - on restricted page:" << m_pageBeforeIdle;
         return;
     }
     
-    qDebug() << "✅ Entering idle mode from page:" << m_pageBeforeIdle;
+    qDebug() << "Entering idle mode from page:" << m_pageBeforeIdle;
     showIdlePage();
 }
 
@@ -951,9 +951,9 @@ void BRBooth::startIdleTimer()
     if (!m_isIdleModeActive) {
         m_idleTimerEnabled = true;
         m_idleTimer->start();
-        qDebug() << "▶️ IDLE TIMER STARTED (15 seconds) - Enabled:" << m_idleTimerEnabled;
+        qDebug() << "IDLE TIMER STARTED (15 seconds) - Enabled:" << m_idleTimerEnabled;
     } else {
-        qDebug() << "⚠️ Cannot start idle timer - already in idle mode";
+        qDebug() << "Cannot start idle timer - already in idle mode";
     }
 }
 
@@ -961,7 +961,7 @@ void BRBooth::stopIdleTimer()
 {
     m_idleTimerEnabled = false;
     m_idleTimer->stop();
-    qDebug() << "⏹️ IDLE TIMER STOPPED - Enabled:" << m_idleTimerEnabled;
+    qDebug() << "IDLE TIMER STOPPED - Enabled:" << m_idleTimerEnabled;
 }
 
 

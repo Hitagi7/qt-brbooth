@@ -361,6 +361,7 @@ void SystemMonitor::resetFPSTracking()
     // Simple volatile write
     m_latestFPS = 0.0;
     m_fpsTrackingTimer.restart();
+<<<<<<< Updated upstream
 }
 
 void SystemMonitor::saveStatisticsToDocx(const QString& filePath) const
@@ -495,6 +496,8 @@ void SystemMonitor::saveStatisticsToDocx(const QString& filePath) const
     
     // Clean up temp directory
     QDir(tempDocxDir).removeRecursively();
+=======
+>>>>>>> Stashed changes
 }
 
 void SystemMonitor::saveStatisticsToText(const QString& filePath) const
