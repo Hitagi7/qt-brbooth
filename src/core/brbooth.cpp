@@ -13,9 +13,7 @@
 #include <QThread>
 #include <QDebug>
 #include <opencv2/opencv.hpp> // Using CV_VERSION for debug
-#include <opencv2/cudaimgproc.hpp> // For CUDA image processing functions
-#include <opencv2/cudafilters.hpp> // For CUDA filter functions
-#include <opencv2/cudawarping.hpp> // For CUDA resize and other warping functions
+#include <opencv2/core/ocl.hpp>  // OpenCL support
 #include <QMessageBox>
 #include <QTimer>
 #include <QStyle>
@@ -228,6 +226,16 @@ BRBooth::BRBooth(QWidget *parent)
     foregroundPageIndex = ui->stackedWidget->indexOf(foregroundPage);
     dynamicPageIndex = ui->stackedWidget->indexOf(dynamicPage);
 
+    // Initialize system monitor BEFORE creating capture page
+    // This ensures it's available when Capture page needs it
+    m_systemMonitor = new SystemMonitor(this);
+    if (m_systemMonitor->initialize()) {
+        m_systemMonitor->startMonitoring(5000); // 5 seconds interval
+        qDebug() << "SystemMonitor: Started monitoring with 5-second interval";
+    } else {
+        qWarning() << "SystemMonitor: Failed to initialize";
+    }
+
     // Create new pages and add them to the stacked widget
     backgroundPage = new Background(this);
     ui->stackedWidget->addWidget(backgroundPage);
@@ -281,14 +289,7 @@ BRBooth::BRBooth(QWidget *parent)
     m_isIdleModeActive = false;
     m_idleTimerEnabled = false;
 
-    // Initialize system monitor
-    m_systemMonitor = new SystemMonitor(this);
-    if (m_systemMonitor->initialize()) {
-        m_systemMonitor->startMonitoring(5000); // 5 seconds interval
-        qDebug() << "SystemMonitor: Started monitoring with 5-second interval";
-    } else {
-        qWarning() << "SystemMonitor: Failed to initialize";
-    }
+    // System monitor already initialized above (before Capture page creation)
 
     // Start the landing page GIF since we're on the landing page initially
     startLandingPageGif();
@@ -319,6 +320,7 @@ BRBooth::BRBooth(QWidget *parent)
 
             // Camera will be started when reaching capture page
             qDebug() << "Camera will be started when reaching capture page...";
+            qDebug() << "Dynamic video selected, path:" << videoPath;
 
             // Set capture mode and video template asynchronously to prevent blocking
             QTimer::singleShot(0, [this, videoPath]() {
@@ -327,9 +329,15 @@ BRBooth::BRBooth(QWidget *parent)
                 // For now, using a default placeholder if Dynamic doesn't pass specific template info back.
                 VideoTemplate defaultVideoTemplate("Default Dynamic Template", 10);
                 capturePage->setVideoTemplate(defaultVideoTemplate);
-                // Enable dynamic video background in capture with the selected path
-                capturePage->enableDynamicVideoBackground(videoPath);
+                
+                // Navigate to capture page first
                 showCapturePage(); // This call will now correctly store the dynamic page index as lastVisited
+                
+                // Enable dynamic video background AFTER page is shown to ensure it's not reset
+                QTimer::singleShot(100, [this, videoPath]() {
+                    qDebug() << "Enabling dynamic video background with path:" << videoPath;
+                    capturePage->enableDynamicVideoBackground(videoPath);
+                });
             });
         });
         // Call this slot when the dynamic page is shown to ensure GIFs start
@@ -796,13 +804,15 @@ void BRBooth::showCapturePage()
         finalOutputPage->setForegroundOverlay("");
         qDebug() << "Dynamic template mode: Clearing foreground overlay";
         
-        // Dynamic video background will be restored by showEvent() if a path was stored
-        qDebug() << "Dynamic template mode: Video background will be restored by showEvent()";
+        // Dynamic video background is enabled by videoSelectedAndConfirmed signal handler
+        // Don't reset capture page here as it might interfere with video setup
+        // The video will be enabled after showCapturePage() completes
+        qDebug() << "Dynamic template mode: Video background will be enabled after page transition";
     }
 
-    // CRITICAL FIX: Always reset capture page slider when navigating to capture page
-    // This ensures the slider is reset to default (0 = 100% scale) regardless of navigation path
-    if (capturePage) {
+    // CRITICAL FIX: Reset capture page slider for non-dynamic modes
+    // For dynamic mode, reset is skipped to avoid interfering with video setup
+    if (lastVisitedPageIndex != dynamicPageIndex && capturePage) {
         capturePage->resetCapturePage();
         qDebug() << "Capture page reset (slider returned to default) - navigation path handled";
     }
@@ -850,44 +860,43 @@ void BRBooth::testCudaFunctionality()
         // Create a test image
         cv::Mat testImage(480, 640, CV_8UC3, cv::Scalar(100, 150, 200));
 
-        // Test GPU upload
-        cv::cuda::GpuMat gpuImage;
-        gpuImage.upload(testImage);
-        qDebug() << "✓ GPU upload successful";
+        // Test GPU upload (OpenCL)
+        cv::UMat gpuImage;
+        testImage.copyTo(gpuImage);
+        qDebug() << "✓ GPU upload successful (OpenCL)";
 
-        // Test CUDA image processing operations
-        cv::cuda::GpuMat gpuGray, gpuBlurred, gpuResized;
+        // Test OpenCL image processing operations
+        cv::UMat gpuGray, gpuBlurred, gpuResized;
 
         // Color conversion
-        cv::cuda::cvtColor(gpuImage, gpuGray, cv::COLOR_BGR2GRAY);
-        qDebug() << "✓ CUDA color conversion successful";
+        cv::cvtColor(gpuImage, gpuGray, cv::COLOR_BGR2GRAY);
+        qDebug() << "✓ OpenCL color conversion successful";
 
         // Gaussian blur
-        cv::Ptr<cv::cuda::Filter> gaussianFilter = cv::cuda::createGaussianFilter(gpuGray.type(), gpuGray.type(), cv::Size(15, 15), 2.0);
-        gaussianFilter->apply(gpuGray, gpuBlurred);
-        qDebug() << "✓ CUDA Gaussian blur successful";
+        cv::GaussianBlur(gpuGray, gpuBlurred, cv::Size(15, 15), 2.0);
+        qDebug() << "✓ OpenCL Gaussian blur successful";
 
         // Resize
-        cv::cuda::resize(gpuBlurred, gpuResized, cv::Size(320, 240));
-        qDebug() << "✓ CUDA resize successful";
+        cv::resize(gpuBlurred, gpuResized, cv::Size(320, 240));
+        qDebug() << "✓ OpenCL resize successful";
 
         // Download result
         cv::Mat result;
-        gpuResized.download(result);
+        gpuResized.copyTo(result);
         qDebug() << "✓ GPU download successful";
 
         // Test performance
         auto start = std::chrono::high_resolution_clock::now();
         for (int i = 0; i < 100; i++) {
-            cv::cuda::cvtColor(gpuImage, gpuGray, cv::COLOR_BGR2GRAY);
-            gaussianFilter->apply(gpuGray, gpuBlurred);
-            cv::cuda::resize(gpuBlurred, gpuResized, cv::Size(320, 240));
+            cv::cvtColor(gpuImage, gpuGray, cv::COLOR_BGR2GRAY);
+            cv::GaussianBlur(gpuGray, gpuBlurred, cv::Size(15, 15), 2.0);
+            cv::resize(gpuBlurred, gpuResized, cv::Size(320, 240));
         }
         auto end = std::chrono::high_resolution_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
         qDebug() << "✓ Performance test: 100 iterations completed in" << duration.count() << "ms";
 
-        qDebug() << "=== All CUDA tests passed! ===";
+        qDebug() << "=== All OpenCL tests passed! ===";
 
     } catch (const cv::Exception& e) {
         qDebug() << "✗ CUDA test failed:" << e.what();

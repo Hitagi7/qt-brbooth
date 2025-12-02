@@ -6,7 +6,7 @@
 #include "core/camera.h"  // For cvMatToQImage helper function
 #include "ui/foreground.h"
 #include "ui_capture.h"
-#include "algorithms/hand_detection/hand_detector.h"
+// Hand detection removed - not used
 #include <QDebug>
 #include <QImage>
 #include <QPixmap>
@@ -37,13 +37,7 @@
 #include <opencv2/opencv.hpp>
 #include <opencv2/objdetect.hpp>
 #include <opencv2/video.hpp>
-#include <opencv2/core/ocl.hpp>
-#include <opencv2/cudaimgproc.hpp>
-#include <opencv2/cudawarping.hpp>
-#include <opencv2/cudaobjdetect.hpp>
-#include <opencv2/cudabgsegm.hpp>
-#include <opencv2/cudafilters.hpp>
-#include <opencv2/cudaarithm.hpp>
+#include <opencv2/core/ocl.hpp>  // OpenCL support
 #include <QtConcurrent/QtConcurrent>
 #include <QThreadPool>
 #include <QMutexLocker>
@@ -54,10 +48,10 @@
 
 // Forward declarations for helper functions defined in capture.cpp
 // These are used by both static and dynamic processing
-extern cv::Mat guidedFilterGrayAlphaCUDAOptimized(const cv::Mat &guideBGR, const cv::Mat &hardMask, int radius, float eps, 
-                                                 GPUMemoryPool &memoryPool, cv::cuda::Stream &stream);
-extern cv::Mat applyEdgeBlurringCUDA(const cv::Mat &segmentedObject, const cv::Mat &objectMask, const cv::Mat &backgroundTemplate, float blurRadius, 
-                                    GPUMemoryPool &memoryPool, cv::cuda::Stream &stream);
+extern cv::Mat guidedFilterGrayAlphaOpenCLOptimized(const cv::Mat &guideBGR, const cv::Mat &hardMask, int radius, float eps, 
+                                                 GPUMemoryPool &memoryPool);
+extern cv::Mat applyEdgeBlurringOpenCL(const cv::Mat &segmentedObject, const cv::Mat &objectMask, const cv::Mat &backgroundTemplate, float blurRadius, 
+                                    GPUMemoryPool &memoryPool);
 extern cv::Mat applyEdgeBlurringAlternative(const cv::Mat &segmentedObject, const cv::Mat &objectMask, float blurRadius);
 
 // ============================================================================
@@ -94,10 +88,10 @@ QList<QPixmap> Capture::processRecordedVideoWithLighting(const QList<QPixmap> &i
         frameIndices.append(i);
     }
     
-    // OPTIMIZATION: Use more threads if CUDA is available (GPU can handle parallel operations)
-    // With CUDA, we can process more frames in parallel since GPU operations are async
+    // OPTIMIZATION: Use more threads if OpenCL is available (GPU can handle parallel operations)
+    // With OpenCL, we can process more frames in parallel since GPU operations are async
     int optimalThreads = QThread::idealThreadCount();
-    if (m_useCUDA && cv::cuda::getCudaEnabledDeviceCount() > 0) {
+    if (m_useOpenCL && cv::ocl::useOpenCL()) {
         // With GPU, we can use more threads (GPU handles parallel operations efficiently)
         optimalThreads = qMin(optimalThreads, 8); // Allow up to 8 threads with GPU
         qDebug() << "GPU-ACCELERATED: Using" << optimalThreads << "threads for parallel GPU processing";
@@ -120,7 +114,7 @@ QList<QPixmap> Capture::processRecordedVideoWithLighting(const QList<QPixmap> &i
     LightingCorrector* localLightingCorrector = m_lightingCorrector; // Pointer is safe to copy
     double localPersonScaleFactor = m_recordedPersonScaleFactor;
     cv::Mat localLastTemplateBackground = m_lastTemplateBackground.clone(); // Clone to avoid shared access
-    bool localUseCUDA = m_useCUDA;
+    bool localUseOpenCL = m_useOpenCL;
     GPUMemoryPool* localGpuMemoryPool = &m_gpuMemoryPool; // Pointer is safe to copy
     
     QAtomicInt processedCount(0);
@@ -132,7 +126,7 @@ QList<QPixmap> Capture::processRecordedVideoWithLighting(const QList<QPixmap> &i
     // Helper function to process a single frame - uses only local copies, captures this only for member function calls
     auto processFrame = [this, inputFrames, localPersonRegions, localPersonMasks, localBackgroundFrames, 
                          localLightingCorrector, localPersonScaleFactor, localLastTemplateBackground,
-                         localUseCUDA, localGpuMemoryPool,
+                         localUseOpenCL, localGpuMemoryPool,
                          &processedCount, total](int i) -> QPixmap {
             try {
                 //  CRASH PREVENTION: Validate frame before processing
@@ -193,7 +187,7 @@ QList<QPixmap> Capture::processRecordedVideoWithLighting(const QList<QPixmap> &i
                                                                       localLightingCorrector,
                                                                       localPersonScaleFactor,
                                                                       localLastTemplateBackground,
-                                                                      localUseCUDA,
+                                                                      localUseOpenCL,
                                                                       localGpuMemoryPool);
                         
                         if (finalFrame.empty()) {
@@ -205,7 +199,7 @@ QList<QPixmap> Capture::processRecordedVideoWithLighting(const QList<QPixmap> &i
                                                                            bgFrame,
                                                                            localLightingCorrector,
                                                                            localPersonScaleFactor,
-                                                                           localUseCUDA);
+                                                                           localUseOpenCL);
                             if (finalFrame.empty()) {
                                 finalFrame = composedCopy;
                             }
@@ -228,7 +222,7 @@ QList<QPixmap> Capture::processRecordedVideoWithLighting(const QList<QPixmap> &i
                                                                            bgFrame,
                                                                            localLightingCorrector,
                                                                            localPersonScaleFactor,
-                                                                           localUseCUDA);
+                                                                           localUseOpenCL);
                             if (finalFrame.empty()) {
                                 finalFrame = composedCopy;
                             }
@@ -364,7 +358,7 @@ cv::Mat Capture::applyDynamicFrameEdgeBlendingSafe(const cv::Mat &composedFrame,
                                                    LightingCorrector* lightingCorrector,
                                                    double personScaleFactor,
                                                    const cv::Mat &lastTemplateBackground,
-                                                   bool useCUDA,
+                                                   bool useOpenCL,
                                                    GPUMemoryPool* gpuMemoryPool)
 {
     // Validate inputs
@@ -483,16 +477,15 @@ cv::Mat Capture::applyDynamicFrameEdgeBlendingSafe(const cv::Mat &composedFrame,
         cv::Mat smoothedBinMask;
         cv::GaussianBlur(binMask, smoothedBinMask, cv::Size(9, 9), 2.0); // Smooth mask edges first
         
-        //  CUDA-Accelerated Guided image filtering
+        //  OpenCL-Accelerated Guided image filtering
         const int gfRadius = 12; // Increased window size for smoother edges
         const float gfEps = 5e-3f; // Reduced regularization for better edge preservation
         
         // CRASH PREVENTION: Validate GPU memory pool before use
         cv::Mat alphaFloat;
-        if (gpuMemoryPool && useCUDA && cv::cuda::getCudaEnabledDeviceCount() > 0) {
+        if (gpuMemoryPool && useOpenCL && cv::ocl::useOpenCL()) {
             try {
-                cv::cuda::Stream& guidedFilterStream = gpuMemoryPool->getCompositionStream();
-                alphaFloat = guidedFilterGrayAlphaCUDAOptimized(result, smoothedBinMask, gfRadius, gfEps, *gpuMemoryPool, guidedFilterStream);
+                alphaFloat = guidedFilterGrayAlphaOpenCLOptimized(result, smoothedBinMask, gfRadius, gfEps, *gpuMemoryPool);
             } catch (const cv::Exception& e) {
                 qWarning() << "GPU guided filter failed:" << e.what() << "- using CPU fallback";
                 // CPU fallback would go here if needed
@@ -506,10 +499,9 @@ cv::Mat Capture::applyDynamicFrameEdgeBlendingSafe(const cv::Mat &composedFrame,
         //  ENHANCED: Apply edge blurring
         const float edgeBlurRadius = 5.0f; // Increased blur radius for smoother transitions
         cv::Mat edgeBlurredPerson;
-        if (gpuMemoryPool && useCUDA && cv::cuda::getCudaEnabledDeviceCount() > 0) {
+        if (gpuMemoryPool && useOpenCL && cv::ocl::useOpenCL()) {
             try {
-                cv::cuda::Stream& guidedFilterStream = gpuMemoryPool->getCompositionStream();
-                edgeBlurredPerson = applyEdgeBlurringCUDA(scaledPerson, binMask, cleanBackground, edgeBlurRadius, *gpuMemoryPool, guidedFilterStream);
+                edgeBlurredPerson = applyEdgeBlurringOpenCL(scaledPerson, binMask, cleanBackground, edgeBlurRadius, *gpuMemoryPool);
                 if (!edgeBlurredPerson.empty()) {
                     scaledPerson = edgeBlurredPerson;
                 }
@@ -557,10 +549,9 @@ cv::Mat Capture::applyDynamicFrameEdgeBlendingSafe(const cv::Mat &composedFrame,
         
         //  FINAL EDGE BLURRING
         const float finalEdgeBlurRadius = 6.0f; // Increased for smoother final edges
-        if (gpuMemoryPool && useCUDA && cv::cuda::getCudaEnabledDeviceCount() > 0) {
+        if (gpuMemoryPool && useOpenCL && cv::ocl::useOpenCL()) {
             try {
-                cv::cuda::Stream& finalStream = gpuMemoryPool->getCompositionStream();
-                cv::Mat finalEdgeBlurred = applyEdgeBlurringCUDA(result, binMask, cleanBackground, finalEdgeBlurRadius, *gpuMemoryPool, finalStream);
+                cv::Mat finalEdgeBlurred = applyEdgeBlurringOpenCL(result, binMask, cleanBackground, finalEdgeBlurRadius, *gpuMemoryPool);
                 if (!finalEdgeBlurred.empty()) {
                     result = finalEdgeBlurred;
                 }
@@ -709,20 +700,19 @@ cv::Mat Capture::applyDynamicFrameEdgeBlending(const cv::Mat &composedFrame,
         cv::Mat smoothedBinMask;
         cv::GaussianBlur(binMask, smoothedBinMask, cv::Size(9, 9), 2.0); // Smooth mask edges first
         
-        //  CUDA-Accelerated Guided image filtering to refine a soft alpha only on a thin edge ring
+        //  OpenCL-Accelerated Guided image filtering to refine a soft alpha only on a thin edge ring
         const int gfRadius = 12; // Increased window size for smoother edges
         const float gfEps = 5e-3f; // Reduced regularization for better edge preservation
         
-        // Use GPU memory pool stream and buffers for optimized guided filtering
-        cv::cuda::Stream& guidedFilterStream = m_gpuMemoryPool.getCompositionStream();
-        cv::Mat alphaFloat = guidedFilterGrayAlphaCUDAOptimized(result, smoothedBinMask, gfRadius, gfEps, m_gpuMemoryPool, guidedFilterStream);
+        // Use GPU memory pool for optimized guided filtering (OpenCL)
+        cv::Mat alphaFloat = guidedFilterGrayAlphaOpenCLOptimized(result, smoothedBinMask, gfRadius, gfEps, m_gpuMemoryPool);
         
         //  ENHANCED: Apply edge blurring to create smooth transitions between background and segmented object
         const float edgeBlurRadius = 5.0f; // Increased blur radius for smoother background-object transition
-        cv::Mat edgeBlurredPerson = applyEdgeBlurringCUDA(scaledPerson, binMask, cleanBackground, edgeBlurRadius, m_gpuMemoryPool, guidedFilterStream);
+        cv::Mat edgeBlurredPerson = applyEdgeBlurringOpenCL(scaledPerson, binMask, cleanBackground, edgeBlurRadius, m_gpuMemoryPool);
         if (!edgeBlurredPerson.empty()) {
             scaledPerson = edgeBlurredPerson;
-            qDebug() << "DYNAMIC MODE: Applied CUDA edge blurring with radius" << edgeBlurRadius;
+            qDebug() << "DYNAMIC MODE: Applied OpenCL edge blurring with radius" << edgeBlurRadius;
         } else {
             // Fallback to alternative method if CUDA fails
             edgeBlurredPerson = applyEdgeBlurringAlternative(scaledPerson, binMask, edgeBlurRadius);
@@ -767,11 +757,10 @@ cv::Mat Capture::applyDynamicFrameEdgeBlending(const cv::Mat &composedFrame,
         
         //  FINAL EDGE BLURRING: Apply edge blurring to the final composite result
         const float finalEdgeBlurRadius = 6.0f; // Increased blur radius for smoother final edges
-        cv::cuda::Stream& finalStream = m_gpuMemoryPool.getCompositionStream();
-        cv::Mat finalEdgeBlurred = applyEdgeBlurringCUDA(result, binMask, cleanBackground, finalEdgeBlurRadius, m_gpuMemoryPool, finalStream);
+        cv::Mat finalEdgeBlurred = applyEdgeBlurringOpenCL(result, binMask, cleanBackground, finalEdgeBlurRadius, m_gpuMemoryPool);
         if (!finalEdgeBlurred.empty()) {
             result = finalEdgeBlurred;
-            qDebug() << "DYNAMIC MODE: Applied final CUDA edge blurring to composite result with radius" << finalEdgeBlurRadius;
+            qDebug() << "DYNAMIC MODE: Applied final OpenCL edge blurring to composite result with radius" << finalEdgeBlurRadius;
         } else {
             // Fallback to alternative method if CUDA fails
             finalEdgeBlurred = applyEdgeBlurringAlternative(result, binMask, finalEdgeBlurRadius);
@@ -875,48 +864,48 @@ cv::Mat Capture::applyFastEdgeBlendingForVideo(const cv::Mat &composedFrame,
         
         // Step 6: Fast alpha blending (GPU-accelerated if available)
         // FORCE GPU USAGE: Always use GPU if available for dynamic video processing
-        bool useGPU = m_useCUDA && cv::cuda::getCudaEnabledDeviceCount() > 0;
+        bool useGPU = m_useOpenCL && cv::ocl::useOpenCL();
         if (useGPU) {
             try {
-                qDebug() << "DYNAMIC VIDEO: Using GPU acceleration for edge blending";
-                // Upload to GPU
-                cv::cuda::GpuMat gpuPerson, gpuBg, gpuAlpha, gpuResult;
-                gpuPerson.upload(personROI);
-                gpuBg.upload(bgROI);
-                gpuAlpha.upload(alphaMask);
+                qDebug() << "DYNAMIC VIDEO: Using GPU acceleration for edge blending (OpenCL)";
+                // Upload to GPU (OpenCL)
+                cv::UMat gpuPerson, gpuBg, gpuAlpha, gpuResult;
+                personROI.copyTo(gpuPerson);
+                bgROI.copyTo(gpuBg);
+                alphaMask.copyTo(gpuAlpha);
                 
                 // Convert to float for blending
-                cv::cuda::GpuMat gpuPersonF, gpuBgF;
+                cv::UMat gpuPersonF, gpuBgF;
                 gpuPerson.convertTo(gpuPersonF, CV_32F);
                 gpuBg.convertTo(gpuBgF, CV_32F);
                 
                 // Create 3-channel alpha
-                std::vector<cv::cuda::GpuMat> alphaChannels = {gpuAlpha, gpuAlpha, gpuAlpha};
-                cv::cuda::GpuMat gpuAlpha3;
-                cv::cuda::merge(alphaChannels, gpuAlpha3);
+                std::vector<cv::UMat> alphaChannels = {gpuAlpha, gpuAlpha, gpuAlpha};
+                cv::UMat gpuAlpha3;
+                cv::merge(alphaChannels, gpuAlpha3);
                 
                 // Alpha blend: result = person * alpha + bg * (1 - alpha)
-                cv::cuda::GpuMat gpuResultF, gpuPersonBlended, gpuBgBlended;
+                cv::UMat gpuResultF, gpuPersonBlended, gpuBgBlended;
                 
                 // person * alpha
-                cv::cuda::multiply(gpuPersonF, gpuAlpha3, gpuPersonBlended);
+                cv::multiply(gpuPersonF, gpuAlpha3, gpuPersonBlended);
                 
                 // Create (1 - alpha) by creating ones matrix and subtracting alpha
-                cv::cuda::GpuMat gpuOnes;
+                cv::UMat gpuOnes;
                 gpuOnes.create(gpuAlpha3.size(), gpuAlpha3.type());
                 gpuOnes.setTo(cv::Scalar(1.0, 1.0, 1.0));
-                cv::cuda::GpuMat gpuOneMinusAlpha;
-                cv::cuda::subtract(gpuOnes, gpuAlpha3, gpuOneMinusAlpha);
+                cv::UMat gpuOneMinusAlpha;
+                cv::subtract(gpuOnes, gpuAlpha3, gpuOneMinusAlpha);
                 
                 // bg * (1 - alpha)
-                cv::cuda::multiply(gpuBgF, gpuOneMinusAlpha, gpuBgBlended);
+                cv::multiply(gpuBgF, gpuOneMinusAlpha, gpuBgBlended);
                 
                 // Add them together
-                cv::cuda::add(gpuPersonBlended, gpuBgBlended, gpuResultF);
+                cv::add(gpuPersonBlended, gpuBgBlended, gpuResultF);
                 
                 // Convert back to uint8
                 gpuResultF.convertTo(gpuResult, CV_8U);
-                gpuResult.download(bgROI);
+                gpuResult.copyTo(bgROI);
                 qDebug() << "DYNAMIC VIDEO: GPU blending successful for frame";
             } catch (const cv::Exception& e) {
                 qWarning() << "DYNAMIC VIDEO: GPU blending failed:" << e.what() << "- falling back to CPU";
@@ -970,7 +959,7 @@ cv::Mat Capture::applySimpleDynamicCompositingSafe(const cv::Mat &composedFrame,
                                                     const cv::Mat &backgroundFrame,
                                                     LightingCorrector* lightingCorrector,
                                                     double /*personScaleFactor*/,
-                                                    bool useCUDA)
+                                                    bool useOpenCL)
 {
     // Validate inputs
     if (composedFrame.empty() || rawPersonRegion.empty() || rawPersonMask.empty()) {
@@ -1012,36 +1001,36 @@ cv::Mat Capture::applySimpleDynamicCompositingSafe(const cv::Mat &composedFrame,
         cv::Mat alphaMask;
         smoothedMask.convertTo(alphaMask, CV_32F, 1.0/255.0);
         
-        // STEP 3: Fast GPU-accelerated alpha blending
-        if (useCUDA && cv::cuda::getCudaEnabledDeviceCount() > 0) {
+        // STEP 3: Fast GPU-accelerated alpha blending (OpenCL)
+        if (useOpenCL && cv::ocl::useOpenCL()) {
             try {
-                cv::cuda::GpuMat gpuBg, gpuPerson, gpuAlpha, gpuResult;
-                gpuBg.upload(bg);
-                gpuPerson.upload(lightingCorrectedPerson);
-                gpuAlpha.upload(alphaMask);
+                cv::UMat gpuBg, gpuPerson, gpuAlpha, gpuResult;
+                bg.copyTo(gpuBg);
+                lightingCorrectedPerson.copyTo(gpuPerson);
+                alphaMask.copyTo(gpuAlpha);
                 
-                cv::cuda::GpuMat gpuBgF, gpuPersonF;
+                cv::UMat gpuBgF, gpuPersonF;
                 gpuBg.convertTo(gpuBgF, CV_32F);
                 gpuPerson.convertTo(gpuPersonF, CV_32F);
                 
-                std::vector<cv::cuda::GpuMat> alphaChannels = {gpuAlpha, gpuAlpha, gpuAlpha};
-                cv::cuda::GpuMat gpuAlpha3;
-                cv::cuda::merge(alphaChannels, gpuAlpha3);
+                std::vector<cv::UMat> alphaChannels = {gpuAlpha, gpuAlpha, gpuAlpha};
+                cv::UMat gpuAlpha3;
+                cv::merge(alphaChannels, gpuAlpha3);
                 
-                cv::cuda::GpuMat gpuResultF, gpuPersonBlended, gpuBgBlended;
-                cv::cuda::multiply(gpuPersonF, gpuAlpha3, gpuPersonBlended);
+                cv::UMat gpuResultF, gpuPersonBlended, gpuBgBlended;
+                cv::multiply(gpuPersonF, gpuAlpha3, gpuPersonBlended);
                 
-                cv::cuda::GpuMat gpuOnes;
+                cv::UMat gpuOnes;
                 gpuOnes.create(gpuAlpha3.size(), gpuAlpha3.type());
                 gpuOnes.setTo(cv::Scalar(1.0, 1.0, 1.0));
-                cv::cuda::GpuMat gpuOneMinusAlpha;
-                cv::cuda::subtract(gpuOnes, gpuAlpha3, gpuOneMinusAlpha);
-                cv::cuda::multiply(gpuBgF, gpuOneMinusAlpha, gpuBgBlended);
-                cv::cuda::add(gpuPersonBlended, gpuBgBlended, gpuResultF);
+                cv::UMat gpuOneMinusAlpha;
+                cv::subtract(gpuOnes, gpuAlpha3, gpuOneMinusAlpha);
+                cv::multiply(gpuBgF, gpuOneMinusAlpha, gpuBgBlended);
+                cv::add(gpuPersonBlended, gpuBgBlended, gpuResultF);
                 gpuResultF.convertTo(gpuResult, CV_8U);
                 
                 cv::Mat result;
-                gpuResult.download(result);
+                gpuResult.copyTo(result);
                 return result;
             } catch (const cv::Exception& e) {
                 qWarning() << "GPU compositing failed:" << e.what() << "- using CPU";
@@ -1117,47 +1106,47 @@ cv::Mat Capture::applySimpleDynamicCompositing(const cv::Mat &composedFrame,
         smoothedMask.convertTo(alphaMask, CV_32F, 1.0/255.0);
         
         // STEP 3: Fast GPU-accelerated alpha blending with lighting-corrected person
-        if (m_useCUDA && cv::cuda::getCudaEnabledDeviceCount() > 0) {
+        if (m_useOpenCL && cv::ocl::useOpenCL()) {
             try {
-                cv::cuda::GpuMat gpuBg, gpuPerson, gpuAlpha, gpuResult;
-                gpuBg.upload(bg);
-                gpuPerson.upload(lightingCorrectedPerson);
-                gpuAlpha.upload(alphaMask);
+                cv::UMat gpuBg, gpuPerson, gpuAlpha, gpuResult;
+                bg.copyTo(gpuBg);
+                lightingCorrectedPerson.copyTo(gpuPerson);
+                alphaMask.copyTo(gpuAlpha);
                 
                 // Convert to float for blending
-                cv::cuda::GpuMat gpuBgF, gpuPersonF;
+                cv::UMat gpuBgF, gpuPersonF;
                 gpuBg.convertTo(gpuBgF, CV_32F);
                 gpuPerson.convertTo(gpuPersonF, CV_32F);
                 
                 // Create 3-channel alpha
-                std::vector<cv::cuda::GpuMat> alphaChannels = {gpuAlpha, gpuAlpha, gpuAlpha};
-                cv::cuda::GpuMat gpuAlpha3;
-                cv::cuda::merge(alphaChannels, gpuAlpha3);
+                std::vector<cv::UMat> alphaChannels = {gpuAlpha, gpuAlpha, gpuAlpha};
+                cv::UMat gpuAlpha3;
+                cv::merge(alphaChannels, gpuAlpha3);
                 
                 // Alpha blend: result = person * alpha + bg * (1 - alpha)
-                cv::cuda::GpuMat gpuResultF, gpuPersonBlended, gpuBgBlended;
+                cv::UMat gpuResultF, gpuPersonBlended, gpuBgBlended;
                 
                 // person * alpha
-                cv::cuda::multiply(gpuPersonF, gpuAlpha3, gpuPersonBlended);
+                cv::multiply(gpuPersonF, gpuAlpha3, gpuPersonBlended);
                 
                 // Create (1 - alpha)
-                cv::cuda::GpuMat gpuOnes;
+                cv::UMat gpuOnes;
                 gpuOnes.create(gpuAlpha3.size(), gpuAlpha3.type());
                 gpuOnes.setTo(cv::Scalar(1.0, 1.0, 1.0));
-                cv::cuda::GpuMat gpuOneMinusAlpha;
-                cv::cuda::subtract(gpuOnes, gpuAlpha3, gpuOneMinusAlpha);
+                cv::UMat gpuOneMinusAlpha;
+                cv::subtract(gpuOnes, gpuAlpha3, gpuOneMinusAlpha);
                 
                 // bg * (1 - alpha)
-                cv::cuda::multiply(gpuBgF, gpuOneMinusAlpha, gpuBgBlended);
+                cv::multiply(gpuBgF, gpuOneMinusAlpha, gpuBgBlended);
                 
                 // Add them together
-                cv::cuda::add(gpuPersonBlended, gpuBgBlended, gpuResultF);
+                cv::add(gpuPersonBlended, gpuBgBlended, gpuResultF);
                 
                 // Convert back to uint8
                 gpuResultF.convertTo(gpuResult, CV_8U);
                 
                 cv::Mat result;
-                gpuResult.download(result);
+                gpuResult.copyTo(result);
                 return result;
             } catch (const cv::Exception& e) {
                 qWarning() << "GPU compositing failed:" << e.what() << "- using CPU";

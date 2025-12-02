@@ -5,6 +5,7 @@
 #include <QTextStream>
 #include <QStandardPaths>
 #include <QCoreApplication>
+#include <QThread>
 #include <windows.h>
 #include <pdh.h>
 #include <psapi.h>
@@ -27,6 +28,7 @@ SystemMonitor::SystemMonitor(QObject *parent)
     , m_cpuCounterHandle(nullptr)
     , m_gpuQueryHandle(nullptr)
     , m_gpuCounterHandle(nullptr)
+    , m_latestFPS(0.0)  // Initialize volatile FPS variable
     , m_peakMemoryGB(0.0)
     , m_initialized(false)
     , m_monitoring(false)
@@ -35,10 +37,23 @@ SystemMonitor::SystemMonitor(QObject *parent)
     m_lastStats.cpuUsage = 0.0;
     m_lastStats.gpuUsage = 0.0;
     m_lastStats.peakMemoryGB = 0.0;
+    m_lastStats.averageFPS = 0.0;
     m_lastStats.accuracy = 0.0;
     m_lastStats.timestamp = QDateTime::currentDateTime();
     
     m_peakStats = m_lastStats;
+    m_averageStats = m_lastStats;
+    
+    // Initialize average tracking variables
+    m_cpuSum = 0.0;
+    m_gpuSum = 0.0;
+    m_memorySum = 0.0;
+    m_fpsSum = 0.0;
+    m_sampleCount = 0;
+    
+    // Initialize FPS tracking (volatile variable, thread-safe on x86/x64)
+    m_latestFPS = 0.0;
+    m_fpsTrackingTimer.start();
     
     connect(m_timer, &QTimer::timeout, this, &SystemMonitor::collectStatistics);
 }
@@ -158,6 +173,10 @@ void SystemMonitor::stopMonitoring()
 
 void SystemMonitor::collectStatistics()
 {
+    // Read FPS from volatile variable (thread-safe read on x86/x64)
+    double currentFPS = m_latestFPS;
+    
+    // Now acquire the main mutex for the rest of the statistics
     QMutexLocker locker(&m_mutex);
     
     Statistics stats;
@@ -175,6 +194,16 @@ void SystemMonitor::collectStatistics()
     if (currentMemory > m_peakMemoryGB) {
         m_peakMemoryGB = currentMemory;
         stats.peakMemoryGB = m_peakMemoryGB;
+    }
+    
+    // Use the FPS value we read atomically
+    // If FPS is 0 or invalid, keep the last known good value
+    if (currentFPS > 0.0) {
+        stats.averageFPS = currentFPS;
+    } else if (m_lastStats.averageFPS > 0.0) {
+        stats.averageFPS = m_lastStats.averageFPS; // Use last known good value
+    } else {
+        stats.averageFPS = 0.0; // No FPS data available yet
     }
     
     // Calculate accuracy from samples
@@ -195,16 +224,46 @@ void SystemMonitor::collectStatistics()
     if (stats.cpuUsage > m_peakStats.cpuUsage) m_peakStats.cpuUsage = stats.cpuUsage;
     if (stats.gpuUsage > m_peakStats.gpuUsage) m_peakStats.gpuUsage = stats.gpuUsage;
     if (stats.peakMemoryGB > m_peakStats.peakMemoryGB) m_peakStats.peakMemoryGB = stats.peakMemoryGB;
+    if (stats.averageFPS > m_peakStats.averageFPS) m_peakStats.averageFPS = stats.averageFPS;
     if (stats.accuracy > m_peakStats.accuracy) m_peakStats.accuracy = stats.accuracy;
+    
+    // Update average statistics
+    m_cpuSum += stats.cpuUsage;
+    m_gpuSum += stats.gpuUsage;
+    m_memorySum += currentMemory;
+    m_fpsSum += stats.averageFPS;
+    m_sampleCount++;
+    
+    if (m_sampleCount > 0) {
+        m_averageStats.cpuUsage = m_cpuSum / m_sampleCount;
+        m_averageStats.gpuUsage = m_gpuSum / m_sampleCount;
+        m_averageStats.peakMemoryGB = m_memorySum / m_sampleCount;
+        m_averageStats.averageFPS = m_fpsSum / m_sampleCount;
+        m_averageStats.accuracy = stats.accuracy; // Keep current accuracy average
+        m_averageStats.timestamp = stats.timestamp;
+    }
     
     // Log statistics to application output
     qDebug() << "========================================";
     qDebug() << "=== SYSTEM MONITORING STATISTICS ===";
     qDebug() << "Timestamp:" << stats.timestamp.toString("yyyy-MM-dd hh:mm:ss");
+    qDebug() << "--- LAST STATISTICS ---";
     qDebug() << "CPU Usage:" << QString::number(stats.cpuUsage, 'f', 2) << "%";
     qDebug() << "GPU Usage:" << QString::number(stats.gpuUsage, 'f', 2) << "%";
     qDebug() << "Peak Memory Usage:" << QString::number(stats.peakMemoryGB, 'f', 2) << "GB";
+    qDebug() << "Average FPS:" << QString::number(stats.averageFPS, 'f', 2) << "FPS";
     qDebug() << "Accuracy:" << QString::number(stats.accuracy, 'f', 2) << "%";
+    qDebug() << "--- AVERAGE STATISTICS ---";
+    qDebug() << "Average CPU Usage:" << QString::number(m_averageStats.cpuUsage, 'f', 2) << "%";
+    qDebug() << "Average GPU Usage:" << QString::number(m_averageStats.gpuUsage, 'f', 2) << "%";
+    qDebug() << "Average Memory Usage:" << QString::number(m_averageStats.peakMemoryGB, 'f', 2) << "GB";
+    qDebug() << "Average FPS:" << QString::number(m_averageStats.averageFPS, 'f', 2) << "FPS";
+    qDebug() << "--- PEAK STATISTICS ---";
+    qDebug() << "Peak CPU Usage:" << QString::number(m_peakStats.cpuUsage, 'f', 2) << "%";
+    qDebug() << "Peak GPU Usage:" << QString::number(m_peakStats.gpuUsage, 'f', 2) << "%";
+    qDebug() << "Peak Memory Usage:" << QString::number(m_peakStats.peakMemoryGB, 'f', 2) << "GB";
+    qDebug() << "Peak Average FPS:" << QString::number(m_peakStats.averageFPS, 'f', 2) << "FPS";
+    qDebug() << "Peak Accuracy:" << QString::number(m_peakStats.accuracy, 'f', 2) << "%";
     qDebug() << "========================================";
     
     emit statisticsUpdated(stats);
@@ -295,6 +354,37 @@ SystemMonitor::Statistics SystemMonitor::getLastStatistics() const
     return m_lastStats;
 }
 
+SystemMonitor::Statistics SystemMonitor::getAverageStatistics() const
+{
+    QMutexLocker locker(&m_mutex);
+    return m_averageStats;
+}
+
+SystemMonitor::Statistics SystemMonitor::getPeakStatistics() const
+{
+    QMutexLocker locker(&m_mutex);
+    return m_peakStats;
+}
+
+void SystemMonitor::updateFPS(double fps)
+{
+    // This method can be called from any thread via Qt::QueuedConnection
+    // Simple volatile write - thread-safe on x86/x64, no locks, no crashes
+    // Volatile ensures the write is not optimized away and is visible to other threads
+    // Direct assignment to volatile double is safe on x86/x64 (atomic for 8-byte aligned doubles)
+    if (fps >= 0.0 && fps < 1000.0) { // Sanity check: FPS should be reasonable (allow 0.0)
+        // Direct assignment to volatile is safe - compiler ensures atomicity for aligned doubles
+        m_latestFPS = fps;
+    }
+}
+
+void SystemMonitor::resetFPSTracking()
+{
+    // Simple volatile write
+    m_latestFPS = 0.0;
+    m_fpsTrackingTimer.restart();
+}
+
 void SystemMonitor::updateAccuracy(double detectionConfidence)
 {
     QMutexLocker locker(&m_mutex);
@@ -316,13 +406,29 @@ void SystemMonitor::resetAccuracyTracking()
 
 void SystemMonitor::saveStatisticsToDocx(const QString& filePath) const
 {
+    // Read FPS from volatile variable (thread-safe read)
+    double latestFPS = m_latestFPS;
+    
+    if (latestFPS == 0.0) {
+        latestFPS = m_lastStats.averageFPS; // Fallback to last known value
+    }
+    
     QMutexLocker locker(&m_mutex);
     
     QString outputPath = filePath;
     if (outputPath.isEmpty()) {
-        QString appDir = QCoreApplication::applicationDirPath();
+        QString downloadsPath = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
+        if (downloadsPath.isEmpty()) {
+            // Fallback for systems without standard download path
+            downloadsPath = "C:/Downloads";
+        }
+        
         QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss");
-        outputPath = appDir + "/crash_report_" + timestamp + ".docx";
+        QDir dir;
+        if (!dir.exists(downloadsPath)) {
+            dir.mkpath(downloadsPath);
+        }
+        outputPath = downloadsPath + "/crash_report_" + timestamp + ".docx";
     }
     
     // Create a simple DOCX file (DOCX is a ZIP file containing XML)
@@ -376,13 +482,21 @@ void SystemMonitor::saveStatisticsToDocx(const QString& filePath) const
 <w:p><w:r><w:t>CPU Usage: %3%</w:t></w:r></w:p>
 <w:p><w:r><w:t>GPU Usage: %4%</w:t></w:r></w:p>
 <w:p><w:r><w:t>Peak Memory Usage: %5 GB</w:t></w:r></w:p>
-<w:p><w:r><w:t>Accuracy: %6%</w:t></w:r></w:p>
+<w:p><w:r><w:t>Average FPS: %6 FPS</w:t></w:r></w:p>
+<w:p><w:r><w:t>Accuracy: %7%</w:t></w:r></w:p>
+<w:p><w:r><w:t></w:t></w:r></w:p>
+<w:p><w:r><w:t>Average Statistics:</w:t></w:r></w:p>
+<w:p><w:r><w:t>Average CPU Usage: %8%</w:t></w:r></w:p>
+<w:p><w:r><w:t>Average GPU Usage: %9%</w:t></w:r></w:p>
+<w:p><w:r><w:t>Average Memory Usage: %10 GB</w:t></w:r></w:p>
+<w:p><w:r><w:t>Average FPS: %11 FPS</w:t></w:r></w:p>
 <w:p><w:r><w:t></w:t></w:r></w:p>
 <w:p><w:r><w:t>Peak Statistics:</w:t></w:r></w:p>
-<w:p><w:r><w:t>Peak CPU Usage: %7%</w:t></w:r></w:p>
-<w:p><w:r><w:t>Peak GPU Usage: %8%</w:t></w:r></w:p>
-<w:p><w:r><w:t>Peak Memory Usage: %9 GB</w:t></w:r></w:p>
-<w:p><w:r><w:t>Peak Accuracy: %10%</w:t></w:r></w:p>
+<w:p><w:r><w:t>Peak CPU Usage: %12%</w:t></w:r></w:p>
+<w:p><w:r><w:t>Peak GPU Usage: %13%</w:t></w:r></w:p>
+<w:p><w:r><w:t>Peak Memory Usage: %14 GB</w:t></w:r></w:p>
+<w:p><w:r><w:t>Peak Average FPS: %15 FPS</w:t></w:r></w:p>
+<w:p><w:r><w:t>Peak Accuracy: %16%</w:t></w:r></w:p>
 </w:body>
 </w:document>)")
         .arg(QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm:ss"))
@@ -390,10 +504,16 @@ void SystemMonitor::saveStatisticsToDocx(const QString& filePath) const
         .arg(QString::number(m_lastStats.cpuUsage, 'f', 2))
         .arg(QString::number(m_lastStats.gpuUsage, 'f', 2))
         .arg(QString::number(m_lastStats.peakMemoryGB, 'f', 2))
+        .arg(QString::number(latestFPS, 'f', 2))
         .arg(QString::number(m_lastStats.accuracy, 'f', 2))
+        .arg(QString::number(m_averageStats.cpuUsage, 'f', 2))
+        .arg(QString::number(m_averageStats.gpuUsage, 'f', 2))
+        .arg(QString::number(m_averageStats.peakMemoryGB, 'f', 2))
+        .arg(QString::number(m_averageStats.averageFPS, 'f', 2))
         .arg(QString::number(m_peakStats.cpuUsage, 'f', 2))
         .arg(QString::number(m_peakStats.gpuUsage, 'f', 2))
         .arg(QString::number(m_peakStats.peakMemoryGB, 'f', 2))
+        .arg(QString::number(m_peakStats.averageFPS, 'f', 2))
         .arg(QString::number(m_peakStats.accuracy, 'f', 2));
     
     QFile docFile(tempDocxDir + "/word/document.xml");
@@ -431,13 +551,32 @@ void SystemMonitor::saveStatisticsToDocx(const QString& filePath) const
 
 void SystemMonitor::saveStatisticsToText(const QString& filePath) const
 {
+    // Read FPS from volatile variable (thread-safe read)
+    double latestFPS = m_latestFPS;
+    
+    qDebug() << "saveStatisticsToText: Read FPS:" << latestFPS;
+    
+    if (latestFPS == 0.0) {
+        latestFPS = m_lastStats.averageFPS; // Fallback to last known value
+        qDebug() << "saveStatisticsToText: Using fallback FPS:" << latestFPS;
+    }
+    
     QMutexLocker locker(&m_mutex);
     
     QString outputPath = filePath;
     if (outputPath.isEmpty()) {
-        QString appDir = QCoreApplication::applicationDirPath();
+        QString downloadsPath = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
+        if (downloadsPath.isEmpty()) {
+            // Fallback for systems without standard download path
+            downloadsPath = "C:/Downloads";
+        }
+        
         QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss");
-        outputPath = appDir + "/crash_report_" + timestamp + ".txt";
+        QDir dir;
+        if (!dir.exists(downloadsPath)) {
+            dir.mkpath(downloadsPath);
+        }
+        outputPath = downloadsPath + "/crash_report_" + timestamp + ".txt";
     }
     
     QFile file(outputPath);
@@ -458,13 +597,22 @@ void SystemMonitor::saveStatisticsToText(const QString& filePath) const
     out << "CPU Usage: " << QString::number(m_lastStats.cpuUsage, 'f', 2) << "%\n";
     out << "GPU Usage: " << QString::number(m_lastStats.gpuUsage, 'f', 2) << "%\n";
     out << "Peak Memory Usage: " << QString::number(m_lastStats.peakMemoryGB, 'f', 2) << " GB\n";
+    out << "Average FPS: " << QString::number(latestFPS, 'f', 2) << " FPS\n";
     out << "Accuracy: " << QString::number(m_lastStats.accuracy, 'f', 2) << "%\n\n";
+    
+    out << "AVERAGE STATISTICS:\n";
+    out << "----------------\n";
+    out << "Average CPU Usage: " << QString::number(m_averageStats.cpuUsage, 'f', 2) << "%\n";
+    out << "Average GPU Usage: " << QString::number(m_averageStats.gpuUsage, 'f', 2) << "%\n";
+    out << "Average Memory Usage: " << QString::number(m_averageStats.peakMemoryGB, 'f', 2) << " GB\n";
+    out << "Average FPS: " << QString::number(m_averageStats.averageFPS, 'f', 2) << " FPS\n\n";
     
     out << "PEAK STATISTICS:\n";
     out << "----------------\n";
     out << "Peak CPU Usage: " << QString::number(m_peakStats.cpuUsage, 'f', 2) << "%\n";
     out << "Peak GPU Usage: " << QString::number(m_peakStats.gpuUsage, 'f', 2) << "%\n";
     out << "Peak Memory Usage: " << QString::number(m_peakStats.peakMemoryGB, 'f', 2) << " GB\n";
+    out << "Peak Average FPS: " << QString::number(m_peakStats.averageFPS, 'f', 2) << " FPS\n";
     out << "Peak Accuracy: " << QString::number(m_peakStats.accuracy, 'f', 2) << "%\n";
     out << "========================================\n";
     

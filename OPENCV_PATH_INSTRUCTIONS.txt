@@ -1,0 +1,25 @@
+IMPORTANT: OpenCV Path Configuration
+
+The OpenCV headers are not being found. You need to update the OPENCV_INSTALL_DIR path in qt-brbooth.pro.
+
+Steps to fix:
+1. Find your OpenCV installation directory. Common locations:
+   - C:/opencv/build/install
+   - C:/opencv/build/x64/vc17/install
+   - C:/Program Files/OpenCV
+   - Or wherever you installed/built OpenCV
+
+2. Open qt-brbooth.pro and find line 111:
+   OPENCV_INSTALL_DIR = C:/opencv/build/install
+
+3. Update it to match your actual OpenCV installation path, for example:
+   OPENCV_INSTALL_DIR = C:/path/to/your/opencv/install
+
+4. Verify the path contains:
+   - include/opencv2/opencv.hpp
+   - x64/vc17/lib/opencv_world4110d.lib (or similar)
+
+5. If your OpenCV uses separate modules instead of world library, you may need to update the LIBS line as well.
+
+6. Rebuild the project in Qt Creator.
+

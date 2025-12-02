@@ -34,8 +34,9 @@ INCLUDEPATH += include \
                include/ui \
                ui \
                . \
-               build/Desktop_Qt_6_9_1_MSVC2022_64bit-Debug \
-               build/Desktop_Qt_6_9_1_MinGW_64_bit-Debug
+               build/Desktop_Qt_6_10_1_MSVC2022_64bit-Debug \
+               build/Desktop_Qt_6_9_1_MinGW_64_bit-Debug \
+               $$OUT_PWD
 
 # Source files organized by category
 SOURCES += \
@@ -54,7 +55,7 @@ SOURCES += \
     src/ui/idle.cpp \
     src/ui/iconhover.cpp \
     src/ui/ui_manager.cpp \
-    src/algorithms/hand_detection/hand_detector.cpp \
+    # Hand detection removed - not used \
     src/algorithms/lighting_correction/lighting_corrector.cpp
     # src/algorithms/hand_detection/advanced_hand_detector.cpp \
     # src/algorithms/hand_detection/mediapipe_like_hand_tracker.cpp
@@ -75,7 +76,7 @@ HEADERS += \
     include/ui/idle.h \
     include/ui/iconhover.h \
     include/ui/ui_manager.h \
-    include/algorithms/hand_detection/hand_detector.h \
+    # Hand detection removed - not used \
     include/algorithms/lighting_correction/lighting_corrector.h
     # include/algorithms/advanced_hand_detector.h \
     # include/algorithms/mediapipe_like_hand_tracker.h
@@ -104,41 +105,24 @@ else: unix:!android: target.path = /opt/$${TARGET}/bin
 RESOURCES += \
     resources.qrc
 
-# OpenCV Configuration - Using CUDA-Enabled Build
-INCLUDEPATH += C:\opencv_cuda\opencv_cuda_build\install\include
-DEPENDPATH += C:\opencv_cuda\opencv_cuda_build\install\include
-
-OPENCV_INSTALL_DIR = C:/opencv_cuda/opencv_cuda_build/install
+# OpenCV Configuration - Using OpenCL-Enabled Build
+# OpenCV found at C:\opencv\build
+OPENCV_INSTALL_DIR = C:/opencv/build
 
 # Add OpenCV include paths
 INCLUDEPATH += $$OPENCV_INSTALL_DIR/include \
                $$OPENCV_INSTALL_DIR/include/opencv2
-
-# Add CUDA include paths
-INCLUDEPATH += "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.0/include"
-
-# CUDA libraries are already linked through OpenCV's CUDA build
-# No need to explicitly link CUDA libraries as they're included in opencv_world4110d
+DEPENDPATH += $$OPENCV_INSTALL_DIR/include
 
 # Add OpenCV library path
-LIBS += -L$$OPENCV_INSTALL_DIR/x64/vc17/lib \
-        -lopencv_world4110d
+# Found libraries at: C:\opencv\build\x64\vc16\lib (Visual Studio 2019)
+# OpenCV version: 4.12.0
+LIBS += -L$$OPENCV_INSTALL_DIR/x64/vc16/lib \
+        -lopencv_world4120d
 
-# cuDNN Configuration
-CUDNN_INSTALL_DIR = "C:/Program Files/NVIDIA/CUDNN/v9.13"
-
-# Add cuDNN include paths
-INCLUDEPATH += "$$CUDNN_INSTALL_DIR/include/13.0"
-
-# Add cuDNN library paths
-LIBS += -L"$$CUDNN_INSTALL_DIR/lib/13.0/x64"
-
-# Add cuDNN libraries
-LIBS += -lcudnn \
-        -lcudnn_adv \
-        -lcudnn_cnn \
-        -lcudnn_graph \
-        -lcudnn_ops
+# Note: If your OpenCV is built with separate modules instead of world library,
+# you may need to link individual modules like:
+# -lopencv_core4110d -lopencv_imgproc4110d -lopencv_imgcodecs4110d etc.
 
 # Add Windows system libraries
 LIBS += -lshell32 -lkernel32 -luser32 -lgdi32 -lwinspool -lcomdlg32 -ladvapi32 -lshell32 -lole32 -loleaut32 -luuid -lodbc32 -lodbccp32

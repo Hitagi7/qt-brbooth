@@ -26,12 +26,7 @@
 #include <opencv2/opencv.hpp>
 #include <opencv2/objdetect.hpp>
 #include <opencv2/video.hpp>
-#include <opencv2/cudaobjdetect.hpp>
-#include <opencv2/core/ocl.hpp>
-#include <opencv2/cudaimgproc.hpp>
-#include <opencv2/cudawarping.hpp>
-#include <opencv2/cudacodec.hpp>
-#include <opencv2/cudafilters.hpp>  // Required for cv::cuda::Filter
+#include <opencv2/core/ocl.hpp>  // Required for OpenCL support
 #include "core/videotemplate.h"   // Your custom VideoTemplate class
 #include "core/camera.h"          // Your custom Camera class
 #include "ui/foreground.h"        // Foreground class
@@ -40,34 +35,25 @@
 #include "algorithms/lighting_correction/lighting_corrector.h"
 #include <array>
 
-//  GPU Memory Pool for optimized CUDA operations
+//  GPU Memory Pool for optimized OpenCL operations
 class GPUMemoryPool {
 private:
-    // Pre-allocated GPU buffers for triple buffering
-    cv::cuda::GpuMat gpuFrameBuffers[3];        // Frame buffers
-    cv::cuda::GpuMat gpuSegmentationBuffers[2]; // Segmentation buffers
-    cv::cuda::GpuMat gpuDetectionBuffers[2];    // Detection buffers
-    cv::cuda::GpuMat gpuTempBuffers[2];         // Temporary processing buffers
+    // Pre-allocated GPU buffers for triple buffering (using OpenCL UMat)
+    cv::UMat gpuFrameBuffers[3];        // Frame buffers
+    cv::UMat gpuSegmentationBuffers[2]; // Segmentation buffers
+    cv::UMat gpuDetectionBuffers[2];    // Detection buffers
+    cv::UMat gpuTempBuffers[2];         // Temporary processing buffers
     
     //  Guided Filtering GPU buffers for edge-blending
-    cv::cuda::GpuMat gpuGuidedFilterBuffers[4]; // Guided filter processing buffers
-    cv::cuda::GpuMat gpuBoxFilterBuffers[2];    // Box filter intermediate buffers
+    cv::UMat gpuGuidedFilterBuffers[4]; // Guided filter processing buffers
+    cv::UMat gpuBoxFilterBuffers[2];    // Box filter intermediate buffers
     
     //  Edge Blurring GPU buffers for enhanced edge processing
-    cv::cuda::GpuMat gpuEdgeBlurBuffers[3];     // Edge blurring processing buffers
-    cv::cuda::GpuMat gpuEdgeDetectionBuffers[2]; // Edge detection intermediate buffers
+    cv::UMat gpuEdgeBlurBuffers[3];     // Edge blurring processing buffers
+    cv::UMat gpuEdgeDetectionBuffers[2]; // Edge detection intermediate buffers
     
-    // Reusable CUDA filters (create once, use many times)
-    // Note: cv::Ptr cannot be default-constructed, so these are initialized in initialize() method
-    cv::Ptr<cv::cuda::Filter> morphCloseFilter = nullptr;
-    cv::Ptr<cv::cuda::Filter> morphOpenFilter = nullptr;
-    cv::Ptr<cv::cuda::Filter> morphDilateFilter = nullptr;
-    cv::Ptr<cv::cuda::CannyEdgeDetector> cannyDetector = nullptr;
-    
-    // CUDA streams for parallel processing
-    cv::cuda::Stream detectionStream;
-    cv::cuda::Stream segmentationStream;
-    cv::cuda::Stream compositionStream;
+    // Morphology kernels (reusable, created once)
+    cv::Mat morphKernel;
     
     // Buffer rotation indices
     int currentFrameBuffer = 0;
@@ -97,29 +83,21 @@ public:
     bool isInitialized() const { return initialized; }
     
     // Buffer management
-    cv::cuda::GpuMat& getNextFrameBuffer();
-    cv::cuda::GpuMat& getNextSegmentationBuffer();
-    cv::cuda::GpuMat& getNextDetectionBuffer();
-    cv::cuda::GpuMat& getNextTempBuffer();
+    cv::UMat& getNextFrameBuffer();
+    cv::UMat& getNextSegmentationBuffer();
+    cv::UMat& getNextDetectionBuffer();
+    cv::UMat& getNextTempBuffer();
     
     //  Guided Filtering buffer management
-    cv::cuda::GpuMat& getNextGuidedFilterBuffer();
-    cv::cuda::GpuMat& getNextBoxFilterBuffer();
+    cv::UMat& getNextGuidedFilterBuffer();
+    cv::UMat& getNextBoxFilterBuffer();
     
     //  Edge Blurring buffer management
-    cv::cuda::GpuMat& getNextEdgeBlurBuffer();
-    cv::cuda::GpuMat& getNextEdgeDetectionBuffer();
+    cv::UMat& getNextEdgeBlurBuffer();
+    cv::UMat& getNextEdgeDetectionBuffer();
     
-    // Filter access
-    cv::Ptr<cv::cuda::Filter>& getMorphCloseFilter() { return morphCloseFilter; }
-    cv::Ptr<cv::cuda::Filter>& getMorphOpenFilter() { return morphOpenFilter; }
-    cv::Ptr<cv::cuda::Filter>& getMorphDilateFilter() { return morphDilateFilter; }
-    cv::Ptr<cv::cuda::CannyEdgeDetector>& getCannyDetector() { return cannyDetector; }
-    
-    // Stream access
-    cv::cuda::Stream& getDetectionStream() { return detectionStream; }
-    cv::cuda::Stream& getSegmentationStream() { return segmentationStream; }
-    cv::cuda::Stream& getCompositionStream() { return compositionStream; }
+    // Kernel access
+    cv::Mat& getMorphKernel() { return morphKernel; }
     
     // Memory management
     void release();
@@ -208,7 +186,7 @@ public:
     void updatePersonDetectionButton();
     double getPersonDetectionProcessingTime() const;
     bool isGPUAvailable() const;
-    bool isCUDAAvailable() const;
+    bool isOpenCLAvailable() const;
     
     // Green-screen segmentation controls
     void setGreenScreenEnabled(bool enabled);
@@ -361,7 +339,7 @@ private:
     QLabel *debugLabel;
     QLabel *fpsLabel;
     QLabel *gpuStatusLabel;
-    QLabel *cudaStatusLabel;
+    QLabel *openclStatusLabel; // Renamed from cudaStatusLabel
     QLabel *personDetectionLabel;
     QPushButton *personDetectionButton;
     QLabel *personSegmentationLabel;
@@ -392,8 +370,7 @@ private:
     QString m_dynamicVideoPath; // Absolute path to selected video
     cv::VideoCapture m_dynamicVideoCap; // Reader for dynamic background
     cv::Mat m_dynamicVideoFrame; // Last fetched frame for reuse if needed
-    cv::Ptr<cv::cudacodec::VideoReader> m_dynamicGpuReader; // GPU video reader if available
-    cv::cuda::GpuMat m_dynamicGpuFrame; // GPU frame buffer
+    cv::UMat m_dynamicGpuFrame; // GPU frame buffer (OpenCL)
     mutable QMutex m_dynamicVideoMutex; // Thread-safe access to dynamic video frames
     
     // Video Playback Timer for Phase 1: Frame Rate Synchronization
@@ -404,10 +381,10 @@ private:
     int m_videoTotalFrames; // Total frame count of template video for exact sync
     
     // Phase 2A: GPU-Only Video Processing Members
-    cv::cuda::GpuMat m_gpuVideoFrame; // GPU video frame buffer
-    cv::cuda::GpuMat m_gpuSegmentedFrame; // GPU segmented frame buffer
-    cv::cuda::GpuMat m_gpuPersonMask; // GPU person mask buffer
-    cv::cuda::GpuMat m_gpuBackgroundFrame; // GPU background frame buffer
+    cv::UMat m_gpuVideoFrame; // GPU video frame buffer (OpenCL)
+    cv::UMat m_gpuSegmentedFrame; // GPU segmented frame buffer (OpenCL)
+    cv::UMat m_gpuPersonMask; // GPU person mask buffer (OpenCL)
+    cv::UMat m_gpuBackgroundFrame; // GPU background frame buffer (OpenCL)
     bool m_gpuOnlyProcessingEnabled; // Enable GPU-only processing pipeline
     bool m_gpuProcessingAvailable; // Check if GPU processing is available
     
@@ -419,21 +396,21 @@ private:
     QElapsedTimer m_personDetectionTimer;
     cv::HOGDescriptor m_hogDetector;  // CPU fallback
     cv::HOGDescriptor m_hogDetectorDaimler;  // CPU fallback
-    cv::Ptr<cv::cuda::HOG> m_cudaHogDetector;  // CUDA-accelerated HOG detection
+    // HOG detection uses CPU fallback (OpenCL HOG not available in standard OpenCV)
     cv::Ptr<cv::BackgroundSubtractorMOG2> m_bgSubtractor;
     cv::Mat m_subtractionReferenceImage;  // Static reference image for background subtraction
     cv::Mat m_subtractionReferenceImage2;  // Second static reference image for background subtraction
     double m_subtractionBlendWeight;  // Weight for blending two reference images (0.0-1.0)
     bool m_useGPU;
-    bool m_useCUDA;
+    bool m_useOpenCL;
     bool m_gpuUtilized;
-    bool m_cudaUtilized;
+    bool m_openclUtilized;
     QFutureWatcher<cv::Mat> *m_personDetectionWatcher;
     std::vector<cv::Rect> m_lastDetections;
 
     cv::Mat m_selectedTemplate;
 
-    //  GPU Memory Pool for optimized CUDA operations
+    //  GPU Memory Pool for optimized OpenCL operations
     GPUMemoryPool m_gpuMemoryPool;
     bool m_gpuMemoryPoolInitialized;
     
@@ -443,8 +420,7 @@ private:
     QMutex m_recordingMutex;
     QQueue<cv::Mat> m_recordingFrameQueue;
     bool m_recordingThreadActive;
-    cv::cuda::Stream m_recordingStream;
-    cv::cuda::GpuMat m_recordingGpuBuffer;
+    cv::UMat m_recordingGpuBuffer; // OpenCL buffer (no explicit stream needed)
 
     // Performance optimization
     QPixmap m_cachedPixmap;
@@ -463,10 +439,10 @@ private:
     bool isGPUOnlyProcessingAvailable() const;
     cv::Mat processFrameWithGPUOnlyPipeline(const cv::Mat &frame);
     cv::Mat createSegmentedFrameGPUOnly(const cv::Mat &frame, const std::vector<cv::Rect> &detections);
-    cv::Mat enhancedSilhouetteSegmentGPUOnly(const cv::cuda::GpuMat &gpuFrame, const cv::Rect &detection);
+    cv::Mat enhancedSilhouetteSegmentGPUOnly(const cv::UMat &gpuFrame, const cv::Rect &detection);
     void validateGPUResults(const cv::Mat &gpuResult, const cv::Mat &cpuResult);
-    std::vector<cv::Rect> runCudaHogMultiPass(const cv::Mat &frame);
-    std::vector<cv::Rect> runCudaHogPass(const cv::Mat &frame,
+    std::vector<cv::Rect> runOpenCLHogMultiPass(const cv::Mat &frame);
+    std::vector<cv::Rect> runOpenCLHogPass(const cv::Mat &frame,
                                          double resizeScale,
                                          double hitThreshold,
                                          const cv::Size &winStride);
@@ -484,8 +460,8 @@ private:
     
     // Green-screen helpers
     cv::Mat createGreenScreenPersonMask(const cv::Mat &frame) const;
-    cv::cuda::GpuMat createGreenScreenPersonMaskGPU(const cv::cuda::GpuMat &gpuFrame) const;
-    cv::cuda::GpuMat removeGreenSpillGPU(const cv::cuda::GpuMat &gpuFrame, const cv::cuda::GpuMat &gpuMask) const;
+    cv::UMat createGreenScreenPersonMaskGPU(const cv::UMat &gpuFrame) const;
+    cv::UMat removeGreenSpillGPU(const cv::UMat &gpuFrame, const cv::UMat &gpuMask) const;
     cv::Mat refineGreenScreenMaskWithContours(const cv::Mat &mask, int minArea = 5000) const;
     cv::Mat applyTemporalMaskSmoothing(const cv::Mat &currentMask) const;
     cv::Mat refineWithGrabCut(const cv::Mat &frame, const cv::Mat &initialMask) const;
@@ -545,7 +521,7 @@ private:
                                               LightingCorrector* lightingCorrector,
                                               double personScaleFactor,
                                               const cv::Mat &lastTemplateBackground,
-                                              bool useCUDA,
+                                              bool useOpenCL,
                                               GPUMemoryPool* gpuMemoryPool);
     cv::Mat applySimpleDynamicCompositingSafe(const cv::Mat &composedFrame,
                                               const cv::Mat &rawPersonRegion,
@@ -553,7 +529,7 @@ private:
                                               const cv::Mat &backgroundFrame,
                                               LightingCorrector* lightingCorrector,
                                               double personScaleFactor,
-                                              bool useCUDA);
+                                              bool useOpenCL);
     
     //  Optimized Async Lighting Processing (POST-PROCESSING ONLY)
     void initializeAsyncLightingSystem();
@@ -587,11 +563,7 @@ private:
     // Utility functions
     cv::Mat qImageToCvMat(const QImage &image);
     QString resolveTemplatePath(const QString &templatePath);
-    std::array<double, 2> m_cudaHogScales;
-    double m_cudaHogHitThresholdPrimary;
-    double m_cudaHogHitThresholdSecondary;
-    cv::Size m_cudaHogWinStridePrimary;
-    cv::Size m_cudaHogWinStrideSecondary;
+    // CUDA HOG detector removed - using CPU HOG detector
     double m_detectionNmsOverlap;
     double m_detectionMotionOverlap;
     // Smoothing state
@@ -612,10 +584,7 @@ private:
     int m_greenMaskClose;// morph close kernel size
     
     //  GPU Green Screen Filter Cache (prevent memory allocation on every frame)
-    cv::Ptr<cv::cuda::CannyEdgeDetector> m_greenScreenCannyDetector;
-    cv::Ptr<cv::cuda::Filter> m_greenScreenMorphOpen;
-    cv::Ptr<cv::cuda::Filter> m_greenScreenMorphClose;
-    cv::Ptr<cv::cuda::Filter> m_greenScreenGaussianBlur;
+    cv::Mat m_greenScreenMorphKernel; // Morphology kernel (reusable)
     
     // Temporal green screen mask smoothing
     mutable cv::Mat m_lastGreenScreenMask;

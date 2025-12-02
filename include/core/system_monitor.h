@@ -8,6 +8,7 @@
 #include <QString>
 #include <QDateTime>
 #include <memory>
+#include <cstring>
 
 // Forward declarations
 struct SystemStats;
@@ -30,12 +31,19 @@ public:
         double cpuUsage;          // CPU usage (%)
         double gpuUsage;          // GPU usage (%)
         double peakMemoryGB;      // Peak memory usage (GB)
+        double averageFPS;        // Average FPS
         double accuracy;          // Accuracy metric (%)
         QDateTime timestamp;      // When these stats were collected
     };
 
     Statistics getCurrentStatistics() const;
     Statistics getLastStatistics() const;
+    Statistics getAverageStatistics() const;
+    Statistics getPeakStatistics() const;
+
+    // FPS tracking (thread-safe)
+    Q_INVOKABLE void updateFPS(double fps);  // Q_INVOKABLE allows Qt::QueuedConnection
+    void resetFPSTracking();
 
     // Accuracy tracking
     void updateAccuracy(double detectionConfidence);
@@ -63,12 +71,24 @@ private:
     mutable QMutex m_mutex;  // Mutable to allow locking in const methods
     Statistics m_lastStats;
     Statistics m_peakStats;
+    Statistics m_averageStats;
     
     // Windows-specific handles
     void* m_cpuQueryHandle;
     void* m_cpuCounterHandle;
     void* m_gpuQueryHandle;
     void* m_gpuCounterHandle;
+    
+    // FPS tracking (volatile for thread-safe access)
+    volatile double m_latestFPS;
+    QElapsedTimer m_fpsTrackingTimer;
+    
+    // Average tracking variables
+    double m_cpuSum;
+    double m_gpuSum;
+    double m_memorySum;
+    double m_fpsSum;
+    int m_sampleCount;
     
     // Accuracy tracking
     QList<double> m_accuracySamples;

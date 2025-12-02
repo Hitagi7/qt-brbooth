@@ -2,7 +2,7 @@
 #define LIGHTING_CORRECTOR_H
 
 #include <opencv2/opencv.hpp>
-#include <opencv2/cudaimgproc.hpp>
+#include <opencv2/core/ocl.hpp>  // OpenCL support
 #include <QString>
 #include <QDebug>
 
@@ -54,7 +54,7 @@ private:
     bool m_gpuAvailable;
     bool m_initialized;
     cv::Mat m_referenceTemplate;  // Background image we use as lighting reference
-    cv::Ptr<cv::cuda::CLAHE> m_gpuCLAHE;  // GPU contrast enhancer
+    cv::Ptr<cv::CLAHE> m_gpuCLAHE;  // GPU contrast enhancer (uses OpenCL via UMat)
     cv::Ptr<cv::CLAHE> m_cpuCLAHE;  // CPU contrast enhancer (fallback)
     
     // Tuning parameters - tweak these if results look off

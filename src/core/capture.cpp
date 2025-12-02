@@ -33,13 +33,7 @@
 #include <opencv2/opencv.hpp>
 #include <opencv2/objdetect.hpp>
 #include <opencv2/video.hpp>
-#include <opencv2/core/ocl.hpp>
-#include <opencv2/cudaimgproc.hpp>
-#include <opencv2/cudawarping.hpp>
-#include <opencv2/cudaobjdetect.hpp>
-#include <opencv2/cudabgsegm.hpp> // Added for cv::cuda::BackgroundSubtractorMOG2
-#include <opencv2/cudafilters.hpp> // Added for CUDA filter functions
-#include <opencv2/cudaarithm.hpp> // Added for CUDA arithmetic operations (inRange, bitwise_or)
+#include <opencv2/core/ocl.hpp>  // OpenCL support
 #include <QtConcurrent/QtConcurrent>
 #include <QThreadPool>
 #include <QMutexLocker>
@@ -51,11 +45,11 @@
 //  Forward declarations for guided filtering functions
 static cv::Mat guidedFilterGrayAlphaCPU(const cv::Mat &guideBGR, const cv::Mat &hardMask, int radius, float eps);
 // Made non-static so it can be used by capture_dynamic.cpp
-cv::Mat guidedFilterGrayAlphaCUDAOptimized(const cv::Mat &guideBGR, const cv::Mat &hardMask, int radius, float eps, GPUMemoryPool &memoryPool, cv::cuda::Stream &stream = cv::cuda::Stream::Null());
+cv::Mat guidedFilterGrayAlphaOpenCLOptimized(const cv::Mat &guideBGR, const cv::Mat &hardMask, int radius, float eps, GPUMemoryPool &memoryPool);
 
 //  Forward declarations for edge blurring functions
 // Made non-static so they can be used by capture_dynamic.cpp
-cv::Mat applyEdgeBlurringCUDA(const cv::Mat &segmentedObject, const cv::Mat &objectMask, const cv::Mat &backgroundTemplate, float blurRadius, GPUMemoryPool &memoryPool, cv::cuda::Stream &stream = cv::cuda::Stream::Null());
+cv::Mat applyEdgeBlurringOpenCL(const cv::Mat &segmentedObject, const cv::Mat &objectMask, const cv::Mat &backgroundTemplate, float blurRadius, GPUMemoryPool &memoryPool);
 static cv::Mat applyEdgeBlurringCPU(const cv::Mat &segmentedObject, const cv::Mat &objectMask, const cv::Mat &backgroundTemplate, float blurRadius);
 cv::Mat applyEdgeBlurringAlternative(const cv::Mat &segmentedObject, const cv::Mat &objectMask, float blurRadius);
 
@@ -217,11 +211,11 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     , m_subtractionReferenceImage2()
     , m_subtractionBlendWeight(0.5)  // Default: equal blend
     , m_useGPU(false)
-    , m_useCUDA(false)
+    , m_useOpenCL(false)
     , m_gpuUtilized(false)
+    , m_openclUtilized(false)
     // Hand detection completely removed
     , m_systemMonitor(nullptr)
-    , m_cudaUtilized(false)
     , m_personDetectionWatcher(nullptr)
     , m_lastDetections()
     , m_captureReady(false)
@@ -232,7 +226,6 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     , m_dynamicVideoPath()
     , m_dynamicVideoCap()
     , m_dynamicVideoFrame()
-    , m_dynamicGpuReader()
     , m_dynamicGpuFrame()
     , m_videoPlaybackTimer(nullptr)
     , m_videoFrameRate(30.0)
@@ -245,7 +238,6 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     , m_gpuBackgroundFrame()
     , m_gpuOnlyProcessingEnabled(false)
     , m_gpuProcessingAvailable(false)
-    , m_cudaHogDetector()
     , m_gpuMemoryPool()
     , m_gpuMemoryPoolInitialized(false)
     , m_recordingThread(nullptr)
@@ -256,16 +248,11 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     , m_recordingThreadActive(false)
     // Hand detection UI removed
     , m_recordingFrameQueue()
-    , m_recordingStream()
     , debugUpdateTimer(nullptr)
     , m_currentFPS(0)
     , m_recordingGpuBuffer()
     , m_cachedPixmap(640, 480)
-    , m_cudaHogScales{0.5, 0.75}
-    , m_cudaHogHitThresholdPrimary(0.0)
-    , m_cudaHogHitThresholdSecondary(-0.2)
-    , m_cudaHogWinStridePrimary(8, 8)
-    , m_cudaHogWinStrideSecondary(16, 16)
+    // CUDA HOG detector removed
     , m_detectionNmsOverlap(0.35)
     , m_detectionMotionOverlap(0.12)
     , m_smoothingHoldFrames(5)
@@ -304,12 +291,6 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     , m_bgColorInvCovReady(false)
 
 {
-    // Initialize cv::Ptr members to nullptr (cannot be default-constructed)
-    m_greenScreenCannyDetector = nullptr;
-    m_greenScreenMorphOpen = nullptr;
-    m_greenScreenMorphClose = nullptr;
-    m_greenScreenGaussianBlur = nullptr;
-    
     ui->setupUi(this);
     // Dynamic video background defaults
     m_useDynamicVideoBackground = false;
@@ -318,7 +299,7 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
         m_dynamicVideoCap.release();
     }
     m_dynamicVideoFrame.release();
-    m_dynamicGpuReader.release();
+    // m_dynamicGpuReader removed - using OpenCL instead
     m_dynamicGpuFrame.release();
 
     // Initialize video playback timer for Phase 1
@@ -798,28 +779,40 @@ void Capture::updateCameraFeed(const QImage &image)
     totalTime += currentLoopTime;
     frameCount++;
 
-    // Calculate current FPS for real-time display (thread-safe)
-    static QElapsedTimer fpsTimer;
-    static int fpsFrameCount = 0;
-    static bool fpsTimerInitialized = false;
+    // Calculate PROCESSING FPS (system/display rate, not camera input rate)
+    // This measures how fast we're actually processing and displaying frames
+    static QElapsedTimer processingFpsTimer;
+    static int processingFrameCount = 0;
+    static bool processingFpsTimerInitialized = false;
 
-    if (!fpsTimerInitialized) {
-        fpsTimer.start();
-        fpsTimerInitialized = true;
+    if (!processingFpsTimerInitialized) {
+        processingFpsTimer.start();
+        processingFpsTimerInitialized = true;
     }
-    fpsFrameCount++;
+    processingFrameCount++;
 
-    // Adaptive FPS calculation based on actual camera FPS (30-60 FPS range)
-    int targetFPS = qMax(30, qMin(60, static_cast<int>(m_actualCameraFPS)));
-    if (fpsFrameCount >= targetFPS) { // Update FPS every targetFPS frames
-        double fpsDuration = fpsTimer.elapsed() / 1000.0;
-        m_currentFPS = fpsDuration > 0 ? fpsFrameCount / fpsDuration : targetFPS;
-        fpsFrameCount = 0;
-        fpsTimer.start();
+    // Calculate processing FPS every second (measures actual system performance)
+    if (processingFpsTimer.elapsed() >= 1000) {
+        double fpsDuration = processingFpsTimer.elapsed() / 1000.0;
+        if (fpsDuration > 0) {
+            // This is the actual processing/display FPS, not camera input FPS
+            m_currentFPS = processingFrameCount / fpsDuration;
+            
+            // Update system monitor with processing FPS (system performance metric)
+            // updateCameraFeed is already called via Qt::QueuedConnection, so we're in the main thread
+            // Direct call is safe here since we're in the same thread as SystemMonitor
+            if (m_systemMonitor && m_currentFPS > 0.0) {
+                // Direct call is safe - updateCameraFeed runs in main thread via QueuedConnection
+                m_systemMonitor->updateFPS(m_currentFPS);
+            }
+        }
+        
+        processingFrameCount = 0;
+        processingFpsTimer.restart();
     }
 
-    // Print performance stats every targetFPS frames (aligned with actual camera FPS)
-    if (frameCount % targetFPS == 0) {
+    // Print performance stats every 60 frames (approximately every 2 seconds at 30 FPS)
+    if (frameCount % 60 == 0) {
         printPerformanceStats();
     }
 
@@ -966,8 +959,8 @@ void Capture::printPerformanceStats() {
     qDebug() << "Unified Detection Enabled:" << (m_segmentationEnabledInCapture ? "YES (ENABLED)" : "NO (DISABLED)");
     qDebug() << "GPU Acceleration:" << (m_useGPU ? "YES (OpenCL)" : "NO (CPU)");
     qDebug() << "GPU Utilized:" << (m_gpuUtilized ? "ACTIVE" : "IDLE");
-    qDebug() << "CUDA Acceleration:" << (m_useCUDA ? "YES (CUDA)" : "NO (CPU)");
-    qDebug() << "CUDA Utilized:" << (m_cudaUtilized ? "ACTIVE" : "IDLE");
+    qDebug() << "OpenCL Acceleration:" << (m_useOpenCL ? "YES (OpenCL)" : "NO (CPU)");
+    qDebug() << "OpenCL Utilized:" << (m_openclUtilized ? "ACTIVE" : "IDLE");
     qDebug() << "Person Detection FPS:" << (m_segmentationEnabledInCapture ? QString::number(m_personDetectionFPS, 'f', 1) : "N/A (DISABLED)");
     qDebug() << "Unified Detection FPS:" << (m_segmentationEnabledInCapture ? QString::number(m_personDetectionFPS, 'f', 1) : "N/A (DISABLED)");
     qDebug() << "Hand Detection FPS: N/A (DISABLED)";
@@ -1392,7 +1385,7 @@ void Capture::setupDebugDisplay()
         updateDebugDisplay();
     });
 
-    qDebug() << "Debug display setup complete - FPS, GPU, and CUDA status should be visible";
+    qDebug() << "Debug display setup complete - FPS, GPU, and OpenCL status should be visible";
 }
 
 // Hand detection completely removed - enableHandDetectionForCapture removed
@@ -1457,9 +1450,13 @@ void Capture::resetCapturePage()
     m_recordedSeconds = 0;
 
     // Reset dynamic video background to start from beginning
-    if (m_useDynamicVideoBackground && m_videoPlaybackActive) {
+    // Only reset if video is already fully initialized and active
+    if (m_useDynamicVideoBackground && m_videoPlaybackActive && !m_dynamicVideoPath.isEmpty()) {
         resetDynamicVideoToStart();
         qDebug() << "Dynamic video reset to start for re-recording";
+    } else if (!m_dynamicVideoPath.isEmpty() && !m_useDynamicVideoBackground) {
+        // Video path is set but not active yet - don't reset, let it be enabled
+        qDebug() << "Dynamic video path set but not active yet - skipping reset";
     }
 
     // Reset scaling slider to default position (0 = 100% scale)
@@ -1543,7 +1540,7 @@ void Capture::keyPressEvent(QKeyEvent *event)
                 if (!isVisible) {
                     debugWidget->raise();
                     debugWidget->setStyleSheet("QWidget { background-color: rgba(0, 0, 0, 0.9); color: white; border-radius: 8px; border: 2px solid #00ff00; }");
-                    qDebug() << "Debug display SHOWN - FPS, GPU, and CUDA status visible";
+                    qDebug() << "Debug display SHOWN - FPS, GPU, and OpenCL status visible";
                 } else {
                     debugWidget->setStyleSheet("QWidget { background-color: rgba(0, 0, 0, 0.8); color: white; border-radius: 5px; }");
                     qDebug() << "Debug display HIDDEN";
@@ -1571,7 +1568,7 @@ void Capture::keyPressEvent(QKeyEvent *event)
                 
                 // Reset GPU utilization flags
                 m_gpuUtilized = false;
-                m_cudaUtilized = false;
+                // m_cudaUtilized removed - using OpenCL
                 } else {
                 m_segmentationEnabledInCapture = true;
                 qDebug() << "Segmentation ENABLED";
@@ -1663,7 +1660,7 @@ void Capture::updateDebugDisplay()
         qDebug() << "updateDebugDisplay #" << updateCount;
     
     if (updateCount % 10 == 0) { // Log every 5 seconds (10 updates * 500ms)
-        qDebug() << "Debug display update #" << updateCount << "FPS:" << m_currentFPS << "GPU:" << m_useGPU << "CUDA:" << m_useCUDA;
+        qDebug() << "Debug display update #" << updateCount << "FPS:" << m_currentFPS << "GPU:" << m_useGPU << "OpenCL:" << m_useOpenCL;
     }
 
     if (debugLabel) {
@@ -2236,9 +2233,7 @@ void Capture::enableDynamicVideoBackground(const QString &videoPath)
     if (m_dynamicVideoCap.isOpened()) {
         m_dynamicVideoCap.release();
     }
-    if (!m_dynamicGpuReader.empty()) {
-        m_dynamicGpuReader.release();
-    }
+    // m_dynamicGpuReader removed - using CPU VideoCapture for OpenCL
     
     // Clean up the path and verify file exists
     QString cleanPath = QDir::cleanPath(videoPath);
@@ -2255,19 +2250,7 @@ void Capture::enableDynamicVideoBackground(const QString &videoPath)
 
     bool opened = false;
 
-    // Prefer GPU NVDEC via cudacodec if CUDA is enabled and available
-    if (m_useCUDA && cv::cuda::getCudaEnabledDeviceCount() > 0) {
-        try {
-            m_dynamicGpuReader = cv::cudacodec::createVideoReader(cleanPath.toStdString());
-            if (!m_dynamicGpuReader.empty()) {
-                opened = true;
-                qDebug() << "Using CUDA VideoReader (NVDEC) for dynamic video background";
-            }
-        } catch (const cv::Exception &e) {
-            qWarning() << "CUDA VideoReader unavailable, falling back to CPU VideoCapture:" << e.what();
-            m_dynamicGpuReader.release();
-        }
-    }
+    // CUDA VideoReader removed - using CPU VideoCapture (OpenCL doesn't have direct video decoding)
 
     // CPU fallback using multiple backends
     if (!opened) {
@@ -2307,7 +2290,7 @@ void Capture::enableDynamicVideoBackground(const QString &videoPath)
             qDebug() << "  - Total frames:" << totalFrames;
             qDebug() << "  - Frame rate:" << m_videoFrameRate << "FPS";
         }
-    } else if (!m_dynamicGpuReader.empty()) {
+    } else if (false) { // CUDA VideoReader removed
         // Probe container FPS and frame count via a short-lived CPU reader to drive GPU playback at native speed
         double probedFps = 0.0;
         double probedTotal = 0.0;
@@ -2336,7 +2319,7 @@ void Capture::enableDynamicVideoBackground(const QString &videoPath)
             // Fallback if probe failed
             m_videoFrameRate = 30.0;
             m_videoTotalFrames = 0;
-            qDebug() << "Using default FPS (30) for CUDA reader; probe failed";
+            qDebug() << "Using default FPS (30) for video reader; probe failed";
         }
     }
 
@@ -2366,7 +2349,7 @@ void Capture::enableDynamicVideoBackground(const QString &videoPath)
         }
         
         qDebug() << "Video frame rate detected (CPU):" << m_videoFrameRate << "FPS, interval:" << m_videoFrameInterval << "ms";
-    } else if (!m_dynamicGpuReader.empty()) {
+    } else if (false) { // CUDA VideoReader removed
         // For GPU reader, use probed/native frame rate if available
         if (m_videoFrameRate <= 0) m_videoFrameRate = 30.0;
         m_videoFrameInterval = qRound(1000.0 / m_videoFrameRate);
@@ -2378,27 +2361,7 @@ void Capture::enableDynamicVideoBackground(const QString &videoPath)
     cv::Mat first;
     bool frameRead = false;
 
-    if (!m_dynamicGpuReader.empty()) {
-        try {
-            cv::cuda::GpuMat gpu;
-            if (m_dynamicGpuReader->nextFrame(gpu) && !gpu.empty()) {
-                if (gpu.type() == CV_8UC4) {
-                    cv::cuda::cvtColor(gpu, gpu, cv::COLOR_BGRA2BGR);
-                }
-                m_dynamicGpuFrame = gpu; // keep GPU copy for GPU compositing paths
-                // Avoid download when in segmentation mode; only maintain a CPU copy if needed elsewhere
-                if (!isGPUOnlyProcessingAvailable()) {
-                    gpu.download(first);
-                    frameRead = !first.empty();
-                } else {
-                    frameRead = true;
-                }
-            }
-        } catch (const cv::Exception &e) {
-            qWarning() << "CUDA reader failed to read first frame, falling back to CPU:" << e.what();
-            m_dynamicGpuReader.release();
-        }
-    }
+    // CUDA VideoReader removed - using CPU VideoCapture
 
     if (!frameRead && m_dynamicVideoCap.isOpened()) {
         frameRead = m_dynamicVideoCap.read(first);
@@ -2407,7 +2370,7 @@ void Capture::enableDynamicVideoBackground(const QString &videoPath)
         }
     }
 
-    if (frameRead && (!m_dynamicGpuReader.empty() || !first.empty())) {
+    if (frameRead && !first.empty()) {
         if (!first.empty()) {
             m_dynamicVideoFrame = first.clone();
         }
@@ -2423,7 +2386,7 @@ void Capture::enableDynamicVideoBackground(const QString &videoPath)
     } else {
         qWarning() << "Could not read first frame from dynamic background video:" << m_dynamicVideoPath;
         if (m_dynamicVideoCap.isOpened()) m_dynamicVideoCap.release();
-        m_dynamicGpuReader.release();
+        // m_dynamicGpuReader removed
     }
 
     // When using dynamic video, disable static background template and foreground overlay
@@ -2451,7 +2414,7 @@ void Capture::disableDynamicVideoBackground()
     }
 
     if (m_dynamicVideoCap.isOpened()) m_dynamicVideoCap.release();
-    m_dynamicGpuReader.release();
+    // m_dynamicGpuReader removed
     m_dynamicVideoFrame.release();
     // NOTE: Do NOT clear m_dynamicVideoPath here to preserve selection for restoration
     // m_dynamicVideoPath.clear(); 
@@ -2489,47 +2452,7 @@ void Capture::onVideoPlaybackTimer()
     cv::Mat nextFrame;
     bool frameRead = false;
 
-    // Try GPU reader first (keep data on GPU to minimize CPU usage)
-    if (!m_dynamicGpuReader.empty()) {
-        try {
-            cv::cuda::GpuMat gpu;
-            if (m_dynamicGpuReader->nextFrame(gpu) && !gpu.empty()) {
-                if (gpu.type() == CV_8UC4) {
-                    cv::cuda::cvtColor(gpu, gpu, cv::COLOR_BGRA2BGR);
-                }
-                m_dynamicGpuFrame = gpu; // keep latest GPU frame
-                if (!isGPUOnlyProcessingAvailable()) {
-                    gpu.download(nextFrame);
-                    frameRead = !nextFrame.empty();
-                } else {
-                    frameRead = true; // GPU-only path does not require CPU copy
-                }
-            } else {
-                // Attempt soft restart of GPU reader
-                m_dynamicGpuReader.release();
-                m_dynamicGpuReader = cv::cudacodec::createVideoReader(m_dynamicVideoPath.toStdString());
-                cv::cuda::GpuMat gpuRetry;
-                if (!m_dynamicGpuReader.empty() && m_dynamicGpuReader->nextFrame(gpuRetry) && !gpuRetry.empty()) {
-                    if (gpuRetry.type() == CV_8UC4) {
-                        cv::cuda::cvtColor(gpuRetry, gpuRetry, cv::COLOR_BGRA2BGR);
-                    }
-                    m_dynamicGpuFrame = gpuRetry;
-                    if (!isGPUOnlyProcessingAvailable()) {
-                        gpuRetry.download(nextFrame);
-                        frameRead = !nextFrame.empty();
-                    } else {
-                        frameRead = true;
-                    }
-                }
-            }
-        } catch (const cv::Exception &e) {
-            qWarning() << "CUDA reader failed during timer; switching to CPU:" << e.what();
-            m_dynamicGpuReader.release();
-        } catch (const std::exception &e) {
-            qWarning() << "Exception in GPU video reading:" << e.what();
-            m_dynamicGpuReader.release();
-        }
-    }
+    // CUDA VideoReader removed - using CPU VideoCapture for OpenCL
 
     // CPU fallback
     if (!frameRead) {
@@ -2578,15 +2501,8 @@ void Capture::resetDynamicVideoToStart()
     }
 
     // Reset video readers to beginning
-    if (!m_dynamicGpuReader.empty()) {
-        try {
-            m_dynamicGpuReader.release();
-            m_dynamicGpuReader = cv::cudacodec::createVideoReader(m_dynamicVideoPath.toStdString());
-            qDebug() << "GPU video reader reset to start";
-        } catch (...) {
-            qWarning() << "Failed to reset GPU video reader";
-        }
-    } else if (m_dynamicVideoCap.isOpened()) {
+    // CUDA VideoReader removed
+    if (m_dynamicVideoCap.isOpened()) {
         m_dynamicVideoCap.set(cv::CAP_PROP_POS_FRAMES, 0);
         qDebug() << "CPU video reader reset to start";
     }
@@ -2595,14 +2511,8 @@ void Capture::resetDynamicVideoToStart()
     cv::Mat firstFrame;
     bool frameRead = false;
 
-    if (!m_dynamicGpuReader.empty()) {
-        cv::cuda::GpuMat gpu;
-        if (m_dynamicGpuReader->nextFrame(gpu) && !gpu.empty()) {
-            cv::cuda::cvtColor(gpu, gpu, cv::COLOR_BGRA2BGR);
-            gpu.download(firstFrame);
-            frameRead = true;
-        }
-    } else if (m_dynamicVideoCap.isOpened()) {
+    // CUDA VideoReader removed - using CPU VideoCapture
+    if (m_dynamicVideoCap.isOpened()) {
         if (m_dynamicVideoCap.read(firstFrame) && !firstFrame.empty()) {
             frameRead = true;
         }
@@ -2628,11 +2538,11 @@ void Capture::initializeGPUOnlyProcessing()
     m_gpuOnlyProcessingEnabled = false;
     m_gpuProcessingAvailable = false;
 
-    // Check if CUDA is available and GPU processing is supported
-    if (m_useCUDA && cv::cuda::getCudaEnabledDeviceCount() > 0) {
+    // Check if OpenCL is available and GPU processing is supported
+    if (m_useOpenCL && cv::ocl::useOpenCL()) {
         try {
-            // Test GPU memory allocation
-            cv::cuda::GpuMat testMat(100, 100, CV_8UC3);
+            // Test GPU memory allocation (OpenCL)
+            cv::UMat testMat(100, 100, CV_8UC3);
             if (!testMat.empty()) {
                 m_gpuProcessingAvailable = true;
                 m_gpuOnlyProcessingEnabled = true;
@@ -2676,8 +2586,8 @@ cv::Mat Capture::processFrameWithGPUOnlyPipeline(const cv::Mat &frame)
     try {
         qDebug() << "Phase 2A: Using GPU-only processing pipeline";
 
-        // Upload frame to GPU (single transfer)
-        m_gpuVideoFrame.upload(frame);
+        // Upload frame to GPU (OpenCL) - single transfer
+        frame.copyTo(m_gpuVideoFrame);
 
         // GREEN SCREEN MODE: Use GPU-accelerated green screen masking
         if (m_greenScreenEnabled && m_segmentationEnabledInCapture) {
@@ -2690,7 +2600,7 @@ cv::Mat Capture::processFrameWithGPUOnlyPipeline(const cv::Mat &frame)
             }
             
             // Create GPU-accelerated green screen mask with crash protection
-            cv::cuda::GpuMat gpuPersonMask;
+            cv::UMat gpuPersonMask;
             try {
                 gpuPersonMask = createGreenScreenPersonMaskGPU(m_gpuVideoFrame);
             } catch (const cv::Exception &e) {
@@ -2707,16 +2617,13 @@ cv::Mat Capture::processFrameWithGPUOnlyPipeline(const cv::Mat &frame)
                 return processFrameWithUnifiedDetection(frame);
             }
             
-            // GPU SYNCHRONIZATION: Wait for all GPU operations to complete before downloading
-            cv::cuda::Stream::Null().waitForCompletion();
-            
-            // REMOVE GREEN SPILL: Desaturate green tint from person pixels
-            cv::cuda::GpuMat gpuCleanedFrame;
+            // REMOVE GREEN SPILL: Desaturate green tint from person pixels (OpenCL)
+            cv::UMat gpuCleanedFrame;
             cv::Mat cleanedFrame;
             try {
                 gpuCleanedFrame = removeGreenSpillGPU(m_gpuVideoFrame, gpuPersonMask);
                 if (!gpuCleanedFrame.empty()) {
-                    gpuCleanedFrame.download(cleanedFrame);
+                    gpuCleanedFrame.copyTo(cleanedFrame);
                     qDebug() << "Green spill removal applied to person pixels";
                 } else {
                     cleanedFrame = frame.clone();
@@ -2729,7 +2636,7 @@ cv::Mat Capture::processFrameWithGPUOnlyPipeline(const cv::Mat &frame)
             // Download mask to derive detections on CPU (for bounding boxes)
             cv::Mat personMask;
             try {
-                gpuPersonMask.download(personMask);
+                gpuPersonMask.copyTo(personMask);
             } catch (const cv::Exception &e) {
                 qWarning() << "Failed to download GPU mask:" << e.what() << "- falling back to CPU";
                 return processFrameWithUnifiedDetection(frame);
@@ -2749,7 +2656,7 @@ cv::Mat Capture::processFrameWithGPUOnlyPipeline(const cv::Mat &frame)
             cv::Mat segmentedFrame;
             try {
                 // Upload cleaned frame to GPU for segmentation
-                m_gpuVideoFrame.upload(cleanedFrame);
+                cleanedFrame.copyTo(m_gpuVideoFrame);
                 segmentedFrame = createSegmentedFrameGPUOnly(cleanedFrame, detections);
             } catch (const cv::Exception &e) {
                 qWarning() << "GPU segmentation failed:" << e.what() << "- falling back to CPU";
@@ -2772,11 +2679,11 @@ cv::Mat Capture::processFrameWithGPUOnlyPipeline(const cv::Mat &frame)
             return segmentedFrame;
         }
 
-        // Optimized processing for 30 FPS with GPU
-        cv::cuda::GpuMat processFrame = m_gpuVideoFrame;
+        // Optimized processing for 30 FPS with GPU (OpenCL)
+        cv::UMat processFrame = m_gpuVideoFrame;
         if (frame.cols > 640) {
             double scale = 640.0 / frame.cols;
-            cv::cuda::resize(m_gpuVideoFrame, processFrame, cv::Size(), scale, scale, cv::INTER_LINEAR);
+            cv::resize(m_gpuVideoFrame, processFrame, cv::Size(), scale, scale, cv::INTER_LINEAR);
         }
 
         // Use a fixed, bounded segmentation rectangle instead of person detection
@@ -2821,53 +2728,22 @@ void Capture::initializePersonDetection()
     m_hogDetector.setSVMDetector(cv::HOGDescriptor::getDefaultPeopleDetector());
     m_hogDetectorDaimler.setSVMDetector(cv::HOGDescriptor::getDaimlerPeopleDetector());
 
-    // Initialize CUDA HOG detector for GPU acceleration
-    qDebug() << "===== STARTING CUDA HOG INITIALIZATION =====";
+    // Initialize CPU HOG detector (CUDA HOG removed - using OpenCL/CPU)
+    qDebug() << "===== STARTING HOG INITIALIZATION =====";
 
-    // Check if CUDA is available
-    int cudaDevices = cv::cuda::getCudaEnabledDeviceCount();
-    qDebug() << "CUDA devices found:" << cudaDevices;
-
-    if (cudaDevices > 0) {
+    // Check if OpenCL is available
+    // CUDA HOG detector removed - using CPU HOG detector
+    if (false) { // CUDA removed - OpenCL used instead
         try {
-            qDebug() << "Creating CUDA HOG detector...";
-            // Create CUDA HOG with default people detector
-            m_cudaHogDetector = cv::cuda::HOG::create(
-                cv::Size(64, 128),  // win_size
-                cv::Size(16, 16),   // block_size
-                cv::Size(8, 8),     // block_stride
-                cv::Size(8, 8),     // cell_size
-                9                   // nbins
-            );
-
-            if (!m_cudaHogDetector.empty()) {
-                qDebug() << "CUDA HOG detector created successfully";
-                m_cudaHogDetector->setSVMDetector(m_cudaHogDetector->getDefaultPeopleDetector());
-                qDebug() << "CUDA HOG detector ready for GPU acceleration";
-            } else {
-                qWarning() << "CUDA HOG creation failed - detector is empty";
-                m_cudaHogDetector = nullptr;
-            }
+            // CUDA HOG detector removed - using CPU HOG detector
+            qDebug() << "HOG detector initialized - using CPU (OpenCL available for other operations)";
         } catch (const cv::Exception& e) {
-            qWarning() << "CUDA HOG initialization failed:" << e.what();
-            m_cudaHogDetector = nullptr;
+            qWarning() << "HOG initialization failed:" << e.what();
         }
     } else {
-        qDebug() << "CUDA not available for HOG initialization";
-        m_cudaHogDetector = nullptr;
+        qDebug() << "OpenCL not available for HOG initialization";
     }
-    qDebug() << "===== FINAL CUDA HOG INITIALIZATION CHECK =====";
-    qDebug() << "CUDA HOG detector pointer:" << m_cudaHogDetector.get();
-    qDebug() << "CUDA HOG detector empty:" << (m_cudaHogDetector && m_cudaHogDetector.empty() ? "yes" : "no");
-
-    if (m_cudaHogDetector && !m_cudaHogDetector.empty()) {
-        qDebug() << "CUDA HOG detector successfully initialized and ready!";
-        m_useCUDA = true; // Ensure CUDA is enabled
-    } else {
-        qWarning() << "CUDA HOG detector initialization failed or not available";
-        m_cudaHogDetector = nullptr;
-    }
-    qDebug() << "===== CUDA HOG INITIALIZATION COMPLETE =====";
+    qDebug() << "===== HOG INITIALIZATION COMPLETE =====";
 
     // Initialize background subtractor for motion detection (matching peopledetect_v1.cpp)
     // OPTIMIZATION: Only create if not already initialized to avoid recreating unnecessarily
@@ -2878,10 +2754,10 @@ void Capture::initializePersonDetection()
         qDebug() << "Background subtractor already initialized, skipping recreation";
     }
 
-    //  Initialize GPU Memory Pool for optimized CUDA operations
-    if (!m_gpuMemoryPoolInitialized && cv::cuda::getCudaEnabledDeviceCount() > 0) {
+    //  Initialize GPU Memory Pool for optimized OpenCL operations
+    if (!m_gpuMemoryPoolInitialized && cv::ocl::useOpenCL()) {
         try {
-            qDebug() << " Initializing GPU Memory Pool for optimized CUDA operations...";
+            qDebug() << " Initializing GPU Memory Pool for optimized OpenCL operations...";
             m_gpuMemoryPool.initialize(1280, 720); // Initialize with common camera resolution
             m_gpuMemoryPoolInitialized = true;
             qDebug() << "GPU Memory Pool initialized successfully";
@@ -2891,50 +2767,31 @@ void Capture::initializePersonDetection()
         }
     }
 
-    // Check if CUDA is available for NVIDIA GPU acceleration (PRIORITY)
+    // Check if OpenCL is available for GPU acceleration
     try {
-        if (cv::cuda::getCudaEnabledDeviceCount() > 0) {
-            m_useCUDA = true;
-            qDebug() << "CUDA GPU acceleration enabled for NVIDIA GPU (PRIORITY)";
-            qDebug() << "CUDA devices found:" << cv::cuda::getCudaEnabledDeviceCount();
-
-            // Get CUDA device info
-            cv::cuda::DeviceInfo deviceInfo(0);
-            if (deviceInfo.isCompatible()) {
-                qDebug() << "CUDA Device:" << deviceInfo.name();
-                qDebug() << "Memory:" << deviceInfo.totalMemory() / (1024*1024) << "MB";
-                qDebug() << "Compute Capability:" << deviceInfo.majorVersion() << "." << deviceInfo.minorVersion();
-                qDebug() << "CUDA will be used for color conversion and resizing operations";
-
-                // Pre-allocate CUDA GPU memory pools for better performance
-                qDebug() << "Pre-allocating CUDA GPU memory pools...";
-                try {
-                    // Pre-allocate common frame sizes for CUDA operations
-                    cv::cuda::GpuMat cudaFramePool1, cudaFramePool2, cudaFramePool3;
-                    cudaFramePool1.create(720, 1280, CV_8UC3);  // Common camera resolution
-                    cudaFramePool2.create(480, 640, CV_8UC3);   // Smaller processing size
-                    cudaFramePool3.create(360, 640, CV_8UC1);   // Grayscale processing
-
-                    qDebug() << "CUDA GPU memory pools pre-allocated successfully";
-                    qDebug() << "  - CUDA Frame pool 1: 1280x720 (RGB)";
-                    qDebug() << "  - CUDA Frame pool 2: 640x480 (RGB)";
-                    qDebug() << "  - CUDA Frame pool 3: 640x360 (Grayscale)";
-
-                    // Set CUDA device for optimal performance
-                    cv::cuda::setDevice(0);
-                    qDebug() << "CUDA device 0 set for optimal performance";
-
-                } catch (const cv::Exception& e) {
-                    qWarning() << "CUDA GPU memory pool allocation failed:" << e.what();
+        if (cv::ocl::useOpenCL()) {
+            cv::ocl::setUseOpenCL(true);
+            m_useOpenCL = true;
+            qDebug() << "OpenCL GPU acceleration enabled";
+            
+            cv::ocl::Context context = cv::ocl::Context::getDefault();
+            if (!context.empty()) {
+                size_t deviceCount = context.ndevices();
+                qDebug() << "OpenCL devices found:" << deviceCount;
+                if (deviceCount > 0) {
+                    cv::ocl::Device device = context.device(0);
+                    qDebug() << "OpenCL Device:" << device.name().c_str();
+                    qDebug() << "Memory:" << device.globalMemSize() / (1024*1024) << "MB";
+                    qDebug() << "OpenCL will be used for color conversion and resizing operations";
                 }
             }
         } else {
-            qDebug() << "CUDA not available, checking OpenCL";
-            m_useCUDA = false;
+            qDebug() << "OpenCL not available, using CPU";
+            m_useOpenCL = false;
         }
     } catch (...) {
-        qDebug() << "CUDA initialization failed, checking OpenCL";
-        m_useCUDA = false;
+        qDebug() << "OpenCL initialization failed, using CPU";
+        m_useOpenCL = false;
     }
 
     // Check if OpenCL is available for HOG detection (ALWAYS ENABLE FOR HOG)
@@ -2989,7 +2846,7 @@ void Capture::initializePersonDetection()
     }
 
     // Check if OpenCL is available for AMD GPU acceleration (FALLBACK)
-    if (!m_useCUDA) {
+    if (!m_useOpenCL) {
         try {
             if (cv::ocl::useOpenCL()) {
                 m_useGPU = true;
@@ -3010,37 +2867,10 @@ void Capture::initializePersonDetection()
     connect(m_personDetectionWatcher, &QFutureWatcher<cv::Mat>::finished,
             this, &Capture::onPersonDetectionFinished);
 
-    // Set CUDA device for optimal performance
-    if (m_useCUDA) {
-        try {
-            // Check CUDA device availability before setting
-            int deviceCount = cv::cuda::getCudaEnabledDeviceCount();
-            if (deviceCount > 0) {
-                cv::cuda::setDevice(0);
-                qDebug() << "CUDA device 0 set for optimal performance";
-
-                // Test CUDA memory allocation
-                cv::cuda::GpuMat testMat;
-                testMat.create(100, 100, CV_8UC3);
-                if (testMat.empty()) {
-                    throw cv::Exception(0, "CUDA memory allocation test failed", "", "", 0);
-                }
-                qDebug() << "CUDA memory allocation test passed";
-            } else {
-                qWarning() << "No CUDA devices available, disabling CUDA";
-                m_useCUDA = false;
-            }
-        } catch (const cv::Exception& e) {
-            qWarning() << "CUDA initialization failed:" << e.what() << "Disabling CUDA";
-            m_useCUDA = false;
-        } catch (...) {
-            qWarning() << "Unknown CUDA initialization error, disabling CUDA";
-            m_useCUDA = false;
-        }
-    }
+    // OpenCL is already initialized above - no additional setup needed
 
     qDebug() << "Enhanced Person Detection and Segmentation initialized successfully";
-    qDebug() << "GPU Priority: CUDA (NVIDIA) > OpenCL (AMD) > CPU (fallback)";
+    qDebug() << "GPU Priority: OpenCL > CPU (fallback)";
 }
 
 void Capture::adjustRect(cv::Rect &r) const
@@ -3051,107 +2881,7 @@ void Capture::adjustRect(cv::Rect &r) const
     (void)r; // Suppress unused parameter warning
 }
 
-std::vector<cv::Rect> Capture::runCudaHogPass(const cv::Mat &frame,
-                                             double resizeScale,
-                                             double hitThreshold,
-                                             const cv::Size &winStride)
-{
-    std::vector<cv::Rect> detections;
-
-    if (!m_useCUDA || !m_cudaHogDetector || m_cudaHogDetector->empty() || frame.empty()) {
-        return detections;
-    }
-
-    if (resizeScale <= 0.0) {
-        return detections;
-    }
-
-    try {
-        // CRASH PREVENTION: Validate frame has 3 channels before BGR2GRAY conversion
-        if (frame.empty() || frame.channels() != 3) {
-            qWarning() << "Invalid frame for CUDA HOG: empty or not 3 channels";
-            return std::vector<cv::Rect>();
-        }
-        
-        cv::cuda::GpuMat gpuFrame;
-        gpuFrame.upload(frame);
-
-        cv::cuda::GpuMat gpuGray;
-        cv::cuda::cvtColor(gpuFrame, gpuGray, cv::COLOR_BGR2GRAY);
-
-        cv::Size targetSize(cvRound(frame.cols * resizeScale), cvRound(frame.rows * resizeScale));
-        if (targetSize.width < 128 || targetSize.height < 256) {
-            targetSize.width = std::max(targetSize.width, 128);
-            targetSize.height = std::max(targetSize.height, 256);
-        }
-
-        cv::cuda::GpuMat gpuResized;
-        cv::cuda::resize(gpuGray, gpuResized, targetSize, 0, 0, cv::INTER_LINEAR);
-
-        m_cudaHogDetector->setHitThreshold(hitThreshold);
-        // Validate winStride against block stride (8x8) and window size (64x128)
-        cv::Size validatedStride = winStride;
-        const cv::Size blockStride(8, 8);
-        const cv::Size winSize(64, 128);
-        if (validatedStride.width <= 0 || validatedStride.height <= 0 ||
-            (validatedStride.width % blockStride.width) != 0 ||
-            (validatedStride.height % blockStride.height) != 0 ||
-            validatedStride.width > winSize.width ||
-            validatedStride.height > winSize.height) {
-            // Prefer 16x16 for speed; otherwise fallback to 8x8
-            validatedStride = cv::Size(16, 16);
-        }
-        m_cudaHogDetector->setWinStride(validatedStride);
-
-        std::vector<cv::Rect> found;
-        m_cudaHogDetector->detectMultiScale(gpuResized, found);
-
-        const double invScale = 1.0 / resizeScale;
-        for (auto &rect : found) {
-            rect.x = cvRound(rect.x * invScale);
-            rect.y = cvRound(rect.y * invScale);
-            rect.width = cvRound(rect.width * invScale);
-            rect.height = cvRound(rect.height * invScale);
-            detections.push_back(rect);
-        }
-
-    } catch (const cv::Exception &e) {
-        qWarning() << "CUDA HOG pass failed:" << e.what();
-    }
-
-    return detections;
-}
-
-std::vector<cv::Rect> Capture::runCudaHogMultiPass(const cv::Mat &frame)
-{
-    std::vector<cv::Rect> combined;
-
-    for (size_t i = 0; i < m_cudaHogScales.size(); ++i) {
-        const double scale = m_cudaHogScales[i];
-        const double hitThreshold = (i == 0) ? m_cudaHogHitThresholdPrimary : m_cudaHogHitThresholdSecondary;
-        const cv::Size &stride = (i == 0) ? m_cudaHogWinStridePrimary : m_cudaHogWinStrideSecondary;
-
-        std::vector<cv::Rect> passDetections = runCudaHogPass(frame, scale, hitThreshold, stride);
-        combined.insert(combined.end(), passDetections.begin(), passDetections.end());
-
-        // Early exit only if primary pass already found at least 2 detections
-        if (i == 0 && passDetections.size() >= 2) {
-            break;
-        }
-    }
-
-    // If CUDA pass failed or found nothing, fall back to classic HOG
-    if (combined.empty()) {
-        try {
-            std::vector<cv::Rect> cpuDetections = runClassicHogPass(frame);
-            combined.insert(combined.end(), cpuDetections.begin(), cpuDetections.end());
-        } catch (...) {
-            // Keep empty if CPU also fails
-        }
-    }
-
-    return combined;
-}
+// CUDA HOG detector functions completely removed - using CPU HOG detector (runClassicHogPass) instead
 
 std::vector<cv::Rect> Capture::runClassicHogPass(const cv::Mat &frame)
 {
@@ -3240,11 +2970,8 @@ std::vector<cv::Rect> Capture::detectPeople(const cv::Mat &frame)
 {
     std::vector<cv::Rect> detections;
 
-    if (m_useCUDA && m_cudaHogDetector && !m_cudaHogDetector->empty()) {
-        detections = runCudaHogMultiPass(frame);
-    } else {
-        detections = runClassicHogPass(frame);
-    }
+    // CUDA HOG detector removed - using CPU HOG detector
+    detections = runClassicHogPass(frame);
 
     // Adjust rectangles
     for (auto &rect : detections) {
@@ -3381,8 +3108,8 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
                 // Use black background for performance
                 segmentedFrame = cv::Mat::zeros(frame.size(), frame.type());
             }
-        } else if (m_useDynamicVideoBackground && m_videoPlaybackActive) {
-            // Phase 1: Use pre-advanced video frame from timer instead of reading synchronously
+        } else if (m_useDynamicVideoBackground) {
+            // Use dynamic video background - check if timer is active or use fallback
             try {
                 // THREAD SAFETY: Lock mutex for safe video frame access
                 QMutexLocker locker(&m_dynamicVideoMutex);
@@ -3392,24 +3119,45 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
                     qDebug() << "Successfully using video frame for segmentation - frame size:" << m_dynamicVideoFrame.cols << "x" << m_dynamicVideoFrame.rows;
                     qDebug() << "Segmented frame size:" << segmentedFrame.cols << "x" << segmentedFrame.rows;
                 } else {
-                    // Fallback: read frame synchronously if timer hasn't advanced yet
+                    // Fallback: read frame synchronously if timer hasn't advanced yet or frame is empty
                     cv::Mat nextBg;
                     
-                    // Use CPU video reader (skip CUDA reader since it's failing)
+                    // Use CPU video reader (OpenCL doesn't have direct video decoding)
                     if (m_dynamicVideoCap.isOpened()) {
                         if (!m_dynamicVideoCap.read(nextBg) || nextBg.empty()) {
                             m_dynamicVideoCap.set(cv::CAP_PROP_POS_FRAMES, 0);
                             m_dynamicVideoCap.read(nextBg);
                         }
+                    } else {
+                        // Video capture not opened - try to reopen it
+                        if (!m_dynamicVideoPath.isEmpty()) {
+                            qDebug() << "Video capture not opened, attempting to reopen:" << m_dynamicVideoPath;
+                            m_dynamicVideoCap.open(m_dynamicVideoPath.toStdString(), cv::CAP_MSMF);
+                            if (!m_dynamicVideoCap.isOpened()) {
+                                m_dynamicVideoCap.open(m_dynamicVideoPath.toStdString(), cv::CAP_FFMPEG);
+                            }
+                            if (m_dynamicVideoCap.isOpened()) {
+                                m_dynamicVideoCap.read(nextBg);
+                            }
+                        }
                     }
                     
                     if (!nextBg.empty()) {
                         cv::resize(nextBg, segmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
-                        m_dynamicVideoFrame = segmentedFrame.clone();
+                        m_dynamicVideoFrame = nextBg.clone(); // Store the frame for next time
                         qDebug() << "Fallback: Successfully read video frame for segmentation";
+                        
+                        // Ensure timer is started if it's not already running
+                        if (!m_videoPlaybackActive && m_videoPlaybackTimer) {
+                            m_videoPlaybackTimer->setInterval(m_videoFrameInterval);
+                            m_videoPlaybackTimer->start();
+                            m_videoPlaybackActive = true;
+                            qDebug() << "Started video playback timer from fallback";
+                        }
                     } else {
                         segmentedFrame = cv::Mat::zeros(frame.size(), frame.type());
-                        qWarning() << "Fallback: Failed to read video frame - using black background";
+                        qWarning() << "Fallback: Failed to read video frame - using black background. Video path:" << m_dynamicVideoPath;
+                        qWarning() << "Video capture opened:" << m_dynamicVideoCap.isOpened();
                     }
                 }
             } catch (const cv::Exception &e) {
@@ -3420,16 +3168,8 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
                 segmentedFrame = cv::Mat::zeros(frame.size(), frame.type());
             }
         } else {
-            // Debug why dynamic video background is not being used
-            if (m_useDynamicVideoBackground) {
-                if (!m_videoPlaybackActive) {
-                    qWarning() << "Dynamic video background enabled but playback not active!";
-                } else if (m_dynamicVideoFrame.empty()) {
-                    qWarning() << "Dynamic video background enabled and playback active but no video frame available!";
-                }
-            } else {
-                qDebug() << "Dynamic video background not enabled - using template or black background";
-            }
+            // Not using dynamic video background - use template or black background
+            qDebug() << "Dynamic video background not enabled - using template or black background";
         }
         
         // Only process background templates if we're not using dynamic video background
@@ -3680,13 +3420,13 @@ cv::Mat Capture::createSegmentedFrameGPUOnly(const cv::Mat &frame, const std::ve
                 
                 // CRASH FIX: Validate frames before GPU operations
                 if (!m_dynamicGpuFrame.empty() && m_dynamicGpuFrame.cols > 0 && m_dynamicGpuFrame.rows > 0) {
-                    cv::cuda::resize(m_dynamicGpuFrame, m_gpuSegmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
-                    m_gpuSegmentedFrame.download(segmentedFrame);
+                    cv::resize(m_dynamicGpuFrame, m_gpuSegmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
+                    m_gpuSegmentedFrame.copyTo(segmentedFrame);
                     qDebug() << "RECORDING: Using GPU frame for background";
                 } else if (!m_dynamicVideoFrame.empty() && m_dynamicVideoFrame.cols > 0 && m_dynamicVideoFrame.rows > 0) {
-                    m_gpuBackgroundFrame.upload(m_dynamicVideoFrame);
-                    cv::cuda::resize(m_gpuBackgroundFrame, m_gpuSegmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
-                    m_gpuSegmentedFrame.download(segmentedFrame);
+                    m_dynamicVideoFrame.copyTo(m_gpuBackgroundFrame);
+                    cv::resize(m_gpuBackgroundFrame, m_gpuSegmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
+                    m_gpuSegmentedFrame.copyTo(segmentedFrame);
                     qDebug() << "RECORDING: Using CPU frame for background (uploaded to GPU)";
                 } else {
                     qWarning() << "RECORDING: No valid video frame, using black background";
@@ -3696,7 +3436,7 @@ cv::Mat Capture::createSegmentedFrameGPUOnly(const cv::Mat &frame, const std::ve
                 qWarning() << "RECORDING: GPU processing failed:" << e.what() << "- using black background";
                 segmentedFrame = cv::Mat::zeros(frame.size(), frame.type());
             }
-        } else if (m_useDynamicVideoBackground && m_videoPlaybackActive) {
+        } else if (m_useDynamicVideoBackground) {
             // Phase 2A: GPU-only video background processing
             try {
                 // THREAD SAFETY: Lock mutex for safe GPU frame access
@@ -3704,18 +3444,52 @@ cv::Mat Capture::createSegmentedFrameGPUOnly(const cv::Mat &frame, const std::ve
                 
                 if (!m_dynamicGpuFrame.empty()) {
                     // Already on GPU from NVDEC, avoid CPU upload
-                    cv::cuda::resize(m_dynamicGpuFrame, m_gpuSegmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
-                    m_gpuSegmentedFrame.download(segmentedFrame);
+                    cv::resize(m_dynamicGpuFrame, m_gpuSegmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
+                    m_gpuSegmentedFrame.copyTo(segmentedFrame);
                     qDebug() << "Using NVDEC GPU frame for segmentation - size:" << m_dynamicGpuFrame.cols << "x" << m_dynamicGpuFrame.rows;
                 } else if (!m_dynamicVideoFrame.empty()) {
                     // Fallback: CPU frame upload
-                    m_gpuBackgroundFrame.upload(m_dynamicVideoFrame);
-                    cv::cuda::resize(m_gpuBackgroundFrame, m_gpuSegmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
-                    m_gpuSegmentedFrame.download(segmentedFrame);
+                    m_dynamicVideoFrame.copyTo(m_gpuBackgroundFrame);
+                    cv::resize(m_gpuBackgroundFrame, m_gpuSegmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
+                    m_gpuSegmentedFrame.copyTo(segmentedFrame);
                     qDebug() << "Fallback CPU frame upload for segmentation - size:" << m_dynamicVideoFrame.cols << "x" << m_dynamicVideoFrame.rows;
                 } else {
-                    segmentedFrame = cv::Mat::zeros(frame.size(), frame.type());
-                    qWarning() << "Dynamic video frame is empty - using black background";
+                    // Try to read frame synchronously if empty
+                    cv::Mat nextBg;
+                    if (m_dynamicVideoCap.isOpened()) {
+                        if (!m_dynamicVideoCap.read(nextBg) || nextBg.empty()) {
+                            m_dynamicVideoCap.set(cv::CAP_PROP_POS_FRAMES, 0);
+                            m_dynamicVideoCap.read(nextBg);
+                        }
+                    } else if (!m_dynamicVideoPath.isEmpty()) {
+                        // Try to reopen
+                        m_dynamicVideoCap.open(m_dynamicVideoPath.toStdString(), cv::CAP_MSMF);
+                        if (!m_dynamicVideoCap.isOpened()) {
+                            m_dynamicVideoCap.open(m_dynamicVideoPath.toStdString(), cv::CAP_FFMPEG);
+                        }
+                        if (m_dynamicVideoCap.isOpened()) {
+                            m_dynamicVideoCap.read(nextBg);
+                        }
+                    }
+                    
+                    if (!nextBg.empty()) {
+                        m_dynamicVideoFrame = nextBg.clone();
+                        m_dynamicVideoFrame.copyTo(m_gpuBackgroundFrame);
+                        cv::resize(m_gpuBackgroundFrame, m_gpuSegmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
+                        m_gpuSegmentedFrame.copyTo(segmentedFrame);
+                        qDebug() << "GPU: Successfully read video frame synchronously";
+                        
+                        // Ensure timer is started if it's not already running
+                        if (!m_videoPlaybackActive && m_videoPlaybackTimer) {
+                            m_videoPlaybackTimer->setInterval(m_videoFrameInterval);
+                            m_videoPlaybackTimer->start();
+                            m_videoPlaybackActive = true;
+                            qDebug() << "Started video playback timer from GPU fallback";
+                        }
+                    } else {
+                        segmentedFrame = cv::Mat::zeros(frame.size(), frame.type());
+                        qWarning() << "GPU: Dynamic video frame is empty - using black background. Video path:" << m_dynamicVideoPath;
+                    }
                 }
             } catch (const cv::Exception &e) {
                 qWarning() << "GPU segmentation crashed:" << e.what() << "- using black background";
@@ -3749,14 +3523,14 @@ cv::Mat Capture::createSegmentedFrameGPUOnly(const cv::Mat &frame, const std::ve
             }
 
             if (!cachedBackgroundTemplate.empty()) {
-                // Upload template to GPU
-                m_gpuBackgroundFrame.upload(cachedBackgroundTemplate);
+                // Upload template to GPU (OpenCL)
+                cachedBackgroundTemplate.copyTo(m_gpuBackgroundFrame);
 
                 // Resize on GPU
-                cv::cuda::resize(m_gpuBackgroundFrame, m_gpuSegmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
+                cv::resize(m_gpuBackgroundFrame, m_gpuSegmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
 
                 // Download result
-                m_gpuSegmentedFrame.download(segmentedFrame);
+                m_gpuSegmentedFrame.copyTo(segmentedFrame);
             } else {
                 segmentedFrame = cv::Mat::zeros(frame.size(), frame.type());
             }
@@ -3887,11 +3661,11 @@ cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect 
     // GPU-accelerated edge detection for full body segmentation
     cv::Mat edges;
 
-    if (m_useCUDA) {
+    if (m_useOpenCL) {
         try {
             // Upload ROI to GPU
-            cv::cuda::GpuMat gpu_roi;
-            gpu_roi.upload(roi);
+            cv::UMat gpu_roi;
+            roi.copyTo(gpu_roi);
 
             // CRASH PREVENTION: Validate ROI has 3 channels before BGR2GRAY conversion
             if (roi.empty() || roi.channels() != 3) {
@@ -3900,31 +3674,29 @@ cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect 
             }
 
             // Convert to grayscale on GPU
-            cv::cuda::GpuMat gpu_gray;
-            cv::cuda::cvtColor(gpu_roi, gpu_gray, cv::COLOR_BGR2GRAY);
+            cv::UMat gpu_gray;
+            cv::cvtColor(gpu_roi, gpu_gray, cv::COLOR_BGR2GRAY);
 
-            // Apply Gaussian blur on GPU using CUDA filters
-            cv::cuda::GpuMat gpu_blurred;
-            cv::Ptr<cv::cuda::Filter> gaussian_filter = cv::cuda::createGaussianFilter(gpu_gray.type(), gpu_blurred.type(), cv::Size(5, 5), 0);
-            gaussian_filter->apply(gpu_gray, gpu_blurred);
+            // Apply Gaussian blur on GPU using OpenCL
+            cv::UMat gpu_blurred;
+            cv::GaussianBlur(gpu_gray, gpu_blurred, cv::Size(5, 5), 0);
 
-            // CUDA-accelerated Canny edge detection
-            cv::cuda::GpuMat gpu_edges;
-            cv::Ptr<cv::cuda::CannyEdgeDetector> canny_detector = cv::cuda::createCannyEdgeDetector(15, 45);
-            canny_detector->detect(gpu_blurred, gpu_edges);
+            // OpenCL-accelerated Canny edge detection
+            cv::UMat gpu_edges;
+            cv::Canny(gpu_blurred, gpu_edges, 15, 45);
 
-            // CUDA-accelerated morphological dilation
-            cv::cuda::GpuMat gpu_dilated;
-            cv::Ptr<cv::cuda::Filter> dilate_filter = cv::cuda::createMorphologyFilter(cv::MORPH_DILATE, gpu_edges.type(), cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5)));
-            dilate_filter->apply(gpu_edges, gpu_dilated);
+            // OpenCL-accelerated morphological dilation
+            cv::UMat gpu_dilated;
+            cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
+            cv::dilate(gpu_edges, gpu_dilated, kernel);
 
             // Download result back to CPU
-            gpu_dilated.download(edges);
+            gpu_dilated.copyTo(edges);
 
             qDebug() << "GPU-accelerated edge detection applied";
 
         } catch (const cv::Exception& e) {
-            qWarning() << "CUDA edge detection failed, falling back to CPU:" << e.what();
+            qWarning() << "OpenCL edge detection failed, falling back to CPU:" << e.what();
             // Fallback to CPU processing
             // CRASH PREVENTION: Validate ROI has 3 channels before BGR2GRAY conversion
             if (roi.empty() || roi.channels() != 3) {
@@ -4040,23 +3812,23 @@ cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect 
                 }
             }
             
-            if (m_useCUDA) {
+            if (m_useOpenCL) {
                 try {
                     // GPU-accelerated absolute difference
-                    cv::cuda::GpuMat gpu_roi, gpu_ref, gpu_diff;
-                    gpu_roi.upload(roi);
-                    gpu_ref.upload(refResized);
+                    cv::UMat gpu_roi, gpu_ref, gpu_diff;
+                    roi.copyTo(gpu_roi);
+                    refResized.copyTo(gpu_ref);
                     
-                    cv::cuda::absdiff(gpu_roi, gpu_ref, gpu_diff);
+                    cv::absdiff(gpu_roi, gpu_ref, gpu_diff);
                     
                     // Convert to grayscale and threshold
-                    cv::cuda::GpuMat gpu_gray;
-                    cv::cuda::cvtColor(gpu_diff, gpu_gray, cv::COLOR_BGR2GRAY);
+                    cv::UMat gpu_gray;
+                    cv::cvtColor(gpu_diff, gpu_gray, cv::COLOR_BGR2GRAY);
                     
-                    cv::cuda::GpuMat gpu_mask;
-                    cv::cuda::threshold(gpu_gray, gpu_mask, 30, 255, cv::THRESH_BINARY);
+                    cv::UMat gpu_mask;
+                    cv::threshold(gpu_gray, gpu_mask, 30, 255, cv::THRESH_BINARY);
                     
-                    gpu_mask.download(fgMask);
+                    gpu_mask.copyTo(fgMask);
                 } catch (...) {
                     // Fallback to CPU
                     cv::Mat diff;
@@ -4092,32 +3864,28 @@ cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect 
         }
 
         // GPU-accelerated morphological operations for full body
-        if (m_useCUDA) {
+        if (m_useOpenCL) {
             try {
-                // Upload mask to GPU
-                cv::cuda::GpuMat gpu_fgMask;
-                gpu_fgMask.upload(fgMask);
+                // Upload mask to GPU (OpenCL)
+                cv::UMat gpu_fgMask;
+                fgMask.copyTo(gpu_fgMask);
 
                 // Create morphological kernels
                 cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(7, 7));
                 cv::Mat kernel_dilate = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
 
-                // GPU-accelerated morphological operations
-                cv::Ptr<cv::cuda::Filter> open_filter = cv::cuda::createMorphologyFilter(cv::MORPH_OPEN, gpu_fgMask.type(), kernel);
-                cv::Ptr<cv::cuda::Filter> close_filter = cv::cuda::createMorphologyFilter(cv::MORPH_CLOSE, gpu_fgMask.type(), kernel);
-                cv::Ptr<cv::cuda::Filter> dilate_filter = cv::cuda::createMorphologyFilter(cv::MORPH_DILATE, gpu_fgMask.type(), kernel_dilate);
-
-                open_filter->apply(gpu_fgMask, gpu_fgMask);
-                close_filter->apply(gpu_fgMask, gpu_fgMask);
-                dilate_filter->apply(gpu_fgMask, gpu_fgMask);
+                // GPU-accelerated morphological operations (OpenCL)
+                cv::morphologyEx(gpu_fgMask, gpu_fgMask, cv::MORPH_OPEN, kernel);
+                cv::morphologyEx(gpu_fgMask, gpu_fgMask, cv::MORPH_CLOSE, kernel);
+                cv::dilate(gpu_fgMask, gpu_fgMask, kernel_dilate);
 
                 // Download result back to CPU
-                gpu_fgMask.download(fgMask);
+                gpu_fgMask.copyTo(fgMask);
 
                 qDebug() << "GPU-accelerated morphological operations applied";
 
             } catch (const cv::Exception& e) {
-                qWarning() << "CUDA morphological operations failed, falling back to CPU:" << e.what();
+                qWarning() << "OpenCL morphological operations failed, falling back to CPU:" << e.what();
                 // Fallback to CPU processing
                 cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(7, 7));
                 cv::morphologyEx(fgMask, fgMask, cv::MORPH_OPEN, kernel);
@@ -4146,34 +3914,34 @@ cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect 
         // GPU-accelerated color space conversion and thresholding
         cv::Mat combinedMask;
 
-        if (m_useCUDA) {
+        if (m_useOpenCL) {
             try {
                 // Upload ROI to GPU
-                cv::cuda::GpuMat gpu_roi;
-                gpu_roi.upload(roi);
+                cv::UMat gpu_roi;
+                roi.copyTo(gpu_roi);
 
                 // Convert to HSV on GPU
-                cv::cuda::GpuMat gpu_hsv;
-                cv::cuda::cvtColor(gpu_roi, gpu_hsv, cv::COLOR_BGR2HSV);
+                cv::UMat gpu_hsv;
+                cv::cvtColor(gpu_roi, gpu_hsv, cv::COLOR_BGR2HSV);
 
                 // Create masks for skin-like colors and non-background colors on GPU
-                cv::cuda::GpuMat gpu_skinMask, gpu_colorMask;
+                cv::UMat gpu_skinMask, gpu_colorMask;
                 // Widened skin range and relaxed saturation/value to better capture varied tones/lighting
-                cv::cuda::inRange(gpu_hsv, cv::Scalar(0, 10, 40), cv::Scalar(25, 255, 255), gpu_skinMask);
+                cv::inRange(gpu_hsv, cv::Scalar(0, 10, 40), cv::Scalar(25, 255, 255), gpu_skinMask);
                 // Broader general color mask with relaxed S/V to include darker/low-saturation clothing
-                cv::cuda::inRange(gpu_hsv, cv::Scalar(0, 15, 35), cv::Scalar(180, 255, 255), gpu_colorMask);
+                cv::inRange(gpu_hsv, cv::Scalar(0, 15, 35), cv::Scalar(180, 255, 255), gpu_colorMask);
 
                 // Combine masks on GPU using bitwise_or
-                cv::cuda::GpuMat gpu_combinedMask;
-                cv::cuda::bitwise_or(gpu_skinMask, gpu_colorMask, gpu_combinedMask);
+                cv::UMat gpu_combinedMask;
+                cv::bitwise_or(gpu_skinMask, gpu_colorMask, gpu_combinedMask);
 
                 // Download result back to CPU
-                gpu_combinedMask.download(combinedMask);
+                gpu_combinedMask.copyTo(combinedMask);
 
                 qDebug() << "GPU-accelerated color segmentation applied";
 
             } catch (const cv::Exception& e) {
-                qWarning() << "CUDA color segmentation failed, falling back to CPU:" << e.what();
+                qWarning() << "OpenCL color segmentation failed, falling back to CPU:" << e.what();
                 // Fallback to CPU processing
                 cv::Mat hsv;
                 cv::cvtColor(roi, hsv, cv::COLOR_BGR2HSV);
@@ -4195,29 +3963,26 @@ cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect 
         }
 
         // GPU-accelerated morphological operations for color segmentation
-        if (m_useCUDA) {
+        if (m_useOpenCL) {
             try {
                 // Upload mask to GPU
-                cv::cuda::GpuMat gpu_combinedMask;
-                gpu_combinedMask.upload(combinedMask);
+                cv::UMat gpu_combinedMask;
+                combinedMask.copyTo(gpu_combinedMask);
 
                 // Create morphological kernel
                 cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
 
-                // GPU-accelerated morphological operations
-                cv::Ptr<cv::cuda::Filter> open_filter = cv::cuda::createMorphologyFilter(cv::MORPH_OPEN, gpu_combinedMask.type(), kernel);
-                cv::Ptr<cv::cuda::Filter> close_filter = cv::cuda::createMorphologyFilter(cv::MORPH_CLOSE, gpu_combinedMask.type(), kernel);
-
-                open_filter->apply(gpu_combinedMask, gpu_combinedMask);
-                close_filter->apply(gpu_combinedMask, gpu_combinedMask);
+                // GPU-accelerated morphological operations (OpenCL)
+                cv::morphologyEx(gpu_combinedMask, gpu_combinedMask, cv::MORPH_OPEN, kernel);
+                cv::morphologyEx(gpu_combinedMask, gpu_combinedMask, cv::MORPH_CLOSE, kernel);
 
                 // Download result back to CPU
-                gpu_combinedMask.download(combinedMask);
+                gpu_combinedMask.copyTo(combinedMask);
 
                 qDebug() << "GPU-accelerated color morphological operations applied";
 
             } catch (const cv::Exception& e) {
-                qWarning() << "CUDA color morphological operations failed, falling back to CPU:" << e.what();
+                qWarning() << "OpenCL color morphological operations failed, falling back to CPU:" << e.what();
                 // Fallback to CPU processing
                 cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
                 cv::morphologyEx(combinedMask, combinedMask, cv::MORPH_OPEN, kernel);
@@ -4269,30 +4034,27 @@ cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect 
         }
 
         // GPU-accelerated final morphological cleanup for full body
-        if (m_useCUDA) {
+        if (m_useOpenCL) {
             try {
                 // Upload mask to GPU
-                cv::cuda::GpuMat gpu_roiMask;
-                gpu_roiMask.upload(roiMask);
+                cv::UMat gpu_roiMask;
+                roiMask.copyTo(gpu_roiMask);
 
                 // Create morphological kernels
                 cv::Mat kernel_clean = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(7, 7));
                 cv::Mat kernel_dilate = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
 
-                // GPU-accelerated morphological operations
-                cv::Ptr<cv::cuda::Filter> close_filter = cv::cuda::createMorphologyFilter(cv::MORPH_CLOSE, gpu_roiMask.type(), kernel_clean);
-                cv::Ptr<cv::cuda::Filter> dilate_filter = cv::cuda::createMorphologyFilter(cv::MORPH_DILATE, gpu_roiMask.type(), kernel_dilate);
-
-                close_filter->apply(gpu_roiMask, gpu_roiMask);
-                dilate_filter->apply(gpu_roiMask, gpu_roiMask);
+                // GPU-accelerated morphological operations (OpenCL)
+                cv::morphologyEx(gpu_roiMask, gpu_roiMask, cv::MORPH_CLOSE, kernel_clean);
+                cv::dilate(gpu_roiMask, gpu_roiMask, kernel_dilate);
 
                 // Download result back to CPU
-                gpu_roiMask.download(roiMask);
+                gpu_roiMask.copyTo(roiMask);
 
                 qDebug() << "GPU-accelerated final morphological cleanup applied";
 
             } catch (const cv::Exception& e) {
-                qWarning() << "CUDA final morphological cleanup failed, falling back to CPU:" << e.what();
+                qWarning() << "OpenCL final morphological cleanup failed, falling back to CPU:" << e.what();
                 // Fallback to CPU processing
                 cv::Mat kernel_clean = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(7, 7));
         cv::morphologyEx(roiMask, roiMask, cv::MORPH_CLOSE, kernel_clean);
@@ -4329,7 +4091,7 @@ cv::Mat Capture::enhancedSilhouetteSegment(const cv::Mat &frame, const cv::Rect 
     return finalMask;
 }
 // Phase 2A: GPU-Only Silhouette Segmentation
-cv::Mat Capture::enhancedSilhouetteSegmentGPUOnly(const cv::cuda::GpuMat &gpuFrame, const cv::Rect &detection)
+cv::Mat Capture::enhancedSilhouetteSegmentGPUOnly(const cv::UMat &gpuFrame, const cv::Rect &detection)
 {
     if (gpuFrame.empty()) {
         return cv::Mat();
@@ -4365,8 +4127,8 @@ cv::Mat Capture::enhancedSilhouetteSegmentGPUOnly(const cv::cuda::GpuMat &gpuFra
     if (!m_gpuMemoryPoolInitialized || !m_gpuMemoryPool.isInitialized()) {
         qWarning() << " GPU Memory Pool not available, falling back to standard GPU processing";
         // Fallback to standard GPU processing (existing code)
-    cv::cuda::GpuMat gpuRoi = gpuFrame(expandedRect);
-        cv::cuda::GpuMat gpuRoiMask(gpuRoi.size(), CV_8UC1, cv::Scalar(0));
+    cv::UMat gpuRoi = gpuFrame(expandedRect);
+        cv::UMat gpuRoiMask(gpuRoi.size(), CV_8UC1, cv::Scalar(0));
 
         // CRASH PREVENTION: Validate gpuRoi has 3 channels before BGR2GRAY conversion
         if (gpuRoi.empty() || gpuRoi.channels() != 3) {
@@ -4375,53 +4137,46 @@ cv::Mat Capture::enhancedSilhouetteSegmentGPUOnly(const cv::cuda::GpuMat &gpuFra
         }
         
         // Use standard GPU processing without memory pool
-    cv::cuda::GpuMat gpuGray, gpuEdges;
-    cv::cuda::cvtColor(gpuRoi, gpuGray, cv::COLOR_BGR2GRAY);
+    cv::UMat gpuGray, gpuEdges;
+    cv::cvtColor(gpuRoi, gpuGray, cv::COLOR_BGR2GRAY);
 
-        cv::Ptr<cv::cuda::CannyEdgeDetector> canny_detector = cv::cuda::createCannyEdgeDetector(50, 150);
-        canny_detector->detect(gpuGray, gpuEdges);
+        // OpenCL Canny edge detection
+        cv::Canny(gpuGray, gpuEdges, 50, 150);
 
         cv::Mat kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3));
-        cv::Ptr<cv::cuda::Filter> close_filter = cv::cuda::createMorphologyFilter(cv::MORPH_CLOSE, gpuEdges.type(), kernel);
-        cv::Ptr<cv::cuda::Filter> open_filter = cv::cuda::createMorphologyFilter(cv::MORPH_OPEN, gpuEdges.type(), kernel);
-        cv::Ptr<cv::cuda::Filter> dilate_filter = cv::cuda::createMorphologyFilter(cv::MORPH_DILATE, gpuEdges.type(), kernel);
+        cv::morphologyEx(gpuEdges, gpuRoiMask, cv::MORPH_CLOSE, kernel);
+        cv::morphologyEx(gpuRoiMask, gpuRoiMask, cv::MORPH_OPEN, kernel);
+        cv::dilate(gpuRoiMask, gpuRoiMask, kernel);
 
-        close_filter->apply(gpuEdges, gpuRoiMask);
-        open_filter->apply(gpuRoiMask, gpuRoiMask);
-        dilate_filter->apply(gpuRoiMask, gpuRoiMask);
-
-        cv::cuda::GpuMat gpuConnectedMask;
-        cv::cuda::threshold(gpuRoiMask, gpuConnectedMask, 127, 255, cv::THRESH_BINARY);
-        close_filter->apply(gpuConnectedMask, gpuConnectedMask);
+        cv::UMat gpuConnectedMask;
+        cv::threshold(gpuRoiMask, gpuConnectedMask, 127, 255, cv::THRESH_BINARY);
+        cv::morphologyEx(gpuConnectedMask, gpuConnectedMask, cv::MORPH_CLOSE, kernel);
 
         cv::Mat kernel_final = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
-        cv::Ptr<cv::cuda::Filter> final_filter = cv::cuda::createMorphologyFilter(cv::MORPH_CLOSE, gpuConnectedMask.type(), kernel_final);
-        final_filter->apply(gpuConnectedMask, gpuConnectedMask);
+        cv::morphologyEx(gpuConnectedMask, gpuConnectedMask, cv::MORPH_CLOSE, kernel_final);
 
         cv::Mat finalMask;
-        gpuConnectedMask.download(finalMask);
+        gpuConnectedMask.copyTo(finalMask);
 
-        cv::cuda::GpuMat gpuFullMask(gpuFrame.size(), CV_8UC1, cv::Scalar(0));
-    cv::cuda::GpuMat gpuFinalMask;
-    gpuFinalMask.upload(finalMask);
+        cv::UMat gpuFullMask(gpuFrame.size(), CV_8UC1, cv::Scalar(0));
+        cv::UMat gpuFinalMask;
+        finalMask.copyTo(gpuFinalMask);
         gpuFinalMask.copyTo(gpuFullMask(expandedRect));
 
         cv::Mat fullMask;
-        gpuFullMask.download(fullMask);
+        gpuFullMask.copyTo(fullMask);
 
         qDebug() << " Phase 2A: Standard GPU processing completed (memory pool not available)";
         return fullMask;
     }
 
     // Extract ROI on GPU using memory pool
-    cv::cuda::GpuMat gpuRoi = gpuFrame(expandedRect);
-    cv::cuda::GpuMat& gpuRoiMask = m_gpuMemoryPool.getNextSegmentationBuffer();
+    cv::UMat gpuRoi = gpuFrame(expandedRect);
+    cv::UMat& gpuRoiMask = m_gpuMemoryPool.getNextSegmentationBuffer();
     gpuRoiMask.create(gpuRoi.size(), CV_8UC1);
     gpuRoiMask.setTo(cv::Scalar(0));
 
-    // Get CUDA streams for parallel processing
-    cv::cuda::Stream& detectionStream = m_gpuMemoryPool.getDetectionStream();
-    cv::cuda::Stream& segmentationStream = m_gpuMemoryPool.getSegmentationStream();
+    // OpenCL doesn't use explicit streams like CUDA - operations are automatically parallelized
 
     // CRASH PREVENTION: Validate gpuRoi has 3 channels before BGR2GRAY conversion
     if (gpuRoi.empty() || gpuRoi.channels() != 3) {
@@ -4430,62 +4185,51 @@ cv::Mat Capture::enhancedSilhouetteSegmentGPUOnly(const cv::cuda::GpuMat &gpuFra
     }
     
     // Step 1: GPU Color Conversion (async)
-    cv::cuda::GpuMat& gpuGray = m_gpuMemoryPool.getNextTempBuffer();
-    cv::cuda::GpuMat& gpuEdges = m_gpuMemoryPool.getNextDetectionBuffer();
-    cv::cuda::cvtColor(gpuRoi, gpuGray, cv::COLOR_BGR2GRAY, 0, detectionStream);
+    cv::UMat& gpuGray = m_gpuMemoryPool.getNextTempBuffer();
+    cv::UMat& gpuEdges = m_gpuMemoryPool.getNextDetectionBuffer();
+    cv::cvtColor(gpuRoi, gpuGray, cv::COLOR_BGR2GRAY);
 
-    // Step 2: GPU Canny Edge Detection (async) - using pre-created detector
-    cv::Ptr<cv::cuda::CannyEdgeDetector>& canny_detector = m_gpuMemoryPool.getCannyDetector();
-    canny_detector->detect(gpuGray, gpuEdges, detectionStream);
+    // Step 2: GPU Canny Edge Detection (OpenCL)
+    cv::Canny(gpuGray, gpuEdges, 50, 150);
 
-    // Step 3: GPU Morphological Operations (async) - using pre-created filters
-    cv::Ptr<cv::cuda::Filter>& close_filter = m_gpuMemoryPool.getMorphCloseFilter();
-    cv::Ptr<cv::cuda::Filter>& open_filter = m_gpuMemoryPool.getMorphOpenFilter();
-    cv::Ptr<cv::cuda::Filter>& dilate_filter = m_gpuMemoryPool.getMorphDilateFilter();
+    // Step 3: GPU Morphological Operations (OpenCL)
+    cv::Mat kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3));
 
-    // Apply GPU morphological pipeline (async)
-    close_filter->apply(gpuEdges, gpuRoiMask, detectionStream);      // Close gaps
-    open_filter->apply(gpuRoiMask, gpuRoiMask, detectionStream);     // Remove noise
-    dilate_filter->apply(gpuRoiMask, gpuRoiMask, detectionStream);   // Expand regions
+    // Apply GPU morphological pipeline (OpenCL)
+    cv::morphologyEx(gpuEdges, gpuRoiMask, cv::MORPH_CLOSE, kernel);      // Close gaps
+    cv::morphologyEx(gpuRoiMask, gpuRoiMask, cv::MORPH_OPEN, kernel);     // Remove noise
+    cv::dilate(gpuRoiMask, gpuRoiMask, kernel);   // Expand regions
 
     // Step 4: GPU-accelerated area-based filtering (async)
-    cv::cuda::GpuMat& gpuConnectedMask = m_gpuMemoryPool.getNextSegmentationBuffer();
+    cv::UMat& gpuConnectedMask = m_gpuMemoryPool.getNextSegmentationBuffer();
 
     // Create a mask for large connected regions (person-like areas) - async
-    cv::cuda::threshold(gpuRoiMask, gpuConnectedMask, 127, 255, cv::THRESH_BINARY, segmentationStream);
+    cv::threshold(gpuRoiMask, gpuConnectedMask, 127, 255, cv::THRESH_BINARY);
 
-    // Apply additional GPU morphological cleanup (async)
-    close_filter->apply(gpuConnectedMask, gpuConnectedMask, segmentationStream);
+    // Apply additional GPU morphological cleanup (OpenCL)
+    cv::morphologyEx(gpuConnectedMask, gpuConnectedMask, cv::MORPH_CLOSE, kernel);
 
-    // Step 5: Final GPU morphological cleanup (async)
+    // Step 5: Final GPU morphological cleanup (OpenCL)
     cv::Mat kernel_final = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
-    cv::Ptr<cv::cuda::Filter> final_filter = cv::cuda::createMorphologyFilter(cv::MORPH_CLOSE, gpuConnectedMask.type(), kernel_final);
-    final_filter->apply(gpuConnectedMask, gpuConnectedMask, segmentationStream);
-
-    //  SYNCHRONIZE STREAMS BEFORE DOWNLOAD
-    detectionStream.waitForCompletion();
-    segmentationStream.waitForCompletion();
+    cv::morphologyEx(gpuConnectedMask, gpuConnectedMask, cv::MORPH_CLOSE, kernel_final);
 
     // Step 6: Single download at the end (minimize GPU-CPU transfers)
     cv::Mat finalMask;
-    gpuConnectedMask.download(finalMask);
+    gpuConnectedMask.copyTo(finalMask);
 
     //  GPU-OPTIMIZED: Create full-size mask directly on GPU
-    cv::cuda::GpuMat& gpuFullMask = m_gpuMemoryPool.getNextFrameBuffer();
+    cv::UMat& gpuFullMask = m_gpuMemoryPool.getNextFrameBuffer();
     gpuFullMask.create(gpuFrame.size(), CV_8UC1);
     gpuFullMask.setTo(cv::Scalar(0));
 
-    // Copy the processed ROI back to the full-size mask on GPU (async)
-    cv::cuda::GpuMat gpuFinalMask;
-    gpuFinalMask.upload(finalMask, m_gpuMemoryPool.getCompositionStream());
-    gpuFinalMask.copyTo(gpuFullMask(expandedRect), m_gpuMemoryPool.getCompositionStream());
-
-    // Synchronize composition stream and download
-    m_gpuMemoryPool.getCompositionStream().waitForCompletion();
+    // Copy the processed ROI back to the full-size mask on GPU (OpenCL)
+    cv::UMat gpuFinalMask;
+    finalMask.copyTo(gpuFinalMask);
+    gpuFinalMask.copyTo(gpuFullMask(expandedRect));
 
     // Single download at the very end
     cv::Mat fullMask;
-    gpuFullMask.download(fullMask);
+    gpuFullMask.copyTo(fullMask);
 
     qDebug() << " Phase 2A: GPU MEMORY POOL + ASYNC STREAMS silhouette segmentation completed";
 
@@ -4530,12 +4274,11 @@ void Capture::onPersonDetectionFinished()
                 m_lastSegmentedFrame = result.clone();
 
                 // Update GPU utilization flags
-                if (m_useCUDA) {
-                    m_cudaUtilized = true;
-                    m_gpuUtilized = false;
+                if (m_useOpenCL) {
+                    m_gpuUtilized = true;
                 } else if (m_useGPU) {
                     m_gpuUtilized = true;
-                    m_cudaUtilized = false;
+                    // m_cudaUtilized removed - using OpenCL
                 }
 
                 qDebug() << "Person detection finished - segmented frame updated, size:"
@@ -4592,7 +4335,6 @@ void Capture::togglePersonDetection()
         
         // Reset GPU utilization flags
         m_gpuUtilized = false;
-        m_cudaUtilized = false;
         } else {
         m_segmentationEnabledInCapture = true;
         qDebug() << "Segmentation ENABLED via button";
@@ -4613,9 +4355,9 @@ bool Capture::isGPUAvailable() const
     return m_useGPU;
 }
 
-bool Capture::isCUDAAvailable() const
+bool Capture::isOpenCLAvailable() const
 {
-    return m_useCUDA;
+    return m_useOpenCL && cv::ocl::useOpenCL();
 }
 
 // --- Green-screen configuration API ---
@@ -4687,14 +4429,14 @@ cv::Mat Capture::getMotionMask(const cv::Mat &frame)
             }
         }
         
-        if (m_useCUDA) {
+        if (m_useOpenCL) {
             try {
                 // GPU-accelerated absolute difference
-                cv::cuda::GpuMat gpu_frame, gpu_ref, gpu_diff;
-                gpu_frame.upload(frame);
-                gpu_ref.upload(refResized);
+                cv::UMat gpu_frame, gpu_ref, gpu_diff;
+                frame.copyTo(gpu_frame);
+                refResized.copyTo(gpu_ref);
                 
-                cv::cuda::absdiff(gpu_frame, gpu_ref, gpu_diff);
+                cv::absdiff(gpu_frame, gpu_ref, gpu_diff);
                 
                 // CRASH PREVENTION: Validate diff has 3 channels before BGR2GRAY conversion
                 if (gpu_diff.empty() || gpu_diff.channels() != 3) {
@@ -4721,13 +4463,13 @@ cv::Mat Capture::getMotionMask(const cv::Mat &frame)
                 }
                 
                 // Convert to grayscale and threshold
-                cv::cuda::GpuMat gpu_gray;
-                cv::cuda::cvtColor(gpu_diff, gpu_gray, cv::COLOR_BGR2GRAY);
+                cv::UMat gpu_gray;
+                cv::cvtColor(gpu_diff, gpu_gray, cv::COLOR_BGR2GRAY);
                 
-                cv::cuda::GpuMat gpu_mask;
-                cv::cuda::threshold(gpu_gray, gpu_mask, 30, 255, cv::THRESH_BINARY);
+                cv::UMat gpu_mask;
+                cv::threshold(gpu_gray, gpu_mask, 30, 255, cv::THRESH_BINARY);
                 
-                gpu_mask.download(fgMask);
+                gpu_mask.copyTo(fgMask);
             } catch (...) {
                 // Fallback to CPU
                 cv::Mat diff;
@@ -4766,33 +4508,30 @@ cv::Mat Capture::getMotionMask(const cv::Mat &frame)
     }
 
     // Fallback to MOG2 background subtractor if no static reference
-    if (m_useCUDA) {
-        // CUDA-accelerated background subtraction using cv::cuda::BackgroundSubtractorMOG2
+    if (m_useOpenCL) {
+        // OpenCL-accelerated background subtraction (using CPU BackgroundSubtractorMOG2 with OpenCL UMat)
         try {
-            // Upload to GPU
-            cv::cuda::GpuMat gpu_frame;
-            gpu_frame.upload(frame);
+            // Upload to GPU (OpenCL)
+            cv::UMat gpu_frame;
+            frame.copyTo(gpu_frame);
 
-            // Create CUDA background subtractor if not already created
-            static cv::Ptr<cv::cuda::BackgroundSubtractorMOG2> cuda_bg_subtractor;
-            if (cuda_bg_subtractor.empty()) {
-                cuda_bg_subtractor = cv::cuda::createBackgroundSubtractorMOG2(500, 16, false);
-            }
+            // Use CPU background subtractor with OpenCL UMat (OpenCV automatically uses OpenCL when available)
+            // Background subtractor works with UMat automatically
 
-            // CUDA-accelerated background subtraction
-            cv::cuda::GpuMat gpu_fgmask;
-            cuda_bg_subtractor->apply(gpu_frame, gpu_fgmask, -1);
+            // OpenCL-accelerated background subtraction (using CPU BackgroundSubtractorMOG2 with UMat)
+            cv::UMat gpu_fgmask;
+            m_bgSubtractor->apply(gpu_frame, gpu_fgmask, -1);
 
             // Download result to CPU
-            gpu_fgmask.download(fgMask);
+            gpu_fgmask.copyTo(fgMask);
 
-            // Apply morphological operations on CPU (OpenCV CUDA limitation)
+            // Apply morphological operations on CPU
             cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
             cv::morphologyEx(fgMask, fgMask, cv::MORPH_OPEN, kernel);
             cv::morphologyEx(fgMask, fgMask, cv::MORPH_CLOSE, kernel);
 
         } catch (...) {
-            // Fallback to CPU if CUDA fails
+            // Fallback to CPU if OpenCL fails
             m_bgSubtractor->apply(frame, fgMask);
             cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
             cv::morphologyEx(fgMask, fgMask, cv::MORPH_OPEN, kernel);
@@ -5048,9 +4787,9 @@ cv::Mat Capture::createGreenScreenPersonMask(const cv::Mat &frame) const
 }
 
 //  GPU-ACCELERATED GREEN SCREEN MASKING with Optimized Memory Management
-cv::cuda::GpuMat Capture::createGreenScreenPersonMaskGPU(const cv::cuda::GpuMat &gpuFrame) const
+cv::UMat Capture::createGreenScreenPersonMaskGPU(const cv::UMat &gpuFrame) const
 {
-    cv::cuda::GpuMat emptyMask;
+    cv::UMat emptyMask;
     if (gpuFrame.empty()) {
         qWarning() << "GPU frame is empty, cannot create green screen mask";
         return emptyMask;
@@ -5059,7 +4798,7 @@ cv::cuda::GpuMat Capture::createGreenScreenPersonMaskGPU(const cv::cuda::GpuMat 
     if (!m_bgModelInitialized) {
         try {
             cv::Mat fallbackFrame;
-            gpuFrame.download(fallbackFrame);
+            gpuFrame.copyTo(fallbackFrame);
             updateGreenBackgroundModel(fallbackFrame);
         } catch (const cv::Exception &) {
             // Ignore download errors; thresholds fallback to defaults
@@ -5069,11 +4808,10 @@ cv::cuda::GpuMat Capture::createGreenScreenPersonMaskGPU(const cv::cuda::GpuMat 
     try {
         //  INITIALIZE CACHED FILTERS (once only, reused for all frames)
         static bool filtersInitialized = false;
-        if (!filtersInitialized && cv::cuda::getCudaEnabledDeviceCount() > 0) {
+        if (!filtersInitialized && cv::ocl::useOpenCL()) {
             try {
-                // Cache filters to avoid recreating on every frame
-                const_cast<Capture*>(this)->m_greenScreenCannyDetector = cv::cuda::createCannyEdgeDetector(30, 90);
-                const_cast<Capture*>(this)->m_greenScreenGaussianBlur = cv::cuda::createGaussianFilter(CV_8U, CV_8U, cv::Size(5, 5), 1.0);
+                // Cache filters removed - OpenCL uses direct operations
+                // Canny and GaussianBlur work directly with UMat
                 filtersInitialized = true;
                 qDebug() << "GPU green screen filters initialized and cached";
             } catch (const cv::Exception &e) {
@@ -5084,36 +4822,36 @@ cv::cuda::GpuMat Capture::createGreenScreenPersonMaskGPU(const cv::cuda::GpuMat 
 
         // GPU: FAST & ACCURATE - Works for both green AND teal/cyan backdrops
         // Split BGR channels
-        std::vector<cv::cuda::GpuMat> channels(3);
-        cv::cuda::split(gpuFrame, channels);
-        cv::cuda::GpuMat green = channels[1];
-        cv::cuda::GpuMat red = channels[2];
+        std::vector<cv::UMat> channels(3);
+        cv::split(gpuFrame, channels);
+        cv::UMat green = channels[1];
+        cv::UMat red = channels[2];
 
         // FIXED: Properly detect green/cyan/teal while preserving blue colors
         // Green: G > R, G > B  |  Cyan/Teal: G > R, B > R, G ≈ B
         // Blue: B > R, B > G (should NOT be removed)
-        cv::cuda::GpuMat blue = channels[0];
-        cv::cuda::GpuMat greenDominantR;
-        cv::cuda::subtract(green, red, greenDominantR);  // G - R
+        cv::UMat blue = channels[0];
+        cv::UMat greenDominantR;
+        cv::subtract(green, red, greenDominantR);  // G - R
         
-        cv::cuda::GpuMat greenDominantB;
-        cv::cuda::subtract(green, blue, greenDominantB);  // G - B
+        cv::UMat greenDominantB;
+        cv::subtract(green, blue, greenDominantB);  // G - B
         
         // Green/cyan/teal: G > R AND (G > B OR G ≈ B)
         // This excludes pure blue colors where B > G
-        cv::cuda::GpuMat greenOrTeal;
-        cv::cuda::threshold(greenDominantR, greenOrTeal, 15, 255, cv::THRESH_BINARY);  // G > R
+        cv::UMat greenOrTeal;
+        cv::threshold(greenDominantR, greenOrTeal, 15, 255, cv::THRESH_BINARY);  // G > R
         
-        cv::cuda::GpuMat greenDominatesBlue;
-        cv::cuda::threshold(greenDominantB, greenDominatesBlue, -10, 255, cv::THRESH_BINARY);  // G > B - 10 (allows G ≈ B)
+        cv::UMat greenDominatesBlue;
+        cv::threshold(greenDominantB, greenDominatesBlue, -10, 255, cv::THRESH_BINARY);  // G > B - 10 (allows G ≈ B)
         
         // Combine: green/teal = (G > R) AND (G > B - 10)
-        cv::cuda::GpuMat greenMask;
-        cv::cuda::bitwise_and(greenOrTeal, greenDominatesBlue, greenMask);
+        cv::UMat greenMask;
+        cv::bitwise_and(greenOrTeal, greenDominatesBlue, greenMask);
 
         // Invert: NOT green/teal = person (preserves blue colors)
-        cv::cuda::GpuMat gpuPersonMask;
-        cv::cuda::bitwise_not(greenMask, gpuPersonMask);
+        cv::UMat gpuPersonMask;
+        cv::bitwise_not(greenMask, gpuPersonMask);
 
         return gpuPersonMask;
 
@@ -5564,70 +5302,70 @@ cv::Mat Capture::extractPersonWithAlphaMatting(const cv::Mat &frame, const cv::M
 }
 
 // GPU-ACCELERATED GREEN SPILL REMOVAL - Remove green tint from person pixels
-cv::cuda::GpuMat Capture::removeGreenSpillGPU(const cv::cuda::GpuMat &gpuFrame, const cv::cuda::GpuMat &gpuMask) const
+cv::UMat Capture::removeGreenSpillGPU(const cv::UMat &gpuFrame, const cv::UMat &gpuMask) const
 {
-    cv::cuda::GpuMat result;
+    cv::UMat result;
     if (gpuFrame.empty() || gpuMask.empty()) {
         return gpuFrame.clone();
     }
 
     try {
         // Convert to HSV for color correction
-        cv::cuda::GpuMat gpuHSV;
-        cv::cuda::cvtColor(gpuFrame, gpuHSV, cv::COLOR_BGR2HSV);
+        cv::UMat gpuHSV;
+        cv::cvtColor(gpuFrame, gpuHSV, cv::COLOR_BGR2HSV);
 
         // Split HSV channels
-        std::vector<cv::cuda::GpuMat> hsvChannels(3);
-        cv::cuda::split(gpuHSV, hsvChannels);
+        std::vector<cv::UMat> hsvChannels(3);
+        cv::split(gpuHSV, hsvChannels);
 
         // Create a desaturation map based on green hue proximity
         // Pixels closer to green hue will be more desaturated
-        cv::cuda::GpuMat hueChannel = hsvChannels[0].clone();
+        cv::UMat hueChannel = hsvChannels[0].clone();
         
         // Create desaturation mask for greenish pixels (narrower range to preserve person's colors)
-        cv::cuda::GpuMat greenishMask1, greenishMask2;
-        cv::cuda::threshold(hueChannel, greenishMask1, m_greenHueMin, 255, cv::THRESH_BINARY);  // No extra margin
-        cv::cuda::threshold(hueChannel, greenishMask2, m_greenHueMax, 255, cv::THRESH_BINARY_INV);  // No extra margin
-        cv::cuda::GpuMat greenishRange;
-        cv::cuda::bitwise_and(greenishMask1, greenishMask2, greenishRange);
+        cv::UMat greenishMask1, greenishMask2;
+        cv::threshold(hueChannel, greenishMask1, m_greenHueMin, 255, cv::THRESH_BINARY);  // No extra margin
+        cv::threshold(hueChannel, greenishMask2, m_greenHueMax, 255, cv::THRESH_BINARY_INV);  // No extra margin
+        cv::UMat greenishRange;
+        cv::bitwise_and(greenishMask1, greenishMask2, greenishRange);
         
         // Desaturate pixels in green hue range
-        cv::cuda::GpuMat satChannel = hsvChannels[1].clone();
-        cv::cuda::GpuMat desaturated;
-        cv::cuda::multiply(satChannel, cv::Scalar(0.3), desaturated, 1.0, satChannel.type()); // Reduce saturation to 30%
+        cv::UMat satChannel = hsvChannels[1].clone();
+        cv::UMat desaturated;
+        cv::multiply(satChannel, cv::Scalar(0.3), desaturated, 1.0, satChannel.type()); // Reduce saturation to 30%
         
         // Apply desaturation only to greenish pixels within person mask
-        cv::cuda::GpuMat spillMask;
-        cv::cuda::bitwise_and(greenishRange, gpuMask, spillMask);
+        cv::UMat spillMask;
+        cv::bitwise_and(greenishRange, gpuMask, spillMask);
         desaturated.copyTo(satChannel, spillMask);
         
         // Merge back
         hsvChannels[1] = satChannel;
-        cv::cuda::merge(hsvChannels, gpuHSV);
+        cv::merge(hsvChannels, gpuHSV);
         
         // Convert back to BGR
-        cv::cuda::cvtColor(gpuHSV, result, cv::COLOR_HSV2BGR);
+        cv::cvtColor(gpuHSV, result, cv::COLOR_HSV2BGR);
         
         // Also apply color correction in BGR space to remove green channel dominance
-        std::vector<cv::cuda::GpuMat> bgrChannels(3);
-        cv::cuda::split(result, bgrChannels);
+        std::vector<cv::UMat> bgrChannels(3);
+        cv::split(result, bgrChannels);
         
         // Reduce green channel where spill is detected
-        cv::cuda::GpuMat reducedGreen;
-        cv::cuda::multiply(bgrChannels[1], cv::Scalar(0.85), reducedGreen, 1.0, bgrChannels[1].type());
+        cv::UMat reducedGreen;
+        cv::multiply(bgrChannels[1], cv::Scalar(0.85), reducedGreen, 1.0, bgrChannels[1].type());
         reducedGreen.copyTo(bgrChannels[1], spillMask);
         
         // Slightly boost blue and red to compensate
-        cv::cuda::GpuMat boostedBlue, boostedRed;
-        cv::cuda::multiply(bgrChannels[0], cv::Scalar(1.08), boostedBlue, 1.0, bgrChannels[0].type());
-        cv::cuda::multiply(bgrChannels[2], cv::Scalar(1.08), boostedRed, 1.0, bgrChannels[2].type());
+        cv::UMat boostedBlue, boostedRed;
+        cv::multiply(bgrChannels[0], cv::Scalar(1.08), boostedBlue, 1.0, bgrChannels[0].type());
+        cv::multiply(bgrChannels[2], cv::Scalar(1.08), boostedRed, 1.0, bgrChannels[2].type());
         boostedBlue.copyTo(bgrChannels[0], spillMask);
         boostedRed.copyTo(bgrChannels[2], spillMask);
         
-        cv::cuda::merge(bgrChannels, result);
+        cv::merge(bgrChannels, result);
         
         // Synchronize
-        cv::cuda::Stream::Null().waitForCompletion();
+        // OpenCL synchronization is automatic
         
         return result;
 
@@ -5782,7 +5520,7 @@ void Capture::handleFirstFrame()
     hideLoadingCameraLabel();
 
     //  Initialize GPU Memory Pool when first frame is received
-    if (!m_gpuMemoryPoolInitialized && cv::cuda::getCudaEnabledDeviceCount() > 0) {
+    if (!m_gpuMemoryPoolInitialized && cv::ocl::useOpenCL()) {
         try {
             qDebug() << " Initializing GPU Memory Pool on first frame...";
             m_gpuMemoryPool.initialize(1280, 720); // Initialize with common camera resolution
@@ -5833,14 +5571,8 @@ void Capture::enableSegmentationInCapture()
             cv::Mat firstFrame;
             bool frameRead = false;
 
-            if (!m_dynamicGpuReader.empty()) {
-                cv::cuda::GpuMat gpu;
-                if (m_dynamicGpuReader->nextFrame(gpu) && !gpu.empty()) {
-                    cv::cuda::cvtColor(gpu, gpu, cv::COLOR_BGRA2BGR);
-                    gpu.download(firstFrame);
-                    frameRead = true;
-                }
-            } else if (m_dynamicVideoCap.isOpened()) {
+            // CUDA VideoReader removed - using CPU VideoCapture
+            if (m_dynamicVideoCap.isOpened()) {
                 if (m_dynamicVideoCap.read(firstFrame) && !firstFrame.empty()) {
                     frameRead = true;
                 }
@@ -5879,7 +5611,6 @@ void Capture::disableSegmentationOutsideCapture()
 
     // Reset GPU utilization flags
     m_gpuUtilized = false;
-    m_cudaUtilized = false;
 
     // Update UI
     updateDebugDisplay();
@@ -5956,10 +5687,7 @@ int Capture::getVideoTemplateDuration() const
 //  GPU MEMORY POOL IMPLEMENTATION
 
 GPUMemoryPool::GPUMemoryPool()
-    : detectionStream()
-    , segmentationStream()
-    , compositionStream()
-    , currentFrameBuffer(0)
+    : currentFrameBuffer(0)
     , currentSegBuffer(0)
     , currentDetBuffer(0)
     , currentTempBuffer(0)
@@ -5971,12 +5699,7 @@ GPUMemoryPool::GPUMemoryPool()
     , poolWidth(0)
     , poolHeight(0)
 {
-    // Initialize cv::Ptr members to nullptr (cannot be default-constructed)
-    morphCloseFilter = nullptr;
-    morphOpenFilter = nullptr;
-    morphDilateFilter = nullptr;
-    cannyDetector = nullptr;
-    qDebug() << " GPU Memory Pool: Constructor called";
+    qDebug() << " GPU Memory Pool: Constructor called (OpenCL)";
 }
 
 GPUMemoryPool::~GPUMemoryPool()
@@ -5997,69 +5720,58 @@ void GPUMemoryPool::initialize(int width, int height)
         // Release existing resources
         release();
 
-        // Initialize frame buffers (triple buffering)
+        // Initialize frame buffers (triple buffering) - using OpenCL UMat
         for (int i = 0; i < 3; ++i) {
-            gpuFrameBuffers[i] = cv::cuda::GpuMat(height, width, CV_8UC3);
-            qDebug() << " GPU Memory Pool: Frame buffer" << i << "allocated";
+            gpuFrameBuffers[i].create(height, width, CV_8UC3);
+            qDebug() << " GPU Memory Pool: Frame buffer" << i << "allocated (OpenCL)";
         }
 
         // Initialize segmentation buffers (double buffering)
         for (int i = 0; i < 2; ++i) {
-            gpuSegmentationBuffers[i] = cv::cuda::GpuMat(height, width, CV_8UC1);
-            qDebug() << " GPU Memory Pool: Segmentation buffer" << i << "allocated";
+            gpuSegmentationBuffers[i].create(height, width, CV_8UC1);
+            qDebug() << " GPU Memory Pool: Segmentation buffer" << i << "allocated (OpenCL)";
         }
 
         // Initialize detection buffers (double buffering)
         for (int i = 0; i < 2; ++i) {
-            gpuDetectionBuffers[i] = cv::cuda::GpuMat(height, width, CV_8UC1);
-            qDebug() << " GPU Memory Pool: Detection buffer" << i << "allocated";
+            gpuDetectionBuffers[i].create(height, width, CV_8UC1);
+            qDebug() << " GPU Memory Pool: Detection buffer" << i << "allocated (OpenCL)";
         }
 
         // Initialize temporary buffers (double buffering)
         for (int i = 0; i < 2; ++i) {
-            gpuTempBuffers[i] = cv::cuda::GpuMat(height, width, CV_8UC1);
-            qDebug() << " GPU Memory Pool: Temp buffer" << i << "allocated";
+            gpuTempBuffers[i].create(height, width, CV_8UC1);
+            qDebug() << " GPU Memory Pool: Temp buffer" << i << "allocated (OpenCL)";
         }
 
         //  Initialize guided filtering buffers (quad buffering for complex operations)
         for (int i = 0; i < 4; ++i) {
-            gpuGuidedFilterBuffers[i] = cv::cuda::GpuMat(height, width, CV_32F);
-            qDebug() << " GPU Memory Pool: Guided filter buffer" << i << "allocated";
+            gpuGuidedFilterBuffers[i].create(height, width, CV_32F);
+            qDebug() << " GPU Memory Pool: Guided filter buffer" << i << "allocated (OpenCL)";
         }
 
         // Initialize box filter buffers (double buffering)
         for (int i = 0; i < 2; ++i) {
-            gpuBoxFilterBuffers[i] = cv::cuda::GpuMat(height, width, CV_32F);
-            qDebug() << " GPU Memory Pool: Box filter buffer" << i << "allocated";
+            gpuBoxFilterBuffers[i].create(height, width, CV_32F);
+            qDebug() << " GPU Memory Pool: Box filter buffer" << i << "allocated (OpenCL)";
         }
 
         //  Initialize edge blurring buffers (triple buffering for complex operations)
         for (int i = 0; i < 3; ++i) {
-            gpuEdgeBlurBuffers[i] = cv::cuda::GpuMat(height, width, CV_8UC3);
-            qDebug() << " GPU Memory Pool: Edge blur buffer" << i << "allocated";
+            gpuEdgeBlurBuffers[i].create(height, width, CV_8UC3);
+            qDebug() << " GPU Memory Pool: Edge blur buffer" << i << "allocated (OpenCL)";
         }
 
         // Initialize edge detection buffers (double buffering)
         for (int i = 0; i < 2; ++i) {
-            gpuEdgeDetectionBuffers[i] = cv::cuda::GpuMat(height, width, CV_8UC1);
-            qDebug() << " GPU Memory Pool: Edge detection buffer" << i << "allocated";
+            gpuEdgeDetectionBuffers[i].create(height, width, CV_8UC1);
+            qDebug() << " GPU Memory Pool: Edge detection buffer" << i << "allocated (OpenCL)";
         }
 
-        // Create reusable CUDA filters (create once, use many times)
-        cv::Mat kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3));
-        morphCloseFilter = cv::cuda::createMorphologyFilter(cv::MORPH_CLOSE, CV_8UC1, kernel);
-        morphOpenFilter = cv::cuda::createMorphologyFilter(cv::MORPH_OPEN, CV_8UC1, kernel);
-        morphDilateFilter = cv::cuda::createMorphologyFilter(cv::MORPH_DILATE, CV_8UC1, kernel);
-        cannyDetector = cv::cuda::createCannyEdgeDetector(50, 150);
+        // Create reusable morphology kernel (OpenCL uses regular OpenCV operations)
+        morphKernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3));
 
-        qDebug() << " GPU Memory Pool: CUDA filters created successfully";
-
-        // Initialize CUDA streams for parallel processing
-        detectionStream = cv::cuda::Stream();
-        segmentationStream = cv::cuda::Stream();
-        compositionStream = cv::cuda::Stream();
-
-        qDebug() << " GPU Memory Pool: CUDA streams initialized";
+        qDebug() << " GPU Memory Pool: OpenCL buffers initialized successfully";
 
         // Update state
         poolWidth = width;
@@ -6074,108 +5786,108 @@ void GPUMemoryPool::initialize(int width, int height)
     }
 }
 
-cv::cuda::GpuMat& GPUMemoryPool::getNextFrameBuffer()
+cv::UMat& GPUMemoryPool::getNextFrameBuffer()
 {
     if (!initialized) {
         qWarning() << " GPU Memory Pool: Not initialized, returning empty buffer";
-        static cv::cuda::GpuMat emptyBuffer;
+        static cv::UMat emptyBuffer;
         return emptyBuffer;
     }
 
-    cv::cuda::GpuMat& buffer = gpuFrameBuffers[currentFrameBuffer];
+    cv::UMat& buffer = gpuFrameBuffers[currentFrameBuffer];
     currentFrameBuffer = (currentFrameBuffer + 1) % 3; // Triple buffering
     return buffer;
 }
 
-cv::cuda::GpuMat& GPUMemoryPool::getNextSegmentationBuffer()
+cv::UMat& GPUMemoryPool::getNextSegmentationBuffer()
 {
     if (!initialized) {
         qWarning() << " GPU Memory Pool: Not initialized, returning empty buffer";
-        static cv::cuda::GpuMat emptyBuffer;
+        static cv::UMat emptyBuffer;
         return emptyBuffer;
     }
 
-    cv::cuda::GpuMat& buffer = gpuSegmentationBuffers[currentSegBuffer];
+    cv::UMat& buffer = gpuSegmentationBuffers[currentSegBuffer];
     currentSegBuffer = (currentSegBuffer + 1) % 2; // Double buffering
     return buffer;
 }
 
-cv::cuda::GpuMat& GPUMemoryPool::getNextDetectionBuffer()
+cv::UMat& GPUMemoryPool::getNextDetectionBuffer()
 {
     if (!initialized) {
         qWarning() << " GPU Memory Pool: Not initialized, returning empty buffer";
-        static cv::cuda::GpuMat emptyBuffer;
+        static cv::UMat emptyBuffer;
         return emptyBuffer;
     }
 
-    cv::cuda::GpuMat& buffer = gpuDetectionBuffers[currentDetBuffer];
+    cv::UMat& buffer = gpuDetectionBuffers[currentDetBuffer];
     currentDetBuffer = (currentDetBuffer + 1) % 2; // Double buffering
     return buffer;
 }
 
-cv::cuda::GpuMat& GPUMemoryPool::getNextTempBuffer()
+cv::UMat& GPUMemoryPool::getNextTempBuffer()
 {
     if (!initialized) {
         qWarning() << " GPU Memory Pool: Not initialized, returning empty buffer";
-        static cv::cuda::GpuMat emptyBuffer;
+        static cv::UMat emptyBuffer;
         return emptyBuffer;
     }
 
-    cv::cuda::GpuMat& buffer = gpuTempBuffers[currentTempBuffer];
+    cv::UMat& buffer = gpuTempBuffers[currentTempBuffer];
     currentTempBuffer = (currentTempBuffer + 1) % 2; // Double buffering
     return buffer;
 }
 
 //  Guided Filtering buffer access methods
-cv::cuda::GpuMat& GPUMemoryPool::getNextGuidedFilterBuffer()
+cv::UMat& GPUMemoryPool::getNextGuidedFilterBuffer()
 {
     if (!initialized) {
         qWarning() << " GPU Memory Pool: Not initialized, returning empty buffer";
-        static cv::cuda::GpuMat emptyBuffer;
+        static cv::UMat emptyBuffer;
         return emptyBuffer;
     }
 
-    cv::cuda::GpuMat& buffer = gpuGuidedFilterBuffers[currentGuidedFilterBuffer];
+    cv::UMat& buffer = gpuGuidedFilterBuffers[currentGuidedFilterBuffer];
     currentGuidedFilterBuffer = (currentGuidedFilterBuffer + 1) % 4; // Quad buffering
     return buffer;
 }
 
-cv::cuda::GpuMat& GPUMemoryPool::getNextBoxFilterBuffer()
+cv::UMat& GPUMemoryPool::getNextBoxFilterBuffer()
 {
     if (!initialized) {
         qWarning() << " GPU Memory Pool: Not initialized, returning empty buffer";
-        static cv::cuda::GpuMat emptyBuffer;
+        static cv::UMat emptyBuffer;
         return emptyBuffer;
     }
 
-    cv::cuda::GpuMat& buffer = gpuBoxFilterBuffers[currentBoxFilterBuffer];
+    cv::UMat& buffer = gpuBoxFilterBuffers[currentBoxFilterBuffer];
     currentBoxFilterBuffer = (currentBoxFilterBuffer + 1) % 2; // Double buffering
     return buffer;
 }
 
 //  Edge Blurring buffer access methods
-cv::cuda::GpuMat& GPUMemoryPool::getNextEdgeBlurBuffer()
+cv::UMat& GPUMemoryPool::getNextEdgeBlurBuffer()
 {
     if (!initialized) {
         qWarning() << " GPU Memory Pool: Not initialized, returning empty buffer";
-        static cv::cuda::GpuMat emptyBuffer;
+        static cv::UMat emptyBuffer;
         return emptyBuffer;
     }
 
-    cv::cuda::GpuMat& buffer = gpuEdgeBlurBuffers[currentEdgeBlurBuffer];
+    cv::UMat& buffer = gpuEdgeBlurBuffers[currentEdgeBlurBuffer];
     currentEdgeBlurBuffer = (currentEdgeBlurBuffer + 1) % 3; // Triple buffering
     return buffer;
 }
 
-cv::cuda::GpuMat& GPUMemoryPool::getNextEdgeDetectionBuffer()
+cv::UMat& GPUMemoryPool::getNextEdgeDetectionBuffer()
 {
     if (!initialized) {
         qWarning() << " GPU Memory Pool: Not initialized, returning empty buffer";
-        static cv::cuda::GpuMat emptyBuffer;
+        static cv::UMat emptyBuffer;
         return emptyBuffer;
     }
 
-    cv::cuda::GpuMat& buffer = gpuEdgeDetectionBuffers[currentEdgeDetectionBuffer];
+    cv::UMat& buffer = gpuEdgeDetectionBuffers[currentEdgeDetectionBuffer];
     currentEdgeDetectionBuffer = (currentEdgeDetectionBuffer + 1) % 2; // Double buffering
     return buffer;
 }
@@ -6214,11 +5926,8 @@ void GPUMemoryPool::release()
         gpuEdgeDetectionBuffers[i].release();
     }
 
-    // Release CUDA filters
-    morphCloseFilter.release();
-    morphOpenFilter.release();
-    morphDilateFilter.release();
-    cannyDetector.release();
+    // Clear morphology kernel (OpenCL uses regular OpenCV operations)
+    morphKernel.release();
 
     // Reset state
     initialized = false;
@@ -6271,12 +5980,11 @@ void Capture::initializeRecordingSystem()
             connect(m_recordingFrameTimer, &QTimer::timeout, this, &Capture::processRecordingFrame, Qt::QueuedConnection);
         }
 
-        // Initialize CUDA recording stream
-        m_recordingStream = cv::cuda::Stream();
+        // OpenCL doesn't use explicit streams - operations are automatically parallelized
 
-        // Initialize GPU recording buffer
-        if (cv::cuda::getCudaEnabledDeviceCount() > 0) {
-            m_recordingGpuBuffer = cv::cuda::GpuMat(720, 1280, CV_8UC3);
+        // Initialize GPU recording buffer (OpenCL)
+        if (cv::ocl::useOpenCL()) {
+            m_recordingGpuBuffer = cv::UMat(720, 1280, CV_8UC3);
             qDebug() << " ASYNC RECORDING: GPU recording buffer initialized";
         }
 
@@ -6459,20 +6167,20 @@ QPixmap Capture::processFrameForRecordingGPU(const cv::Mat &frame)
         //  GPU-ACCELERATED FRAME PROCESSING
 
         // Upload frame to GPU
-        cv::cuda::GpuMat gpuFrame;
-        gpuFrame.upload(frame, m_recordingStream);
+        cv::UMat gpuFrame;
+        frame.copyTo(gpuFrame);
 
         // Get target size
         QSize labelSize = m_cachedLabelSize.isValid() ? m_cachedLabelSize : QSize(1280, 720);
 
         // GPU-accelerated scaling if needed
-        cv::cuda::GpuMat gpuScaled;
+        cv::UMat gpuScaled;
         if (qAbs(m_personScaleFactor - 1.0) > 0.01) {
             // Check if we're in segmentation mode with background template or dynamic video background
             if (m_segmentationEnabledInCapture && ((m_useBackgroundTemplate &&
                 !m_selectedBackgroundTemplate.isEmpty()) || m_useDynamicVideoBackground)) {
                 // For background template mode, just fit to label
-                cv::cuda::resize(gpuFrame, gpuScaled, cv::Size(labelSize.width(), labelSize.height()), 0, 0, cv::INTER_LINEAR, m_recordingStream);
+                cv::resize(gpuFrame, gpuScaled, cv::Size(labelSize.width(), labelSize.height()), 0, 0, cv::INTER_LINEAR);
             } else {
                 // Apply frame scaling for other modes
                 int newWidth = qRound(frame.cols * m_personScaleFactor);
@@ -6483,19 +6191,18 @@ QPixmap Capture::processFrameForRecordingGPU(const cv::Mat &frame)
                 newHeight = qMax(1, newHeight);
                 
                 qDebug() << " GPU RECORDING: Scaling frame to" << newWidth << "x" << newHeight << "with factor" << m_personScaleFactor;
-                cv::cuda::resize(gpuFrame, gpuScaled, cv::Size(newWidth, newHeight), 0, 0, cv::INTER_LINEAR, m_recordingStream);
+                cv::resize(gpuFrame, gpuScaled, cv::Size(newWidth, newHeight), 0, 0, cv::INTER_LINEAR);
             }
         } else {
             // No scaling needed, just fit to label
-            cv::cuda::resize(gpuFrame, gpuScaled, cv::Size(labelSize.width(), labelSize.height()), 0, 0, cv::INTER_LINEAR, m_recordingStream);
+            cv::resize(gpuFrame, gpuScaled, cv::Size(labelSize.width(), labelSize.height()), 0, 0, cv::INTER_LINEAR);
         }
 
         // Download processed frame
         cv::Mat processedFrame;
-        gpuScaled.download(processedFrame, m_recordingStream);
+        gpuScaled.copyTo(processedFrame);
 
-        // Wait for GPU operations to complete
-        m_recordingStream.waitForCompletion();
+        // OpenCL synchronization is automatic
 
         // Convert to QPixmap
         QImage qImage = cvMatToQImage(processedFrame);
@@ -6857,23 +6564,22 @@ cv::Mat Capture::applyPostProcessingLighting()
         // Use clean template/dynamic background for edge blending
         cv::Mat backgroundFrame = cleanBackground;
 
-        //  CUDA-Accelerated Guided image filtering to refine a soft alpha only on a thin edge ring
+        //  OpenCL-Accelerated Guided image filtering to refine a soft alpha only on a thin edge ring
         // Guidance is the current output (result) which already has person hard-copied
         const int gfRadius = 8; // window size (reduced for better performance)
         const float gfEps = 1e-2f; // regularization (increased for better performance)
         
-        // Use GPU memory pool stream and buffers for optimized guided filtering
-        cv::cuda::Stream& guidedFilterStream = m_gpuMemoryPool.getCompositionStream();
-        cv::Mat alphaFloat = guidedFilterGrayAlphaCUDAOptimized(result, binMask, gfRadius, gfEps, m_gpuMemoryPool, guidedFilterStream);
+        // Use GPU memory pool for optimized guided filtering (OpenCL)
+        cv::Mat alphaFloat = guidedFilterGrayAlphaOpenCLOptimized(result, binMask, gfRadius, gfEps, m_gpuMemoryPool);
         
         //  ENHANCED: Apply edge blurring to create smooth transitions between background and segmented object
         const float edgeBlurRadius = 3.0f; // Increased blur radius for better background-object transition
-        cv::Mat edgeBlurredPerson = applyEdgeBlurringCUDA(scaledPerson, binMask, backgroundFrame, edgeBlurRadius, m_gpuMemoryPool, guidedFilterStream);
+        cv::Mat edgeBlurredPerson = applyEdgeBlurringOpenCL(scaledPerson, binMask, backgroundFrame, edgeBlurRadius, m_gpuMemoryPool);
         if (!edgeBlurredPerson.empty()) {
             scaledPerson = edgeBlurredPerson;
-            qDebug() << "STATIC MODE: Applied CUDA edge blurring with radius" << edgeBlurRadius;
+            qDebug() << "STATIC MODE: Applied OpenCL edge blurring with radius" << edgeBlurRadius;
         } else {
-            // Fallback to alternative method if CUDA fails
+            // Fallback to alternative method if OpenCL fails
             edgeBlurredPerson = applyEdgeBlurringAlternative(scaledPerson, binMask, edgeBlurRadius);
             if (!edgeBlurredPerson.empty()) {
                 scaledPerson = edgeBlurredPerson;
@@ -6925,13 +6631,12 @@ cv::Mat Capture::applyPostProcessingLighting()
         
         //  FINAL EDGE BLURRING: Apply edge blurring to the final composite result
         const float finalEdgeBlurRadius = 4.0f; // Stronger blur for final result
-        cv::cuda::Stream& finalStream = m_gpuMemoryPool.getCompositionStream();
-        cv::Mat finalEdgeBlurred = applyEdgeBlurringCUDA(result, binMask, cleanBackground, finalEdgeBlurRadius, m_gpuMemoryPool, finalStream);
+        cv::Mat finalEdgeBlurred = applyEdgeBlurringOpenCL(result, binMask, cleanBackground, finalEdgeBlurRadius, m_gpuMemoryPool);
         if (!finalEdgeBlurred.empty()) {
             result = finalEdgeBlurred;
-            qDebug() << "STATIC MODE: Applied final CUDA edge blurring to composite result with radius" << finalEdgeBlurRadius;
+            qDebug() << "STATIC MODE: Applied final OpenCL edge blurring to composite result with radius" << finalEdgeBlurRadius;
         } else {
-            // Fallback to alternative method if CUDA fails
+            // Fallback to alternative method if OpenCL fails
             finalEdgeBlurred = applyEdgeBlurringAlternative(result, binMask, finalEdgeBlurRadius);
             if (!finalEdgeBlurred.empty()) {
                 result = finalEdgeBlurred;
@@ -7210,17 +6915,17 @@ cv::Mat Capture::createLightweightSegmentedFrame(const cv::Mat &frame)
 //  Performance Control Methods
 //  REMOVED: Real-time lighting methods - not needed for post-processing only mode
 
-//  CUDA-Accelerated Guided Filter for Edge-Blending (Memory Pool Optimized)
+//  OpenCL-Accelerated Guided Filter for Edge-Blending (Memory Pool Optimized)
 // GPU-optimized guided filtering that maintains FPS and quality using pre-allocated buffers
-cv::Mat guidedFilterGrayAlphaCUDAOptimized(const cv::Mat &guideBGR, const cv::Mat &hardMask, int radius, float eps, 
-                                                 GPUMemoryPool &memoryPool, cv::cuda::Stream &stream)
+cv::Mat guidedFilterGrayAlphaOpenCLOptimized(const cv::Mat &guideBGR, const cv::Mat &hardMask, int radius, float eps, 
+                                                 GPUMemoryPool &memoryPool)
 {
     CV_Assert(!guideBGR.empty());
     CV_Assert(!hardMask.empty());
 
-    // Check CUDA availability
-    if (!cv::cuda::getCudaEnabledDeviceCount()) {
-        qWarning() << "CUDA not available, falling back to CPU guided filter";
+    // Check OpenCL availability
+    if (!cv::ocl::useOpenCL()) {
+        qWarning() << "OpenCL not available, falling back to CPU guided filter";
         return guidedFilterGrayAlphaCPU(guideBGR, hardMask, radius, eps);
     }
 
@@ -7230,104 +6935,101 @@ cv::Mat guidedFilterGrayAlphaCUDAOptimized(const cv::Mat &guideBGR, const cv::Ma
         guidedFilterTimer.start();
         
         // Get pre-allocated GPU buffers from memory pool (optimized buffer usage)
-        cv::cuda::GpuMat& gpuGuide = memoryPool.getNextGuidedFilterBuffer();
-        cv::cuda::GpuMat& gpuMask = memoryPool.getNextGuidedFilterBuffer();
-        cv::cuda::GpuMat& gpuI = memoryPool.getNextGuidedFilterBuffer();
-        cv::cuda::GpuMat& gpuP = memoryPool.getNextGuidedFilterBuffer();
+        cv::UMat& gpuGuide = memoryPool.getNextGuidedFilterBuffer();
+        cv::UMat& gpuMask = memoryPool.getNextGuidedFilterBuffer();
+        cv::UMat& gpuI = memoryPool.getNextGuidedFilterBuffer();
+        cv::UMat& gpuP = memoryPool.getNextGuidedFilterBuffer();
         
-        // Upload to GPU with stream
-        gpuGuide.upload(guideBGR, stream);
-        gpuMask.upload(hardMask, stream);
+        // Upload to GPU (OpenCL)
+        guideBGR.copyTo(gpuGuide);
+        hardMask.copyTo(gpuMask);
         
         // Convert guide to grayscale on GPU if needed
         if (guideBGR.channels() == 3) {
-            cv::cuda::cvtColor(gpuGuide, gpuI, cv::COLOR_BGR2GRAY, 0, stream);
+            cv::cvtColor(gpuGuide, gpuI, cv::COLOR_BGR2GRAY);
         } else {
             gpuI = gpuGuide;
         }
         
         // Convert to float32 on GPU
-        gpuI.convertTo(gpuI, CV_32F, 1.0f / 255.0f, stream);
+        gpuI.convertTo(gpuI, CV_32F, 1.0f / 255.0f);
         if (hardMask.type() != CV_32F) {
-            gpuMask.convertTo(gpuP, CV_32F, 1.0f / 255.0f, stream);
+            gpuMask.convertTo(gpuP, CV_32F, 1.0f / 255.0f);
         } else {
             gpuP = gpuMask;
         }
         
         // Get additional buffers from memory pool
-        cv::cuda::GpuMat& gpuMeanI = memoryPool.getNextBoxFilterBuffer();
-        cv::cuda::GpuMat& gpuMeanP = memoryPool.getNextBoxFilterBuffer();
-        cv::cuda::GpuMat& gpuCorrI = memoryPool.getNextGuidedFilterBuffer();
-        cv::cuda::GpuMat& gpuCorrIp = memoryPool.getNextGuidedFilterBuffer();
-        cv::cuda::GpuMat& gpuVarI = memoryPool.getNextGuidedFilterBuffer();
-        cv::cuda::GpuMat& gpuCovIp = memoryPool.getNextGuidedFilterBuffer();
-        cv::cuda::GpuMat& gpuA = memoryPool.getNextGuidedFilterBuffer();
-        cv::cuda::GpuMat& gpuB = memoryPool.getNextGuidedFilterBuffer();
-        cv::cuda::GpuMat& gpuMeanA = memoryPool.getNextGuidedFilterBuffer();
-        cv::cuda::GpuMat& gpuMeanB = memoryPool.getNextGuidedFilterBuffer();
-        cv::cuda::GpuMat& gpuQ = memoryPool.getNextGuidedFilterBuffer();
-        cv::cuda::GpuMat& gpuAlpha = memoryPool.getNextGuidedFilterBuffer();
+        cv::UMat& gpuMeanI = memoryPool.getNextBoxFilterBuffer();
+        cv::UMat& gpuMeanP = memoryPool.getNextBoxFilterBuffer();
+        cv::UMat& gpuCorrI = memoryPool.getNextGuidedFilterBuffer();
+        cv::UMat& gpuCorrIp = memoryPool.getNextGuidedFilterBuffer();
+        cv::UMat& gpuVarI = memoryPool.getNextGuidedFilterBuffer();
+        cv::UMat& gpuCovIp = memoryPool.getNextGuidedFilterBuffer();
+        cv::UMat& gpuA = memoryPool.getNextGuidedFilterBuffer();
+        cv::UMat& gpuB = memoryPool.getNextGuidedFilterBuffer();
+        cv::UMat& gpuMeanA = memoryPool.getNextGuidedFilterBuffer();
+        cv::UMat& gpuMeanB = memoryPool.getNextGuidedFilterBuffer();
+        cv::UMat& gpuQ = memoryPool.getNextGuidedFilterBuffer();
+        cv::UMat& gpuAlpha = memoryPool.getNextGuidedFilterBuffer();
         
-        // Create box filter for GPU (reuse existing filter if available)
-        cv::Ptr<cv::cuda::Filter> boxFilter = cv::cuda::createBoxFilter(CV_32F, CV_32F, cv::Size(radius, radius));
-        
-        // Step 1: Compute means and correlations on GPU
-        boxFilter->apply(gpuI, gpuMeanI, stream);
-        boxFilter->apply(gpuP, gpuMeanP, stream);
+        // Use box filter for GPU (OpenCL)
+        cv::boxFilter(gpuI, gpuMeanI, CV_32F, cv::Size(radius, radius));
+        cv::boxFilter(gpuP, gpuMeanP, CV_32F, cv::Size(radius, radius));
         
         // Compute I*I and I*P on GPU
-        cv::cuda::GpuMat& gpuISquared = memoryPool.getNextGuidedFilterBuffer();
-        cv::cuda::GpuMat& gpuIP = memoryPool.getNextGuidedFilterBuffer();
-        cv::cuda::multiply(gpuI, gpuI, gpuISquared, 1.0, -1, stream);
-        cv::cuda::multiply(gpuI, gpuP, gpuIP, 1.0, -1, stream);
+        cv::UMat& gpuISquared = memoryPool.getNextGuidedFilterBuffer();
+        cv::UMat& gpuIP = memoryPool.getNextGuidedFilterBuffer();
+        cv::multiply(gpuI, gpuI, gpuISquared);
+        cv::multiply(gpuI, gpuP, gpuIP);
         
-        boxFilter->apply(gpuISquared, gpuCorrI, stream);
-        boxFilter->apply(gpuIP, gpuCorrIp, stream);
+        cv::boxFilter(gpuISquared, gpuCorrI, CV_32F, cv::Size(radius, radius));
+        cv::boxFilter(gpuIP, gpuCorrIp, CV_32F, cv::Size(radius, radius));
         
         // Step 2: Compute variance and covariance on GPU
-        cv::cuda::multiply(gpuMeanI, gpuMeanI, gpuVarI, 1.0, -1, stream);
-        cv::cuda::subtract(gpuCorrI, gpuVarI, gpuVarI, cv::noArray(), -1, stream);
+        cv::multiply(gpuMeanI, gpuMeanI, gpuVarI);
+        cv::subtract(gpuCorrI, gpuVarI, gpuVarI);
         
-        cv::cuda::multiply(gpuMeanI, gpuMeanP, gpuCovIp, 1.0, -1, stream);
-        cv::cuda::subtract(gpuCorrIp, gpuCovIp, gpuCovIp, cv::noArray(), -1, stream);
+        cv::multiply(gpuMeanI, gpuMeanP, gpuCovIp);
+        cv::subtract(gpuCorrIp, gpuCovIp, gpuCovIp);
         
         // Step 3: Compute coefficients a and b on GPU
-        cv::cuda::GpuMat& gpuEps = memoryPool.getNextGuidedFilterBuffer();
-        gpuEps.upload(cv::Mat::ones(gpuVarI.size(), CV_32F) * eps, stream);
-        cv::cuda::add(gpuVarI, gpuEps, gpuVarI, cv::noArray(), -1, stream);
-        cv::cuda::divide(gpuCovIp, gpuVarI, gpuA, 1.0, -1, stream);
+        cv::UMat& gpuEps = memoryPool.getNextGuidedFilterBuffer();
+        cv::Mat epsMat = cv::Mat::ones(gpuVarI.size(), CV_32F) * eps;
+        epsMat.copyTo(gpuEps);
+        cv::add(gpuVarI, gpuEps, gpuVarI);
+        cv::divide(gpuCovIp, gpuVarI, gpuA);
         
-        cv::cuda::multiply(gpuA, gpuMeanI, gpuB, 1.0, -1, stream);
-        cv::cuda::subtract(gpuMeanP, gpuB, gpuB, cv::noArray(), -1, stream);
+        cv::multiply(gpuA, gpuMeanI, gpuB);
+        cv::subtract(gpuMeanP, gpuB, gpuB);
         
         // Step 4: Compute mean of coefficients on GPU
-        boxFilter->apply(gpuA, gpuMeanA, stream);
-        boxFilter->apply(gpuB, gpuMeanB, stream);
+        cv::boxFilter(gpuA, gpuMeanA, CV_32F, cv::Size(radius, radius));
+        cv::boxFilter(gpuB, gpuMeanB, CV_32F, cv::Size(radius, radius));
         
         // Step 5: Compute final result on GPU
-        cv::cuda::multiply(gpuMeanA, gpuI, gpuQ, 1.0, -1, stream);
-        cv::cuda::add(gpuQ, gpuMeanB, gpuQ, cv::noArray(), -1, stream);
+        cv::multiply(gpuMeanA, gpuI, gpuQ);
+        cv::add(gpuQ, gpuMeanB, gpuQ);
         
         // Clamp result to [0,1] on GPU
-        cv::cuda::threshold(gpuQ, gpuAlpha, 0.0f, 0.0f, cv::THRESH_TOZERO, stream);
-        cv::cuda::threshold(gpuAlpha, gpuAlpha, 1.0f, 1.0f, cv::THRESH_TRUNC, stream);
+        cv::threshold(gpuQ, gpuAlpha, 0.0f, 0.0f, cv::THRESH_TOZERO);
+        cv::threshold(gpuAlpha, gpuAlpha, 1.0f, 1.0f, cv::THRESH_TRUNC);
         
         // Download result back to CPU
         cv::Mat result;
-        gpuAlpha.download(result, stream);
-        stream.waitForCompletion();
+        gpuAlpha.copyTo(result);
         
         //  Performance monitoring - log guided filtering time
         qint64 guidedFilterTime = guidedFilterTimer.elapsed();
         if (guidedFilterTime > 5) { // Only log if it takes more than 5ms
-            qDebug() << "CUDA Guided Filter Performance:" << guidedFilterTime << "ms for" 
+            qDebug() << "OpenCL Guided Filter Performance:" << guidedFilterTime << "ms for" 
                      << guideBGR.cols << "x" << guideBGR.rows << "image";
         }
         
         return result;
         
     } catch (const cv::Exception &e) {
-        qWarning() << "CUDA guided filter failed:" << e.what() << "- falling back to CPU";
+        qWarning() << "OpenCL guided filter failed:" << e.what() << "- falling back to CPU";
         return guidedFilterGrayAlphaCPU(guideBGR, hardMask, radius, eps);
     }
 }
@@ -7371,17 +7073,17 @@ static cv::Mat guidedFilterGrayAlphaCPU(const cv::Mat &guideBGR, const cv::Mat &
     cv::Mat alpha; cv::min(cv::max(q, 0.0f), 1.0f, alpha);
     return alpha;
 }
-//  CUDA-Accelerated Edge Blurring for Enhanced Edge-Blending
+//  OpenCL-Accelerated Edge Blurring for Enhanced Edge-Blending
 // GPU-optimized edge blurring that mixes background template with segmented object edges
-cv::Mat applyEdgeBlurringCUDA(const cv::Mat &segmentedObject, const cv::Mat &objectMask, const cv::Mat &backgroundTemplate, float blurRadius, 
-                                    GPUMemoryPool &memoryPool, cv::cuda::Stream &stream)
+cv::Mat applyEdgeBlurringOpenCL(const cv::Mat &segmentedObject, const cv::Mat &objectMask, const cv::Mat &backgroundTemplate, float blurRadius, 
+                                    GPUMemoryPool &memoryPool)
 {
     CV_Assert(!segmentedObject.empty());
     CV_Assert(!objectMask.empty());
 
-    // Check CUDA availability
-    if (!cv::cuda::getCudaEnabledDeviceCount()) {
-        qWarning() << "CUDA not available for edge blurring, falling back to CPU";
+    // Check OpenCL availability
+    if (!cv::ocl::useOpenCL()) {
+        qWarning() << "OpenCL not available for edge blurring, falling back to CPU";
         return applyEdgeBlurringCPU(segmentedObject, objectMask, backgroundTemplate, blurRadius);
     }
 
@@ -7391,62 +7093,53 @@ cv::Mat applyEdgeBlurringCUDA(const cv::Mat &segmentedObject, const cv::Mat &obj
         edgeBlurTimer.start();
 
         // Get pre-allocated GPU buffers from memory pool
-        cv::cuda::GpuMat& gpuObject = memoryPool.getNextEdgeBlurBuffer();
-        cv::cuda::GpuMat& gpuMask = memoryPool.getNextEdgeDetectionBuffer();
-        cv::cuda::GpuMat& gpuBackground = memoryPool.getNextEdgeBlurBuffer();
-        cv::cuda::GpuMat& gpuBlurred = memoryPool.getNextEdgeBlurBuffer();
-        cv::cuda::GpuMat& gpuResult = memoryPool.getNextEdgeBlurBuffer();
+        cv::UMat& gpuObject = memoryPool.getNextEdgeBlurBuffer();
+        cv::UMat& gpuMask = memoryPool.getNextEdgeDetectionBuffer();
+        cv::UMat& gpuBackground = memoryPool.getNextEdgeBlurBuffer();
+        cv::UMat& gpuBlurred = memoryPool.getNextEdgeBlurBuffer();
+        cv::UMat& gpuResult = memoryPool.getNextEdgeBlurBuffer();
 
-        // Upload to GPU with stream
-        gpuObject.upload(segmentedObject, stream);
-        gpuMask.upload(objectMask, stream);
-        gpuBackground.upload(backgroundTemplate, stream);
+        // Upload to GPU (OpenCL)
+        segmentedObject.copyTo(gpuObject);
+        objectMask.copyTo(gpuMask);
+        backgroundTemplate.copyTo(gpuBackground);
 
         // Convert mask to grayscale if needed
         if (objectMask.channels() == 3) {
-            cv::cuda::cvtColor(gpuMask, gpuMask, cv::COLOR_BGR2GRAY, 0, stream);
+            cv::cvtColor(gpuMask, gpuMask, cv::COLOR_BGR2GRAY);
         }
 
         // Step 1: Create transition zone by dilating the mask outward
-        cv::cuda::GpuMat gpuDilatedMask;
-        cv::Ptr<cv::cuda::Filter> dilateFilter = cv::cuda::createMorphologyFilter(
-            cv::MORPH_DILATE, CV_8UC1, 
-            cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(2*static_cast<int>(blurRadius)+1, 2*static_cast<int>(blurRadius)+1))
-        );
-        dilateFilter->apply(gpuMask, gpuDilatedMask, stream);
+        cv::UMat gpuDilatedMask;
+        cv::Mat dilateKernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(2*static_cast<int>(blurRadius)+1, 2*static_cast<int>(blurRadius)+1));
+        cv::dilate(gpuMask, gpuDilatedMask, dilateKernel);
 
         // Step 2: Create transition zone by subtracting original mask from dilated mask
-        cv::cuda::GpuMat gpuTransitionZone;
-        cv::cuda::subtract(gpuDilatedMask, gpuMask, gpuTransitionZone, cv::noArray(), -1, stream);
+        cv::UMat gpuTransitionZone;
+        cv::subtract(gpuDilatedMask, gpuMask, gpuTransitionZone);
 
         // Step 3: Create inner edge zone by eroding the mask
-        cv::cuda::GpuMat gpuErodedMask;
-        cv::Ptr<cv::cuda::Filter> erodeFilter = cv::cuda::createMorphologyFilter(
-            cv::MORPH_ERODE, CV_8UC1, 
-            cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3))
-        );
-        erodeFilter->apply(gpuMask, gpuErodedMask, stream);
+        cv::UMat gpuErodedMask;
+        cv::Mat erodeKernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
+        cv::erode(gpuMask, gpuErodedMask, erodeKernel);
 
         // Step 4: Create inner edge zone by subtracting eroded mask from original mask
-        cv::cuda::GpuMat gpuInnerEdgeZone;
-        cv::cuda::subtract(gpuMask, gpuErodedMask, gpuInnerEdgeZone, cv::noArray(), -1, stream);
+        cv::UMat gpuInnerEdgeZone;
+        cv::subtract(gpuMask, gpuErodedMask, gpuInnerEdgeZone);
 
         // Step 5: Combine transition zone and inner edge zone for comprehensive edge blurring
-        cv::cuda::GpuMat gpuCombinedEdgeZone;
-        cv::cuda::bitwise_or(gpuTransitionZone, gpuInnerEdgeZone, gpuCombinedEdgeZone, cv::noArray(), stream);
+        cv::UMat gpuCombinedEdgeZone;
+        cv::bitwise_or(gpuTransitionZone, gpuInnerEdgeZone, gpuCombinedEdgeZone);
 
         // Step 6: Apply Gaussian blur to both object and background
-        cv::Ptr<cv::cuda::Filter> gaussianFilter = cv::cuda::createGaussianFilter(
-            CV_8UC3, CV_8UC3, cv::Size(0, 0), blurRadius * 1.5f, blurRadius * 1.5f
-        );
-        gaussianFilter->apply(gpuObject, gpuBlurred, stream);
+        cv::GaussianBlur(gpuObject, gpuBlurred, cv::Size(0, 0), blurRadius * 1.5f, blurRadius * 1.5f);
         
-        cv::cuda::GpuMat gpuBlurredBackground;
-        gaussianFilter->apply(gpuBackground, gpuBlurredBackground, stream);
+        cv::UMat gpuBlurredBackground;
+        cv::GaussianBlur(gpuBackground, gpuBlurredBackground, cv::Size(0, 0), blurRadius * 1.5f, blurRadius * 1.5f);
 
         // Step 7: Create mixed background-object blend for edge zones
-        cv::cuda::GpuMat gpuMixedBlend;
-        cv::cuda::addWeighted(gpuBlurred, 0.6f, gpuBlurredBackground, 0.4f, 0, gpuMixedBlend, -1, stream);
+        cv::UMat gpuMixedBlend;
+        cv::addWeighted(gpuBlurred, 0.6f, gpuBlurredBackground, 0.4f, 0, gpuMixedBlend);
 
         // Step 8: Apply smooth blending using the combined edge zone
         // Copy original object to result
@@ -7457,20 +7150,19 @@ cv::Mat applyEdgeBlurringCUDA(const cv::Mat &segmentedObject, const cv::Mat &obj
 
         // Download result back to CPU
         cv::Mat result;
-        gpuResult.download(result, stream);
-        stream.waitForCompletion();
+        gpuResult.copyTo(result);
 
         //  Performance monitoring - log edge blurring time
         qint64 edgeBlurTime = edgeBlurTimer.elapsed();
         if (edgeBlurTime > 3) { // Only log if it takes more than 3ms
-            qDebug() << "CUDA Edge Blur Performance:" << edgeBlurTime << "ms for" 
+            qDebug() << "OpenCL Edge Blur Performance:" << edgeBlurTime << "ms for" 
                      << segmentedObject.cols << "x" << segmentedObject.rows << "image, radius:" << blurRadius;
         }
 
         return result;
 
     } catch (const cv::Exception &e) {
-        qWarning() << "CUDA edge blurring failed:" << e.what() << "- falling back to CPU";
+        qWarning() << "OpenCL edge blurring failed:" << e.what() << "- falling back to CPU";
         return applyEdgeBlurringCPU(segmentedObject, objectMask, backgroundTemplate, blurRadius);
     }
 }
@@ -7642,4 +7334,5 @@ QString Capture::resolveTemplatePath(const QString &templatePath)
     
     return QString(); // Return empty string if no path found
 }
+
 

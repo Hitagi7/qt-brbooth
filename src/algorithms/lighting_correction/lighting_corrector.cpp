@@ -36,16 +36,18 @@ LightingCorrector::~LightingCorrector()
 bool LightingCorrector::initialize()
 {
     try {
-        // Check if CUDA-enabled GPU is available
-        if (cv::cuda::getCudaEnabledDeviceCount() > 0) {
+        // Check if OpenCL-enabled GPU is available
+        if (cv::ocl::useOpenCL()) {
+            cv::ocl::setUseOpenCL(true);
             // Initialize GPU CLAHE (Contrast Limited Adaptive Histogram Equalization)
             // CLAHE improves local contrast while preventing over-amplification
-            m_gpuCLAHE = cv::cuda::createCLAHE();
+            // Regular CLAHE works with UMat (OpenCL) automatically
+            m_gpuCLAHE = cv::createCLAHE();
             m_gpuCLAHE->setClipLimit(m_clipLimit);
             m_gpuCLAHE->setTilesGridSize(m_tileGridSize);
             
             m_gpuAvailable = true;
-            qDebug() << "LightingCorrector: GPU acceleration enabled";
+            qDebug() << "LightingCorrector: OpenCL GPU acceleration enabled";
         } else {
             m_gpuAvailable = false;
             qDebug() << "LightingCorrector: GPU not available, using CPU processing";
@@ -140,38 +142,31 @@ cv::Mat LightingCorrector::applyGlobalLightingCorrection(const cv::Mat &inputIma
         // Attempt GPU-accelerated processing if available
         if (m_gpuAvailable) {
             try {
-                // Upload image to GPU
-                cv::cuda::GpuMat gpuInput, gpuLab;
-                gpuInput.upload(inputImage);
+                // Upload image to GPU (OpenCL)
+                cv::UMat gpuInput, gpuLab;
+                inputImage.copyTo(gpuInput);
                 
-                // Convert BGR to LAB color space on GPU
+                // Convert BGR to LAB color space on GPU (OpenCL)
                 // LAB separates lightness (L) from color (A, B channels)
-                cv::cuda::cvtColor(gpuInput, gpuLab, cv::COLOR_BGR2Lab);
-                
-                // Download LAB image to CPU for channel processing
-                // (OpenCV CUDA doesn't have split/merge operations)
-                cv::Mat labImage;
-                gpuLab.download(labImage);
+                cv::cvtColor(gpuInput, gpuLab, cv::COLOR_BGR2Lab);
                 
                 // Split channels so we can work on just the L (lightness) channel
-                std::vector<cv::Mat> labChannels;
-                cv::split(labImage, labChannels);
+                std::vector<cv::UMat> labChannels;
+                cv::split(gpuLab, labChannels);
                 
-                // Upload L channel to GPU and apply CLAHE
-                cv::cuda::GpuMat gpuLChannel, gpuLChannelCorrected;
-                gpuLChannel.upload(labChannels[0]);
-                m_gpuCLAHE->apply(gpuLChannel, gpuLChannelCorrected);
+                // Apply CLAHE to L channel (works with UMat/OpenCL automatically)
+                cv::UMat gpuLChannelCorrected;
+                m_gpuCLAHE->apply(labChannels[0], gpuLChannelCorrected);
                 
-                // Download corrected L channel back to CPU
-                gpuLChannelCorrected.download(labChannels[0]);
+                // Replace L channel with corrected version
+                labChannels[0] = gpuLChannelCorrected;
                 
                 // Merge channels back together
-                cv::merge(labChannels, labImage);
+                cv::merge(labChannels, gpuLab);
                 
-                // Convert back to BGR on GPU
-                gpuLab.upload(labImage);
-                cv::cuda::cvtColor(gpuLab, gpuInput, cv::COLOR_Lab2BGR);
-                gpuInput.download(result);
+                // Convert back to BGR on GPU (OpenCL)
+                cv::cvtColor(gpuLab, gpuInput, cv::COLOR_Lab2BGR);
+                gpuInput.copyTo(result);
                 
                 // Apply gamma correction on CPU (fast operation, no need for GPU)
                 result = applyGammaCorrection(result, m_gammaValue * 0.8);
