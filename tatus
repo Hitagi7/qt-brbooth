@@ -1,0 +1,101 @@
+src/core/capture.cpp:2952: leftover conflict marker
+src/core/capture.cpp:2968: leftover conflict marker
+src/core/capture.cpp:2972: trailing whitespace.
+[32m+[m[41m    [m
+src/core/capture.cpp:2978: trailing whitespace.
+[32m+[m[41m    [m
+src/core/capture.cpp:3008: trailing whitespace.
+[32m+[m[41m    [m
+src/core/capture.cpp:3011: trailing whitespace.
+[32m+[m[41m    [m
+src/core/capture.cpp:3016: trailing whitespace.
+[32m+[m[41m    [m
+src/core/capture.cpp:3027: trailing whitespace.
+[32m+[m[41m    [m
+src/core/capture.cpp:3030: trailing whitespace.
+[32m+[m[41m    [m
+src/core/capture.cpp:3035: trailing whitespace.
+[32m+[m[41m    [m
+src/core/capture.cpp:3042: trailing whitespace.
+[32m+[m[41m        [m
+src/core/capture.cpp:3047: trailing whitespace.
+[32m+[m[41m            [m
+src/core/capture.cpp:3051: trailing whitespace.
+[32m+[m[41m            [m
+src/core/capture.cpp:3060: trailing whitespace.
+[32m+[m[41m            [m
+src/core/capture.cpp:3076: trailing whitespace.
+[32m+[m[41m    [m
+src/core/capture.cpp:3080: trailing whitespace.
+[32m+[m[41m    [m
+src/core/capture.cpp:3099: trailing whitespace.
+[32m+[m[41m        [m
+src/core/capture.cpp:3103: trailing whitespace.
+[32m+[m[41m        [m
+src/core/capture.cpp:3118: trailing whitespace.
+[32m+[m[41m        [m
+src/core/capture.cpp:3160: trailing whitespace.
+[32m+[m[41m        [m
+src/core/capture.cpp:3180: trailing whitespace.
+[32m+[m[41m    [m
+src/core/capture.cpp:3187: trailing whitespace.
+[32m+[m[41m    [m
+src/core/capture.cpp:3193: trailing whitespace.
+[32m+[m[41m    [m
+src/core/capture.cpp:3199: trailing whitespace.
+[32m+[m[41m    [m
+src/core/capture.cpp:3204: trailing whitespace.
+[32m+[m[41m    [m
+src/core/capture.cpp:3209: trailing whitespace.
+[32m+[m[41m    [m
+src/core/capture.cpp:3214: trailing whitespace.
+[32m+[m[41m    [m
+src/core/capture.cpp:3223: trailing whitespace.
+[32m+[m[41m    [m
+src/core/capture.cpp:3229: trailing whitespace.
+[32m+[m[41m    [m
+src/core/capture.cpp:3238: trailing whitespace.
+[32m+[m[32m                    if (y < personMask.rows && x < personMask.cols &&[m[41m [m
+src/core/capture.cpp:3251: trailing whitespace.
+[32m+[m[41m            [m
+src/core/capture.cpp:3256: trailing whitespace.
+[32m+[m[41m            [m
+src/core/capture.cpp:3260: trailing whitespace.
+[32m+[m[41m            [m
+src/core/capture.cpp:3265: trailing whitespace.
+[32m+[m[41m            [m
+src/core/capture.cpp:3270: trailing whitespace.
+[32m+[m[41m            [m
+src/core/capture.cpp:3275: trailing whitespace.
+[32m+[m[41m                [m
+src/core/capture.cpp:3279: trailing whitespace.
+[32m+[m[41m            [m
+src/core/capture.cpp:3286: trailing whitespace.
+[32m+[m[41m            [m
+src/core/capture.cpp:3289: trailing whitespace.
+[32m+[m[41m            [m
+src/core/capture.cpp:3296: trailing whitespace.
+[32m+[m[41m                [m
+src/core/capture.cpp:3307: trailing whitespace.
+[32m+[m[41m                [m
+src/core/capture.cpp:3312: trailing whitespace.
+[32m+[m[41m    [m
+src/core/capture.cpp:3321: trailing whitespace.
+[32m+[m[32m            qWarning() << "Invalid segmentedFrame for mask creation: empty or not 3 channels, channels:"[m[41m [m
+src/core/capture.cpp:3325: trailing whitespace.
+[32m+[m[41m        [m
+src/core/capture.cpp:3329: trailing whitespace.
+[32m+[m[41m        [m
+src/core/capture.cpp:3333: trailing whitespace.
+[32m+[m[41m        [m
+src/core/capture.cpp:3338: trailing whitespace.
+[32m+[m[41m        [m
+src/core/capture.cpp:3341: trailing whitespace.
+[32m+[m[41m        [m
+src/core/capture.cpp:3345: trailing whitespace.
+[32m+[m[41m        [m
+src/core/capture.cpp:3348: trailing whitespace.
+[32m+[m[41m        [m
+src/core/capture.cpp:3350: trailing whitespace.
+[32m+[m[41m        [m
+src/core/capture.cpp:3356: leftover conflict marker

@@ -618,11 +618,17 @@ void Capture::updateCameraFeed(const QImage &image)
         if (m_segmentedFrameCounter != lastDisplayedFrameCounter) {
             shouldMeasureFPS = true;
             lastDisplayedFrameCounter = m_segmentedFrameCounter;
+            qDebug() << "FPS MEASUREMENT: New segmented frame detected, counter=" << m_segmentedFrameCounter;
         }
     } else {
         // Use original camera image - measure FPS for every camera frame
         displayImage = image;
         shouldMeasureFPS = true;
+        if (frameCount % 30 == 0) {  // Log every 30 frames to avoid spam
+            qDebug() << "FPS MEASUREMENT: Using camera feed (segmentation not active or no frame ready)"
+                     << "segEnabled=" << m_segmentationEnabledInCapture 
+                     << "lastFrameEmpty=" << m_lastSegmentedFrame.empty();
+        }
     }
 
     QPixmap pixmap = QPixmap::fromImage(displayImage);
@@ -750,6 +756,7 @@ void Capture::updateCameraFeed(const QImage &image)
                                  << "instant=" << QString::number(currentInstantFPS, 'f', 1)
                                  << "avg=" << QString::number(currentAverageFPS, 'f', 1)
                                  << "frameTime=" << frameTimeMs << "ms"
+                                 << "segmentationActive=" << m_segmentationEnabledInCapture
                                  << "Pointer:" << (void*)m_systemMonitor;
                         try {
                             m_systemMonitor->updateFPS(static_cast<double>(m_currentFPS));
@@ -2899,6 +2906,7 @@ void Capture::cleanupRecordingSystem()
 
 void Capture::queueFrameForRecording(const cv::Mat &frame)
 {
+    Q_UNUSED(frame); // Parameter reserved for future use
     if (!m_recordingThreadActive) {
         return;
     }
@@ -3357,6 +3365,12 @@ cv::Mat Capture::createPersonMaskFromSegmentedFrame(const cv::Mat &segmentedFram
         
     } catch (const cv::Exception& e) {
         qWarning() << "Failed to create person mask:" << e.what();
+        return cv::Mat::zeros(segmentedFrame.size(), CV_8UC1);
+    }
+}
+*/
+// End of duplicate code from remote branch
+
 //  DYNAMIC VIDEO PROCESSING MOVED TO capture_dynamic.cpp
 //  See src/core/capture_dynamic.cpp for processRecordedVideoWithLighting()
 

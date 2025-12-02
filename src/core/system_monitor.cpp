@@ -176,6 +176,9 @@ void SystemMonitor::collectStatistics()
     // Read FPS from volatile variable (thread-safe read on x86/x64)
     double currentFPS = m_latestFPS;
     
+    qDebug() << "========================================";
+    qDebug() << "SystemMonitor::collectStatistics() - Read m_latestFPS:" << currentFPS;
+    
     // Now acquire the main mutex for the rest of the statistics
     QMutexLocker locker(&m_mutex);
     
@@ -197,7 +200,12 @@ void SystemMonitor::collectStatistics()
     }
     
     // Use the FPS value we read atomically
-    stats.averageFPS = currentFPS > 0.0 ? currentFPS : m_lastStats.averageFPS;
+    // IMPORTANT: Always use currentFPS if it's valid, don't fall back to old values
+    stats.averageFPS = currentFPS;
+    
+    qDebug() << "SystemMonitor::collectStatistics() - Storing FPS:" << stats.averageFPS 
+             << "(will be saved to m_lastStats.averageFPS for crash reports)";
+    qDebug() << "========================================";
     
     // Update last statistics
     m_lastStats = stats;
@@ -361,158 +369,20 @@ void SystemMonitor::resetFPSTracking()
     // Simple volatile write
     m_latestFPS = 0.0;
     m_fpsTrackingTimer.restart();
-<<<<<<< Updated upstream
-}
-
-void SystemMonitor::saveStatisticsToDocx(const QString& filePath) const
-{
-    QMutexLocker locker(&m_mutex);
-    
-    QString outputPath = filePath;
-    if (outputPath.isEmpty()) {
-        QString downloadsPath = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
-        if (downloadsPath.isEmpty()) {
-            // Fallback for systems without standard download path
-            downloadsPath = "C:/Downloads";
-        }
-        
-        QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss");
-        QDir dir;
-        if (!dir.exists(downloadsPath)) {
-            dir.mkpath(downloadsPath);
-        }
-        outputPath = downloadsPath + "/crash_report_" + timestamp + ".docx";
-    }
-    
-    // Create a simple DOCX file (DOCX is a ZIP file containing XML)
-    // For simplicity, we'll create a basic DOCX structure
-    // Note: This is a minimal implementation. For full DOCX support, consider using a library.
-    
-    // Create temporary directory for DOCX contents
-    QDir tempDir = QDir::temp();
-    QString tempDocxDir = tempDir.absoluteFilePath("docx_temp_" + QString::number(QDateTime::currentMSecsSinceEpoch()));
-    QDir().mkpath(tempDocxDir);
-    
-    // Create [Content_Types].xml
-    QString contentTypes = R"(<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-<Default Extension="xml" ContentType="application/xml"/>
-<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
-</Types>)";
-    
-    QFile contentTypesFile(tempDocxDir + "/[Content_Types].xml");
-    if (contentTypesFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        QTextStream out(&contentTypesFile);
-        out << contentTypes;
-        contentTypesFile.close();
-    }
-    
-    // Create _rels/.rels
-    QDir().mkpath(tempDocxDir + "/_rels");
-    QString rels = R"(<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
-</Relationships>)";
-    
-    QFile relsFile(tempDocxDir + "/_rels/.rels");
-    if (relsFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        QTextStream out(&relsFile);
-        out << rels;
-        relsFile.close();
-    }
-    
-    // Create word/document.xml
-    QDir().mkpath(tempDocxDir + "/word");
-    QString documentXml = QString(R"(<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
-<w:body>
-<w:p><w:r><w:t>System Monitoring Statistics Report</w:t></w:r></w:p>
-<w:p><w:r><w:t>Generated: %1</w:t></w:r></w:p>
-<w:p><w:r><w:t></w:t></w:r></w:p>
-<w:p><w:r><w:t>Last Statistics:</w:t></w:r></w:p>
-<w:p><w:r><w:t>Timestamp: %2</w:t></w:r></w:p>
-<w:p><w:r><w:t>CPU Usage: %3%</w:t></w:r></w:p>
-<w:p><w:r><w:t>GPU Usage: %4%</w:t></w:r></w:p>
-<w:p><w:r><w:t>Peak Memory Usage: %5 GB</w:t></w:r></w:p>
-<w:p><w:r><w:t>Average FPS: %6 FPS</w:t></w:r></w:p>
-<w:p><w:r><w:t></w:t></w:r></w:p>
-<w:p><w:r><w:t>Average Statistics:</w:t></w:r></w:p>
-<w:p><w:r><w:t>Average CPU Usage: %7%</w:t></w:r></w:p>
-<w:p><w:r><w:t>Average GPU Usage: %8%</w:t></w:r></w:p>
-<w:p><w:r><w:t>Average Memory Usage: %9 GB</w:t></w:r></w:p>
-<w:p><w:r><w:t>Average FPS: %10 FPS</w:t></w:r></w:p>
-<w:p><w:r><w:t></w:t></w:r></w:p>
-<w:p><w:r><w:t>Peak Statistics:</w:t></w:r></w:p>
-<w:p><w:r><w:t>Peak CPU Usage: %11%</w:t></w:r></w:p>
-<w:p><w:r><w:t>Peak GPU Usage: %12%</w:t></w:r></w:p>
-<w:p><w:r><w:t>Peak Memory Usage: %13 GB</w:t></w:r></w:p>
-<w:p><w:r><w:t>Peak Average FPS: %14 FPS</w:t></w:r></w:p>
-</w:body>
-</w:document>)")
-        .arg(QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm:ss"))
-        .arg(m_lastStats.timestamp.toString("yyyy-MM-dd hh:mm:ss"))
-        .arg(QString::number(m_lastStats.cpuUsage, 'f', 2))
-        .arg(QString::number(m_lastStats.gpuUsage, 'f', 2))
-        .arg(QString::number(m_lastStats.peakMemoryGB, 'f', 2))
-        .arg(QString::number(m_lastStats.averageFPS, 'f', 2))
-        .arg(QString::number(m_averageStats.cpuUsage, 'f', 2))
-        .arg(QString::number(m_averageStats.gpuUsage, 'f', 2))
-        .arg(QString::number(m_averageStats.peakMemoryGB, 'f', 2))
-        .arg(QString::number(m_averageStats.averageFPS, 'f', 2))
-        .arg(QString::number(m_peakStats.cpuUsage, 'f', 2))
-        .arg(QString::number(m_peakStats.gpuUsage, 'f', 2))
-        .arg(QString::number(m_peakStats.peakMemoryGB, 'f', 2))
-        .arg(QString::number(m_peakStats.averageFPS, 'f', 2));
-    
-    QFile docFile(tempDocxDir + "/word/document.xml");
-    if (docFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        QTextStream out(&docFile);
-        out << documentXml;
-        docFile.close();
-    }
-    
-    // Create word/_rels/document.xml.rels
-    QDir().mkpath(tempDocxDir + "/word/_rels");
-    QString docRels = R"(<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-</Relationships>)";
-    
-    QFile docRelsFile(tempDocxDir + "/word/_rels/document.xml.rels");
-    if (docRelsFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        QTextStream out(&docRelsFile);
-        out << docRels;
-        docRelsFile.close();
-    }
-    
-    // Note: DOCX files are ZIP archives containing XML files
-    // For a complete implementation, we would need a ZIP library (like QuaZip or minizip)
-    // For now, we'll save as a text file instead
-    // The XML structure is created above if you want to implement ZIP compression later
-    qWarning() << "SystemMonitor: DOCX generation requires ZIP library. Saving as text file instead.";
-    QString textPath = outputPath;
-    textPath.replace(".docx", ".txt");
-    saveStatisticsToText(textPath);
-    
-    // Clean up temp directory
-    QDir(tempDocxDir).removeRecursively();
-=======
->>>>>>> Stashed changes
 }
 
 void SystemMonitor::saveStatisticsToText(const QString& filePath) const
 {
-    // Read FPS from volatile variable (thread-safe read)
-    double latestFPS = m_latestFPS;
-    
-    qDebug() << "saveStatisticsToText: Read FPS:" << latestFPS;
-    
-    if (latestFPS == 0.0) {
-        latestFPS = m_lastStats.averageFPS; // Fallback to last known value
-        qDebug() << "saveStatisticsToText: Using fallback FPS:" << latestFPS;
-    }
-    
     QMutexLocker locker(&m_mutex);
+    
+    // Use AVERAGE FPS from the entire session, not the last instant FPS
+    // This provides a more accurate representation of system performance
+    // (last FPS can be misleading if measured during page transitions)
+    double sessionAverageFPS = m_averageStats.averageFPS;
+    double lastInstantFPS = m_lastStats.averageFPS;
+    
+    qDebug() << "saveStatisticsToText: Session Average FPS:" << sessionAverageFPS 
+             << "Last Instant FPS:" << lastInstantFPS;
     
     QString outputPath = filePath;
     if (outputPath.isEmpty()) {
@@ -548,7 +418,8 @@ void SystemMonitor::saveStatisticsToText(const QString& filePath) const
     out << "CPU Usage: " << QString::number(m_lastStats.cpuUsage, 'f', 2) << "%\n";
     out << "GPU Usage: " << QString::number(m_lastStats.gpuUsage, 'f', 2) << "%\n";
     out << "Peak Memory Usage: " << QString::number(m_lastStats.peakMemoryGB, 'f', 2) << " GB\n";
-    out << "Average FPS: " << QString::number(latestFPS, 'f', 2) << " FPS\n\n";
+    out << "Last Instant FPS: " << QString::number(lastInstantFPS, 'f', 2) << " FPS\n";
+    out << "Session Average FPS: " << QString::number(sessionAverageFPS, 'f', 2) << " FPS\n\n";
     
     out << "PEAK STATISTICS:\n";
     out << "----------------\n";

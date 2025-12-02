@@ -467,6 +467,8 @@ private:
     
     // Background Subtraction Reference Image
     void setSubtractionReferenceImage(const QString &imagePath);
+    void setSubtractionReferenceImage2(const QString &imagePath);
+    void setSubtractionReferenceBlendWeight(double weight);
     cv::Mat createPersonMaskFromSegmentedFrame(const cv::Mat &segmentedFrame);
     cv::Mat applyPersonColorMatching(const cv::Mat &segmentedFrame);
     cv::Mat applyLightingToRawPersonRegion(const cv::Mat &personRegion, const cv::Mat &personMask);
