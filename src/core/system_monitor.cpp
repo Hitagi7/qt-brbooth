@@ -354,9 +354,18 @@ void SystemMonitor::saveStatisticsToDocx(const QString& filePath) const
     
     QString outputPath = filePath;
     if (outputPath.isEmpty()) {
-        QString appDir = QCoreApplication::applicationDirPath();
+        QString downloadsPath = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
+        if (downloadsPath.isEmpty()) {
+            // Fallback for systems without standard download path
+            downloadsPath = "C:/Downloads";
+        }
+        
         QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss");
-        outputPath = appDir + "/crash_report_" + timestamp + ".docx";
+        QDir dir;
+        if (!dir.exists(downloadsPath)) {
+            dir.mkpath(downloadsPath);
+        }
+        outputPath = downloadsPath + "/crash_report_" + timestamp + ".docx";
     }
     
     // Create a simple DOCX file (DOCX is a ZIP file containing XML)
@@ -479,9 +488,18 @@ void SystemMonitor::saveStatisticsToText(const QString& filePath) const
     
     QString outputPath = filePath;
     if (outputPath.isEmpty()) {
-        QString appDir = QCoreApplication::applicationDirPath();
+        QString downloadsPath = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
+        if (downloadsPath.isEmpty()) {
+            // Fallback for systems without standard download path
+            downloadsPath = "C:/Downloads";
+        }
+        
         QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss");
-        outputPath = appDir + "/crash_report_" + timestamp + ".txt";
+        QDir dir;
+        if (!dir.exists(downloadsPath)) {
+            dir.mkpath(downloadsPath);
+        }
+        outputPath = downloadsPath + "/crash_report_" + timestamp + ".txt";
     }
     
     QFile file(outputPath);
