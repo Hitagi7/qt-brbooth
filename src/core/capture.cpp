@@ -384,8 +384,6 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     initializePersonDetection();
 
     m_captureReady = true;  // Start with capture ready
-    // Initialize MediaPipe-like tracker
-    // TODO: Initialize hand tracker when available
 
 
 
@@ -5585,45 +5583,6 @@ void Capture::setSubtractionReferenceImage(const QString &imagePath)
         qWarning() << "Failed to load subtraction reference image from:" << resolvedPath;
         m_subtractionReferenceImage.release();
     }
-}
-
-void Capture::setSubtractionReferenceImage2(const QString &imagePath)
-{
-    if (imagePath.isEmpty()) {
-        m_subtractionReferenceImage2.release();
-        qDebug() << "Subtraction reference image 2 cleared";
-        return;
-    }
-    
-    // Try to resolve the path
-    QString resolvedPath = resolveTemplatePath(imagePath);
-    if (resolvedPath.isEmpty()) {
-        // Try direct path
-        if (QFile::exists(imagePath)) {
-            resolvedPath = imagePath;
-        } else {
-            qWarning() << "Could not resolve subtraction reference image 2 path:" << imagePath;
-            m_subtractionReferenceImage2.release();
-            return;
-        }
-    }
-    
-    // Load the reference image
-    cv::Mat refImage = cv::imread(resolvedPath.toStdString());
-    if (!refImage.empty()) {
-        m_subtractionReferenceImage2 = refImage;
-        qDebug() << "Subtraction reference image 2 loaded from:" << resolvedPath
-                 << "Size:" << m_subtractionReferenceImage2.cols << "x" << m_subtractionReferenceImage2.rows;
-    } else {
-        qWarning() << "Failed to load subtraction reference image 2 from:" << resolvedPath;
-        m_subtractionReferenceImage2.release();
-    }
-}
-
-void Capture::setSubtractionReferenceBlendWeight(double weight)
-{
-    m_subtractionBlendWeight = std::max(0.0, std::min(1.0, weight));
-    qDebug() << "Subtraction reference blend weight set to:" << m_subtractionBlendWeight;
 }
 
 cv::Mat Capture::applyPostProcessingLighting()

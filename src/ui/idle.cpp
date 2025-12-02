@@ -64,7 +64,6 @@ void Idle::setupWalkthroughLabels()
     
     // Step 1
     m_step1Label = new QLabel("<div style='text-align: center;'>"
-                              "<div style='font-size: 64px; margin-bottom: 10px;'>🎭</div>"
                               "<div style='font-size: 28px; font-weight: bold; margin: 10px 0;'>Step 1</div>"
                               "<div style='font-size: 20px; line-height: 1.4;'>Select STATIC<br>or DYNAMIC</div>"
                               "</div>", this);
@@ -77,7 +76,7 @@ void Idle::setupWalkthroughLabels()
     stepsLayout->addWidget(m_step1Label, 1);
     
     // Arrow 1
-    m_arrow1Label = new QLabel("➡️", this);
+    m_arrow1Label = new QLabel(">", this);
     m_arrow1Label->setAlignment(Qt::AlignCenter);
     m_arrow1Label->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
     m_arrow1Label->setProperty("class", "arrowLabel");
@@ -93,7 +92,6 @@ void Idle::setupWalkthroughLabels()
     
     // Step 2
     m_step2Label = new QLabel("<div style='text-align: center;'>"
-                              "<div style='font-size: 64px; margin-bottom: 10px;'>🖼️</div>"
                               "<div style='font-size: 28px; font-weight: bold; margin: 10px 0;'>Step 2</div>"
                               "<div style='font-size: 20px; line-height: 1.4;'>Choose your<br>favorite template</div>"
                               "</div>", this);
@@ -106,7 +104,7 @@ void Idle::setupWalkthroughLabels()
     stepsLayout->addWidget(m_step2Label, 1);
     
     // Arrow 2
-    m_arrow2Label = new QLabel("➡️", this);
+    m_arrow2Label = new QLabel(">", this);
     m_arrow2Label->setAlignment(Qt::AlignCenter);
     m_arrow2Label->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
     m_arrow2Label->setProperty("class", "arrowLabel");
@@ -122,7 +120,6 @@ void Idle::setupWalkthroughLabels()
     
     // Step 3
     m_step3Label = new QLabel("<div style='text-align: center;'>"
-                              "<div style='font-size: 64px; margin-bottom: 10px;'>📸</div>"
                               "<div style='font-size: 28px; font-weight: bold; margin: 10px 0;'>Step 3</div>"
                               "<div style='font-size: 20px; line-height: 1.4;'>Get ready<br>for the camera</div>"
                               "</div>", this);
@@ -135,7 +132,7 @@ void Idle::setupWalkthroughLabels()
     stepsLayout->addWidget(m_step3Label, 1);
     
     // Arrow 3
-    m_arrow3Label = new QLabel("➡️", this);
+    m_arrow3Label = new QLabel(">", this);
     m_arrow3Label->setAlignment(Qt::AlignCenter);
     m_arrow3Label->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
     m_arrow3Label->setProperty("class", "arrowLabel");
@@ -151,7 +148,6 @@ void Idle::setupWalkthroughLabels()
     
     // Step 4
     m_step4Label = new QLabel("<div style='text-align: center;'>"
-                              "<div style='font-size: 64px; margin-bottom: 10px;'>✨</div>"
                               "<div style='font-size: 28px; font-weight: bold; margin: 10px 0;'>Step 4</div>"
                               "<div style='font-size: 20px; line-height: 1.4;'>Strike a pose<br>and capture!</div>"
                               "</div>", this);
@@ -164,7 +160,7 @@ void Idle::setupWalkthroughLabels()
     stepsLayout->addWidget(m_step4Label, 1);
     
     // Arrow 4
-    m_arrow4Label = new QLabel("➡️", this);
+    m_arrow4Label = new QLabel(">", this);
     m_arrow4Label->setAlignment(Qt::AlignCenter);
     m_arrow4Label->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
     m_arrow4Label->setProperty("class", "arrowLabel");
@@ -180,7 +176,6 @@ void Idle::setupWalkthroughLabels()
     
     // Step 5
     m_step5Label = new QLabel("<div style='text-align: center;'>"
-                              "<div style='font-size: 64px; margin-bottom: 10px;'>💾</div>"
                               "<div style='font-size: 28px; font-weight: bold; margin: 10px 0;'>Step 5</div>"
                               "<div style='font-size: 20px; line-height: 1.4;'>Save or retake<br>your photo!</div>"
                               "</div>", this);

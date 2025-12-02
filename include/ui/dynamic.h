@@ -49,7 +49,6 @@ private slots:
     void on_back_clicked();
     void onVideoPreviewBackClicked(); // New slot for video preview back button
     void resetDebounce();
-    void onPlayerMediaStatusChanged(QMediaPlayer::MediaStatus status);
     void processVideoClick(QObject *buttonObj); // Handles clicks on individual video buttons
 
 private:

@@ -53,7 +53,14 @@ SOURCES += \
     src/ui/final.cpp \
     src/ui/idle.cpp \
     src/ui/iconhover.cpp \
+<<<<<<< Updated upstream
     src/ui/ui_manager.cpp \
+<<<<<<< Updated upstream
+=======
+    src/algorithms/hand_detection/hand_detector.cpp \
+=======
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     src/algorithms/lighting_correction/lighting_corrector.cpp
 
 HEADERS += \
@@ -71,7 +78,14 @@ HEADERS += \
     include/ui/final.h \
     include/ui/idle.h \
     include/ui/iconhover.h \
+<<<<<<< Updated upstream
     include/ui/ui_manager.h \
+<<<<<<< Updated upstream
+=======
+    include/algorithms/hand_detection/hand_detector.h \
+=======
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     include/algorithms/lighting_correction/lighting_corrector.h
 
 FORMS += \

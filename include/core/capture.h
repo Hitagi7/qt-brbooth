@@ -465,27 +465,12 @@ private:
     
     // Background Subtraction Reference Image
     void setSubtractionReferenceImage(const QString &imagePath);
-    void setSubtractionReferenceImage2(const QString &imagePath);
-    void setSubtractionReferenceBlendWeight(double weight);  // Weight for blending (0.0 = use only first, 1.0 = use only second, 0.5 = equal blend)
     cv::Mat createPersonMaskFromSegmentedFrame(const cv::Mat &segmentedFrame);
     cv::Mat applyPersonColorMatching(const cv::Mat &segmentedFrame);
     cv::Mat applyLightingToRawPersonRegion(const cv::Mat &personRegion, const cv::Mat &personMask);
     cv::Mat applyVideoOptimizedLighting(const cv::Mat &personRegion, const cv::Mat &personMask, LightingCorrector* lightingCorrector);
     cv::Mat applyPostProcessingLighting();
     QList<QPixmap> processRecordedVideoWithLighting(const QList<QPixmap> &inputFrames, double fps);
-    cv::Mat applyDynamicFrameEdgeBlending(const cv::Mat &composedFrame, 
-                                          const cv::Mat &rawPersonRegion, 
-                                          const cv::Mat &rawPersonMask, 
-                                          const cv::Mat &backgroundFrame = cv::Mat());
-    cv::Mat applyFastEdgeBlendingForVideo(const cv::Mat &composedFrame, 
-                                          const cv::Mat &rawPersonRegion, 
-                                          const cv::Mat &rawPersonMask, 
-                                          const cv::Mat &backgroundFrame = cv::Mat());  // Fast edge blending optimized for video
-    cv::Mat applySimpleDynamicCompositing(const cv::Mat &composedFrame,
-                                          const cv::Mat &rawPersonRegion,
-                                          const cv::Mat &rawPersonMask,
-                                          const cv::Mat &backgroundFrame);  // Ultra-simple compositing for dynamic videos
-    
     // Thread-safe wrapper functions for parallel processing
     cv::Mat applyDynamicFrameEdgeBlendingSafe(const cv::Mat &composedFrame,
                                               const cv::Mat &rawPersonRegion,

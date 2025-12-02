@@ -16,7 +16,6 @@
 
 // Global pointer to system monitor for crash handler
 static SystemMonitor* g_systemMonitor = nullptr;
-static BRBooth* g_brbooth = nullptr;
 
 // Crash handler function
 void crashHandler(int signal)
@@ -171,7 +170,6 @@ int main(int argc, char *argv[])
     SetUnhandledExceptionFilter(exceptionHandler);
     
     BRBooth w;
-    g_brbooth = &w;
     
     // Get system monitor from BRBooth for crash handler
     g_systemMonitor = w.getSystemMonitor();
@@ -180,7 +178,6 @@ int main(int argc, char *argv[])
     int result = a.exec();
     
     // Clean up
-    g_brbooth = nullptr;
     g_systemMonitor = nullptr;
     
     return result;
