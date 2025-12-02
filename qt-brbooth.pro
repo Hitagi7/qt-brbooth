@@ -43,6 +43,7 @@ SOURCES += \
     src/core/brbooth.cpp \
     src/core/camera.cpp \
     src/core/capture.cpp \
+    src/core/capture_dynamic.cpp \
     src/core/system_monitor.cpp \
     src/ui/loading.cpp \
     src/ui/confirm.cpp \

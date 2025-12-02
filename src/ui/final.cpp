@@ -82,7 +82,7 @@ Final::Final(QWidget *parent)
     ui->videoLabel->setMinimumSize(1, 1);
     ui->videoLabel->setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
     ui->videoLabel->setStyleSheet("background-color: black;"); // Set background to black if no image
-    ui->videoLabel->setScaledContents(false);                  // We handle scaling manually
+    ui->videoLabel->setScaledContents(true);                   // Enable full-screen scaling
     ui->videoLabel->setAlignment(Qt::AlignCenter); // Center the scaled image within the label
 
     // Configure overlayFinal (foreground for buttons)

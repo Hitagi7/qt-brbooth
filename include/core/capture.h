@@ -554,6 +554,14 @@ private:
                                           const cv::Mat &rawPersonRegion, 
                                           const cv::Mat &rawPersonMask, 
                                           const cv::Mat &backgroundFrame = cv::Mat());
+    cv::Mat applyFastEdgeBlendingForVideo(const cv::Mat &composedFrame, 
+                                          const cv::Mat &rawPersonRegion, 
+                                          const cv::Mat &rawPersonMask, 
+                                          const cv::Mat &backgroundFrame = cv::Mat());  // Fast edge blending optimized for video
+    cv::Mat applySimpleDynamicCompositing(const cv::Mat &composedFrame,
+                                          const cv::Mat &rawPersonRegion,
+                                          const cv::Mat &rawPersonMask,
+                                          const cv::Mat &backgroundFrame);  // Ultra-simple compositing for dynamic videos
     
     //  Optimized Async Lighting Processing (POST-PROCESSING ONLY)
     void initializeAsyncLightingSystem();

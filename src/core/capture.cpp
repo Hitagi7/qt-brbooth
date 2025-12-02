@@ -41,6 +41,7 @@
 #include <opencv2/cudafilters.hpp> // Added for CUDA filter functions
 #include <opencv2/cudaarithm.hpp> // Added for CUDA arithmetic operations (inRange, bitwise_or)
 #include <QtConcurrent/QtConcurrent>
+#include <QThreadPool>
 #include <QMutexLocker>
 #include <chrono>
 #include <QFutureWatcher>
@@ -49,13 +50,14 @@
 
 //  Forward declarations for guided filtering functions
 static cv::Mat guidedFilterGrayAlphaCPU(const cv::Mat &guideBGR, const cv::Mat &hardMask, int radius, float eps);
-static cv::Mat guidedFilterGrayAlphaCUDA(const cv::Mat &guideBGR, const cv::Mat &hardMask, int radius, float eps, cv::cuda::Stream &stream = cv::cuda::Stream::Null());
-static cv::Mat guidedFilterGrayAlphaCUDAOptimized(const cv::Mat &guideBGR, const cv::Mat &hardMask, int radius, float eps, GPUMemoryPool &memoryPool, cv::cuda::Stream &stream = cv::cuda::Stream::Null());
+// Made non-static so it can be used by capture_dynamic.cpp
+cv::Mat guidedFilterGrayAlphaCUDAOptimized(const cv::Mat &guideBGR, const cv::Mat &hardMask, int radius, float eps, GPUMemoryPool &memoryPool, cv::cuda::Stream &stream = cv::cuda::Stream::Null());
 
 //  Forward declarations for edge blurring functions
-static cv::Mat applyEdgeBlurringCUDA(const cv::Mat &segmentedObject, const cv::Mat &objectMask, const cv::Mat &backgroundTemplate, float blurRadius, GPUMemoryPool &memoryPool, cv::cuda::Stream &stream = cv::cuda::Stream::Null());
+// Made non-static so they can be used by capture_dynamic.cpp
+cv::Mat applyEdgeBlurringCUDA(const cv::Mat &segmentedObject, const cv::Mat &objectMask, const cv::Mat &backgroundTemplate, float blurRadius, GPUMemoryPool &memoryPool, cv::cuda::Stream &stream = cv::cuda::Stream::Null());
 static cv::Mat applyEdgeBlurringCPU(const cv::Mat &segmentedObject, const cv::Mat &objectMask, const cv::Mat &backgroundTemplate, float blurRadius);
-static cv::Mat applyEdgeBlurringAlternative(const cv::Mat &segmentedObject, const cv::Mat &objectMask, float blurRadius);
+cv::Mat applyEdgeBlurringAlternative(const cv::Mat &segmentedObject, const cv::Mat &objectMask, float blurRadius);
 
 // Fixed segmentation rectangle configuration
 // Adjust kFixedRectX and kFixedRectY to reposition the rectangle on screen.
@@ -217,19 +219,18 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     , m_useGPU(false)
     , m_useCUDA(false)
     , m_gpuUtilized(false)
-    , m_cudaUtilized(false)
     , m_handDetector(new HandDetector())
-    , m_personDetectionWatcher(nullptr)
     , m_showHandDetection(true)
-    , m_lastDetections()
-    // , m_tfliteModelLoaded(false)
     , m_handDetectionEnabled(false)
     , m_handDetectionMutex()
     , m_handDetectionTimer()
     , m_lastHandDetectionTime(0.0)
     , m_handDetectionFPS(0)
-    , m_lastHandDetections()
     , m_systemMonitor(nullptr)
+    , m_lastHandDetections()
+    , m_cudaUtilized(false)
+    , m_personDetectionWatcher(nullptr)
+    , m_lastDetections()
     , m_handDetectionFuture()
     , m_handDetectionWatcher(nullptr)
     , m_captureReady(false)
@@ -259,12 +260,12 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     , m_recordingThread(nullptr)
     , m_recordingFrameTimer(nullptr)
     , m_recordingMutex()
-    , m_recordingFrameQueue()
     , debugWidget(nullptr)
     , debugLabel(nullptr)
     , m_recordingThreadActive(false)
-    , m_recordingStream()
     , handDetectionLabel(nullptr)
+    , m_recordingFrameQueue()
+    , m_recordingStream()
     , debugUpdateTimer(nullptr)
     , m_currentFPS(0)
     , m_recordingGpuBuffer()
@@ -279,9 +280,9 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     , m_smoothingHoldFrames(5)
     , m_smoothingHoldCounter(0)
     , m_detectionSkipInterval(2)
-    , m_detectionSkipCounter(0)
     // Lighting Correction Member
     , m_lightingCorrector(nullptr)
+    , m_detectionSkipCounter(0)
     //  Simplified Lighting Processing (POST-PROCESSING ONLY)
     , m_lightingProcessingThread(nullptr)
     , m_lightingWatcher(nullptr)
@@ -1025,19 +1026,37 @@ void Capture::captureRecordingFrame()
         return;
     }
 
-    //  CAPTURE EXACTLY WHAT'S DISPLAYED ON SCREEN (with video template)
+    //  CAPTURE FULL-RESOLUTION FRAME (not scaled display)
     QPixmap currentDisplayPixmap;
 
-    // Get the current display from the video label (what user actually sees)
-    if (ui->videoLabel) {
+    // CRITICAL: Capture full-resolution segmented frame instead of scaled display
+    // This ensures recorded frames are at full resolution, not scaled down
+    if (m_segmentationEnabledInCapture) {
+        QMutexLocker locker(&m_personDetectionMutex);
+        if (!m_lastSegmentedFrame.empty()) {
+            // Convert full-resolution segmented frame to QPixmap
+            QImage fullResImage = cvMatToQImage(m_lastSegmentedFrame);
+            if (!fullResImage.isNull()) {
+                currentDisplayPixmap = QPixmap::fromImage(fullResImage);
+                qDebug() << " FULL-RES CAPTURE: Captured full-resolution segmented frame:" 
+                         << currentDisplayPixmap.width() << "x" << currentDisplayPixmap.height();
+            }
+        }
+        locker.unlock();
+    }
+    
+    // Fallback: Get from video label if full-res capture failed
+    if (currentDisplayPixmap.isNull() && ui->videoLabel) {
         QPixmap labelPixmap = ui->videoLabel->pixmap();
         if (!labelPixmap.isNull()) {
             currentDisplayPixmap = labelPixmap;
-            qDebug() << " DIRECT CAPTURE: Capturing current display from video label";
+            qDebug() << " FALLBACK CAPTURE: Using scaled display from video label";
         } else {
-            qDebug() << " DIRECT CAPTURE: Video label pixmap is null, using fallback";
+            qDebug() << " FALLBACK CAPTURE: Video label pixmap is null, using fallback";
         }
-            } else {
+    }
+    
+    if (currentDisplayPixmap.isNull()) {
         // Fallback: Get the appropriate frame to record
         cv::Mat frameToRecord;
 
@@ -6813,8 +6832,6 @@ void Capture::setSubtractionReferenceBlendWeight(double weight)
     qDebug() << "Subtraction reference blend weight set to:" << m_subtractionBlendWeight;
 }
 
-// Forward declaration to ensure availability before use
-static cv::Mat guidedFilterGrayAlpha(const cv::Mat &guideBGR, const cv::Mat &hardMask, int radius, float eps);
 cv::Mat Capture::applyPostProcessingLighting()
 {
     qDebug() << "POST-PROCESSING: Apply lighting to raw person data and re-composite";
@@ -7195,131 +7212,8 @@ cv::Mat Capture::createPersonMaskFromSegmentedFrame(const cv::Mat &segmentedFram
         return cv::Mat::zeros(segmentedFrame.size(), CV_8UC1);
     }
 }
-QList<QPixmap> Capture::processRecordedVideoWithLighting(const QList<QPixmap> &inputFrames, double fps)
-{
-    Q_UNUSED(fps); // FPS parameter kept for future use but not currently needed
-    
-    //  ENHANCED: Apply edge-blending lighting similar to static mode
-    QList<QPixmap> outputFrames;
-    outputFrames.reserve(inputFrames.size());
-
-    const int total = inputFrames.size();
-    qDebug() << "Starting enhanced post-processing with edge blending for" << total << "frames";
-    
-    //  CRASH PREVENTION: Check if lighting corrector is properly initialized
-    bool lightingAvailable = (m_lightingCorrector != nullptr);
-    qDebug() << "Lighting corrector available:" << lightingAvailable;
-    
-    //  CRASH PREVENTION: If no lighting available, return frames as-is
-    if (!lightingAvailable) {
-        qDebug() << "No lighting correction available, returning original frames";
-        return inputFrames;
-    }
-    
-    for (int i = 0; i < total; ++i) {
-        // Update progress to loading UI
-        int pct = (total > 0) ? ((i * 100) / total) : 100;
-        emit videoProcessingProgress(pct);
-
-        try {
-            //  CRASH PREVENTION: Validate frame before processing
-            if (i >= inputFrames.size() || inputFrames.at(i).isNull()) {
-                qWarning() << "Invalid frame at index" << i << "- using black frame";
-                outputFrames.append(QPixmap(640, 480));
-                continue;
-            }
-
-            // Get current frame
-            QPixmap currentFrame = inputFrames.at(i);
-            
-            // Convert to cv::Mat for processing
-            QImage frameImage = currentFrame.toImage().convertToFormat(QImage::Format_BGR888);
-            if (frameImage.isNull()) {
-                qWarning() << "Failed to convert frame" << i << "to QImage - using original";
-                outputFrames.append(currentFrame);
-                continue;
-            }
-
-            cv::Mat composedFrame(frameImage.height(), frameImage.width(), CV_8UC3,
-                                  const_cast<uchar*>(frameImage.bits()), frameImage.bytesPerLine());
-            
-            if (composedFrame.empty()) {
-                qWarning() << "Failed to convert frame" << i << "to cv::Mat - using original";
-                outputFrames.append(currentFrame);
-                continue;
-            }
-
-            cv::Mat composedCopy = composedFrame.clone();
-            cv::Mat finalFrame;
-
-            //  ENHANCED: Apply edge blending if raw person data is available for this frame
-            bool hasRawPersonData = (i < m_recordedRawPersonRegions.size() && 
-                                     i < m_recordedRawPersonMasks.size() &&
-                                     !m_recordedRawPersonRegions[i].empty() &&
-                                     !m_recordedRawPersonMasks[i].empty());
-
-            if (hasRawPersonData) {
-                // Apply advanced edge blending similar to static mode
-                try {
-                    finalFrame = applyDynamicFrameEdgeBlending(composedCopy, 
-                                                               m_recordedRawPersonRegions[i],
-                                                               m_recordedRawPersonMasks[i],
-                                                               i < m_recordedBackgroundFrames.size() ? 
-                                                               m_recordedBackgroundFrames[i] : cv::Mat());
-                    
-                    if (finalFrame.empty()) {
-                        qWarning() << "Edge blending returned empty result for frame" << i << "- using global correction";
-                        finalFrame = m_lightingCorrector->applyGlobalLightingCorrection(composedCopy);
-                    }
-                } catch (const std::exception& e) {
-                    qWarning() << "Edge blending failed for frame" << i << ":" << e.what() << "- using global correction";
-                    finalFrame = m_lightingCorrector->applyGlobalLightingCorrection(composedCopy);
-                }
-            } else {
-                // Fallback to comprehensive global lighting correction (same as static mode)
-                qDebug() << "ENHANCED: Applying full global lighting correction (same as static mode) for frame" << i;
-                try {
-                    finalFrame = m_lightingCorrector->applyGlobalLightingCorrection(composedCopy);
-                    if (finalFrame.empty()) {
-                        qWarning() << "Global lighting correction returned empty result for frame" << i;
-                        finalFrame = composedCopy;
-                    }
-                } catch (const std::exception& e) {
-                    qWarning() << "Global lighting correction failed for frame" << i << ":" << e.what();
-                    finalFrame = composedCopy;
-                }
-            }
-
-            // Convert back to QPixmap
-            QImage outImage = cvMatToQImage(finalFrame);
-            if (outImage.isNull()) {
-                qWarning() << "Failed to convert processed frame" << i << "back to QImage - using original";
-                outputFrames.append(currentFrame);
-            } else {
-                outputFrames.append(QPixmap::fromImage(outImage));
-            }
-
-        } catch (const std::exception& e) {
-            qWarning() << "Exception processing frame" << i << ":" << e.what() << "- using original frame";
-            if (i < inputFrames.size()) {
-                outputFrames.append(inputFrames.at(i));
-            } else {
-                outputFrames.append(QPixmap(640, 480));
-            }
-        }
-    }
-
-    // Ensure 100% at end
-    emit videoProcessingProgress(100);
-
-    // Clear per-frame buffers for next recording (safely)
-    m_recordedRawPersonRegions.clear();
-    m_recordedRawPersonMasks.clear();
-    m_recordedBackgroundFrames.clear();
-
-    qDebug() << "Enhanced post-processing with edge blending completed for" << total << "frames - output:" << outputFrames.size() << "frames";
-    return outputFrames;
-}
+//  DYNAMIC VIDEO PROCESSING MOVED TO capture_dynamic.cpp
+//  See src/core/capture_dynamic.cpp for processRecordedVideoWithLighting()
 
 //  Async Lighting Processing System for non-blocking video processing
 void Capture::initializeAsyncLightingSystem()
@@ -7350,208 +7244,13 @@ void Capture::cleanupAsyncLightingSystem()
     
     qDebug() << " Async lighting system cleaned up";
 }
-//  NEW: Dynamic Frame Edge Blending (similar to static mode)
-cv::Mat Capture::applyDynamicFrameEdgeBlending(const cv::Mat &composedFrame, 
-                                               const cv::Mat &rawPersonRegion, 
-                                               const cv::Mat &rawPersonMask, 
-                                               const cv::Mat &backgroundFrame)
-{
-    qDebug() << "DYNAMIC EDGE BLENDING: Applying edge blending to dynamic frame";
-    
-    // Validate inputs
-    if (composedFrame.empty() || rawPersonRegion.empty() || rawPersonMask.empty()) {
-        qWarning() << "Invalid input data for edge blending, using global correction";
-        return m_lightingCorrector->applyGlobalLightingCorrection(composedFrame);
-    }
-    
-    try {
-        // Start with clean background or use provided background frame
-        cv::Mat result;
-        cv::Mat cleanBackground;
-        
-        if (!backgroundFrame.empty()) {
-            cv::resize(backgroundFrame, cleanBackground, composedFrame.size());
-        } else {
-            // Extract background from dynamic template or use clean template
-            if (!m_lastTemplateBackground.empty()) {
-                cv::resize(m_lastTemplateBackground, cleanBackground, composedFrame.size());
-            } else {
-                // Fallback to zero background
-                cleanBackground = cv::Mat::zeros(composedFrame.size(), composedFrame.type());
-            }
-        }
-        result = cleanBackground.clone();
-        
-        // Apply lighting correction to the raw person region (same as static mode - single lighting pass)
-        cv::Mat lightingCorrectedPerson = applyLightingToRawPersonRegion(rawPersonRegion, rawPersonMask);
-        qDebug() << "DYNAMIC: Applied raw person lighting correction (matching static mode)";
-        
-        // SCALING PRESERVATION: Scale the lighting-corrected person using the recorded scaling factor
-        cv::Mat scaledPerson, scaledMask;
-        
-        // Calculate the scaled size using the recorded scaling factor
-        cv::Size backgroundSize = result.size();
-        cv::Size scaledPersonSize;
-        
-        if (qAbs(m_recordedPersonScaleFactor - 1.0) > 0.01) {
-            int scaledWidth = static_cast<int>(backgroundSize.width * m_recordedPersonScaleFactor + 0.5);
-            int scaledHeight = static_cast<int>(backgroundSize.height * m_recordedPersonScaleFactor + 0.5);
-            
-            //  CRASH PREVENTION: Ensure scaled size is always valid (at least 1x1)
-            scaledWidth = qMax(1, scaledWidth);
-            scaledHeight = qMax(1, scaledHeight);
-            
-            scaledPersonSize = cv::Size(scaledWidth, scaledHeight);
-            qDebug() << "SCALING PRESERVATION: Scaling person to" << scaledWidth << "x" << scaledHeight 
-                     << "with recorded factor" << m_recordedPersonScaleFactor;
-        } else {
-            scaledPersonSize = backgroundSize;
-            qDebug() << "SCALING PRESERVATION: No scaling needed, using full size";
-        }
-        
-        // Scale person and mask to the calculated size
-        cv::resize(lightingCorrectedPerson, scaledPerson, scaledPersonSize);
-        cv::resize(rawPersonMask, scaledMask, scaledPersonSize);
-        
-        // Calculate centered offset for placing the scaled person (same as static mode)
-        cv::Size actualScaledSize(scaledPerson.cols, scaledPerson.rows);
-        int xOffset = (backgroundSize.width - actualScaledSize.width) / 2;
-        int yOffset = (backgroundSize.height - actualScaledSize.height) / 2;
-        
-        // If person is scaled down, place it on a full-size canvas at the centered position (same as static mode)
-        cv::Mat fullSizePerson, fullSizeMask;
-        if (actualScaledSize != backgroundSize) {
-            // Create full-size images initialized to zeros
-            fullSizePerson = cv::Mat::zeros(backgroundSize, scaledPerson.type());
-            fullSizeMask = cv::Mat::zeros(backgroundSize, CV_8UC1);
-            
-            // Ensure offsets are valid
-            if (xOffset >= 0 && yOffset >= 0 &&
-                xOffset + actualScaledSize.width <= backgroundSize.width &&
-                yOffset + actualScaledSize.height <= backgroundSize.height) {
-                
-                // Place scaled person at centered position
-                cv::Rect roi(xOffset, yOffset, actualScaledSize.width, actualScaledSize.height);
-                scaledPerson.copyTo(fullSizePerson(roi));
-                
-                // Convert mask to grayscale if needed, then copy to ROI
-                if (scaledMask.type() != CV_8UC1) {
-                    cv::Mat grayMask;
-                    cv::cvtColor(scaledMask, grayMask, cv::COLOR_BGR2GRAY);
-                    grayMask.copyTo(fullSizeMask(roi));
-                } else {
-                    scaledMask.copyTo(fullSizeMask(roi));
-                }
-                
-                qDebug() << "DYNAMIC: Placed scaled person at offset" << xOffset << "," << yOffset;
-            } else {
-                qWarning() << "DYNAMIC: Invalid offset, using direct copy";
-                cv::resize(scaledPerson, fullSizePerson, backgroundSize);
-                cv::resize(scaledMask, fullSizeMask, backgroundSize);
-            }
-        } else {
-            // Person is full size, use as is
-            fullSizePerson = scaledPerson;
-            if (scaledMask.type() != CV_8UC1) {
-                cv::cvtColor(scaledMask, fullSizeMask, cv::COLOR_BGR2GRAY);
-            } else {
-                fullSizeMask = scaledMask;
-            }
-        }
-        
-        // Now use fullSizePerson and fullSizeMask for blending (same as static mode)
-        scaledPerson = fullSizePerson;
-        scaledMask = fullSizeMask;
-        
-        // Apply guided filter edge blending (same algorithm as static mode)
-        cv::Mat binMask;
-        cv::threshold(scaledMask, binMask, 127, 255, cv::THRESH_BINARY);
-        
-        // First: shrink mask slightly to avoid fringe, then hard-copy interior
-        cv::Mat interiorMask;
-        cv::erode(binMask, interiorMask, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(2*2+1, 2*2+1))); // ~2px shrink
-        scaledPerson.copyTo(result, interiorMask);
+//  DYNAMIC VIDEO PROCESSING MOVED TO capture_dynamic.cpp
+//  See src/core/capture_dynamic.cpp for:
+//    - processRecordedVideoWithLighting()
+//    - applyDynamicFrameEdgeBlending()
+//    - applyFastEdgeBlendingForVideo()
+//    - applySimpleDynamicCompositing()
 
-        //  CUDA-Accelerated Guided image filtering to refine a soft alpha only on a thin edge ring
-        const int gfRadius = 8; // window size (reduced for better performance)
-        const float gfEps = 1e-2f; // regularization (increased for better performance)
-        
-        // Use GPU memory pool stream and buffers for optimized guided filtering
-        cv::cuda::Stream& guidedFilterStream = m_gpuMemoryPool.getCompositionStream();
-        cv::Mat alphaFloat = guidedFilterGrayAlphaCUDAOptimized(result, binMask, gfRadius, gfEps, m_gpuMemoryPool, guidedFilterStream);
-        
-        //  ENHANCED: Apply edge blurring to create smooth transitions between background and segmented object
-        const float edgeBlurRadius = 3.0f; // Increased blur radius for better background-object transition
-        cv::Mat edgeBlurredPerson = applyEdgeBlurringCUDA(scaledPerson, binMask, cleanBackground, edgeBlurRadius, m_gpuMemoryPool, guidedFilterStream);
-        if (!edgeBlurredPerson.empty()) {
-            scaledPerson = edgeBlurredPerson;
-            qDebug() << "DYNAMIC MODE: Applied CUDA edge blurring with radius" << edgeBlurRadius;
-        } else {
-            // Fallback to alternative method if CUDA fails
-            edgeBlurredPerson = applyEdgeBlurringAlternative(scaledPerson, binMask, edgeBlurRadius);
-            if (!edgeBlurredPerson.empty()) {
-                scaledPerson = edgeBlurredPerson;
-                qDebug() << "DYNAMIC MODE: Applied alternative edge blurring with radius" << edgeBlurRadius;
-            }
-        }
-        
-        // Build thin inner/outer rings around the boundary for localized updates only
-        cv::Mat inner, outer, ringInner, ringOuter;
-        cv::erode(binMask, inner, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(2*1+1, 2*1+1))); // shrink by ~1px for inner ring
-        cv::dilate(binMask, outer, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(2*4+1, 2*4+1))); // expand by ~4px for outer ring
-        cv::subtract(binMask, inner, ringInner);   // just inside the boundary
-        cv::subtract(outer, binMask, ringOuter);   // just outside the boundary
-        
-        // Clamp strictly
-        alphaFloat.setTo(1.0f, interiorMask > 0);  // full person interior remains 1
-        alphaFloat.setTo(0.0f, outer == 0); // outside remains 0
-        // Strongly bias ring blend toward template to eliminate colored outlines
-        alphaFloat = alphaFloat * 0.3f;
-
-        // Composite only where outer>0 to avoid touching background
-        cv::Mat personF, bgF; 
-        scaledPerson.convertTo(personF, CV_32F); 
-        cleanBackground.convertTo(bgF, CV_32F);
-        std::vector<cv::Mat> a3 = {alphaFloat, alphaFloat, alphaFloat};
-        cv::Mat alpha3; 
-        cv::merge(a3, alpha3);
-        
-        // Inner ring: solve for decontaminated foreground using matting equation, then composite
-        cv::Mat alphaSafe;
-        cv::max(alpha3, 0.05f, alphaSafe); // avoid division by very small alpha
-        cv::Mat Fclean = (personF - bgF.mul(1.0f - alpha3)).mul(1.0f / alphaSafe);
-        cv::Mat compF = Fclean.mul(alpha3) + bgF.mul(1.0f - alpha3);
-        cv::Mat out8u; 
-        compF.convertTo(out8u, CV_8U);
-        out8u.copyTo(result, ringInner);
-
-        // Outer ring: copy template directly to eliminate any colored outline
-        cleanBackground.copyTo(result, ringOuter);
-        
-        //  FINAL EDGE BLURRING: Apply edge blurring to the final composite result
-        const float finalEdgeBlurRadius = 4.0f; // Stronger blur for final result
-        cv::cuda::Stream& finalStream = m_gpuMemoryPool.getCompositionStream();
-        cv::Mat finalEdgeBlurred = applyEdgeBlurringCUDA(result, binMask, cleanBackground, finalEdgeBlurRadius, m_gpuMemoryPool, finalStream);
-        if (!finalEdgeBlurred.empty()) {
-            result = finalEdgeBlurred;
-            qDebug() << "DYNAMIC MODE: Applied final CUDA edge blurring to composite result with radius" << finalEdgeBlurRadius;
-        } else {
-            // Fallback to alternative method if CUDA fails
-            finalEdgeBlurred = applyEdgeBlurringAlternative(result, binMask, finalEdgeBlurRadius);
-            if (!finalEdgeBlurred.empty()) {
-                result = finalEdgeBlurred;
-                qDebug() << "DYNAMIC MODE: Applied final alternative edge blurring to composite result with radius" << finalEdgeBlurRadius;
-            }
-        }
-        
-        qDebug() << "DYNAMIC EDGE BLENDING: Successfully applied edge blending";
-        return result;
-        
-    } catch (const cv::Exception &e) {
-        qWarning() << "DYNAMIC EDGE BLENDING: Edge blending failed:" << e.what() << "- using global correction";
-        return m_lightingCorrector->applyGlobalLightingCorrection(composedFrame);
-    }
-}
 //  NEW: Lightweight Segmented Frame Creation for Recording Performance
 cv::Mat Capture::createLightweightSegmentedFrame(const cv::Mat &frame)
 {
@@ -7605,20 +7304,9 @@ cv::Mat Capture::createLightweightSegmentedFrame(const cv::Mat &frame)
 //  Performance Control Methods
 //  REMOVED: Real-time lighting methods - not needed for post-processing only mode
 
-// Scaffold: Guided filter-based feather alpha builder (stub)
-// Currently returns normalized hard mask; swap in a true guided filter later if needed
-static cv::Mat buildGuidedFeatherAlphaStub(const cv::Mat &guideBGR, const cv::Mat &hardMask)
-{
-    Q_UNUSED(guideBGR);
-    cv::Mat alphaFloat;
-    if (hardMask.empty()) return alphaFloat;
-    hardMask.convertTo(alphaFloat, CV_32F, 1.0f / 255.0f);
-    return alphaFloat;
-}
-
 //  CUDA-Accelerated Guided Filter for Edge-Blending (Memory Pool Optimized)
 // GPU-optimized guided filtering that maintains FPS and quality using pre-allocated buffers
-static cv::Mat guidedFilterGrayAlphaCUDAOptimized(const cv::Mat &guideBGR, const cv::Mat &hardMask, int radius, float eps, 
+cv::Mat guidedFilterGrayAlphaCUDAOptimized(const cv::Mat &guideBGR, const cv::Mat &hardMask, int radius, float eps, 
                                                  GPUMemoryPool &memoryPool, cv::cuda::Stream &stream)
 {
     CV_Assert(!guideBGR.empty());
@@ -7737,104 +7425,6 @@ static cv::Mat guidedFilterGrayAlphaCUDAOptimized(const cv::Mat &guideBGR, const
         return guidedFilterGrayAlphaCPU(guideBGR, hardMask, radius, eps);
     }
 }
-//  CUDA-Accelerated Guided Filter for Edge-Blending
-// GPU-optimized guided filtering that maintains FPS and quality
-static cv::Mat guidedFilterGrayAlphaCUDA(const cv::Mat &guideBGR, const cv::Mat &hardMask, int radius, float eps, 
-                                        cv::cuda::Stream &stream)
-{
-    CV_Assert(!guideBGR.empty());
-    CV_Assert(!hardMask.empty());
-
-    // Check CUDA availability
-    if (!cv::cuda::getCudaEnabledDeviceCount()) {
-        qWarning() << "CUDA not available, falling back to CPU guided filter";
-        return guidedFilterGrayAlphaCPU(guideBGR, hardMask, radius, eps);
-    }
-
-    try {
-        // Convert input to GPU
-        cv::cuda::GpuMat gpuGuide, gpuMask;
-        cv::cuda::GpuMat gpuI, gpuP;
-        
-        // Upload to GPU with stream
-        gpuGuide.upload(guideBGR, stream);
-        gpuMask.upload(hardMask, stream);
-        
-        // Convert guide to grayscale on GPU if needed
-        if (guideBGR.channels() == 3) {
-            cv::cuda::cvtColor(gpuGuide, gpuI, cv::COLOR_BGR2GRAY, 0, stream);
-        } else {
-            gpuI = gpuGuide;
-        }
-        
-        // Convert to float32 on GPU
-        gpuI.convertTo(gpuI, CV_32F, 1.0f / 255.0f, stream);
-        if (hardMask.type() != CV_32F) {
-            gpuMask.convertTo(gpuP, CV_32F, 1.0f / 255.0f, stream);
-        } else {
-            gpuP = gpuMask;
-        }
-        
-        // GPU buffers for guided filtering
-        cv::cuda::GpuMat gpuMeanI, gpuMeanP, gpuCorrI, gpuCorrIp;
-        cv::cuda::GpuMat gpuVarI, gpuCovIp, gpuA, gpuB;
-        cv::cuda::GpuMat gpuMeanA, gpuMeanB, gpuQ, gpuAlpha;
-        
-        // Create box filter for GPU
-        cv::Ptr<cv::cuda::Filter> boxFilter = cv::cuda::createBoxFilter(CV_32F, CV_32F, cv::Size(radius, radius));
-        
-        // Step 1: Compute means and correlations on GPU
-        boxFilter->apply(gpuI, gpuMeanI, stream);
-        boxFilter->apply(gpuP, gpuMeanP, stream);
-        
-        // Compute I*I and I*P on GPU
-        cv::cuda::GpuMat gpuISquared, gpuIP;
-        cv::cuda::multiply(gpuI, gpuI, gpuISquared, 1.0, -1, stream);
-        cv::cuda::multiply(gpuI, gpuP, gpuIP, 1.0, -1, stream);
-        
-        boxFilter->apply(gpuISquared, gpuCorrI, stream);
-        boxFilter->apply(gpuIP, gpuCorrIp, stream);
-        
-        // Step 2: Compute variance and covariance on GPU
-        cv::cuda::multiply(gpuMeanI, gpuMeanI, gpuVarI, 1.0, -1, stream);
-        cv::cuda::subtract(gpuCorrI, gpuVarI, gpuVarI, cv::noArray(), -1, stream);
-        
-        cv::cuda::multiply(gpuMeanI, gpuMeanP, gpuCovIp, 1.0, -1, stream);
-        cv::cuda::subtract(gpuCorrIp, gpuCovIp, gpuCovIp, cv::noArray(), -1, stream);
-        
-        // Step 3: Compute coefficients a and b on GPU
-        cv::cuda::GpuMat gpuEps;
-        gpuEps.upload(cv::Mat::ones(gpuVarI.size(), CV_32F) * eps, stream);
-        cv::cuda::add(gpuVarI, gpuEps, gpuVarI, cv::noArray(), -1, stream);
-        cv::cuda::divide(gpuCovIp, gpuVarI, gpuA, 1.0, -1, stream);
-        
-        cv::cuda::multiply(gpuA, gpuMeanI, gpuB, 1.0, -1, stream);
-        cv::cuda::subtract(gpuMeanP, gpuB, gpuB, cv::noArray(), -1, stream);
-        
-        // Step 4: Compute mean of coefficients on GPU
-        boxFilter->apply(gpuA, gpuMeanA, stream);
-        boxFilter->apply(gpuB, gpuMeanB, stream);
-        
-        // Step 5: Compute final result on GPU
-        cv::cuda::multiply(gpuMeanA, gpuI, gpuQ, 1.0, -1, stream);
-        cv::cuda::add(gpuQ, gpuMeanB, gpuQ, cv::noArray(), -1, stream);
-        
-        // Clamp result to [0,1] on GPU
-        cv::cuda::threshold(gpuQ, gpuAlpha, 0.0f, 0.0f, cv::THRESH_TOZERO, stream);
-        cv::cuda::threshold(gpuAlpha, gpuAlpha, 1.0f, 1.0f, cv::THRESH_TRUNC, stream);
-        
-        // Download result back to CPU
-        cv::Mat result;
-        gpuAlpha.download(result, stream);
-        stream.waitForCompletion();
-        
-        return result;
-        
-    } catch (const cv::Exception &e) {
-        qWarning() << "CUDA guided filter failed:" << e.what() << "- falling back to CPU";
-        return guidedFilterGrayAlphaCPU(guideBGR, hardMask, radius, eps);
-    }
-}
 
 // CPU fallback for guided filtering (original implementation)
 static cv::Mat guidedFilterGrayAlphaCPU(const cv::Mat &guideBGR, const cv::Mat &hardMask, int radius, float eps)
@@ -7877,7 +7467,7 @@ static cv::Mat guidedFilterGrayAlphaCPU(const cv::Mat &guideBGR, const cv::Mat &
 }
 //  CUDA-Accelerated Edge Blurring for Enhanced Edge-Blending
 // GPU-optimized edge blurring that mixes background template with segmented object edges
-static cv::Mat applyEdgeBlurringCUDA(const cv::Mat &segmentedObject, const cv::Mat &objectMask, const cv::Mat &backgroundTemplate, float blurRadius, 
+cv::Mat applyEdgeBlurringCUDA(const cv::Mat &segmentedObject, const cv::Mat &objectMask, const cv::Mat &backgroundTemplate, float blurRadius, 
                                     GPUMemoryPool &memoryPool, cv::cuda::Stream &stream)
 {
     CV_Assert(!segmentedObject.empty());
@@ -8043,7 +7633,8 @@ static cv::Mat applyEdgeBlurringCPU(const cv::Mat &segmentedObject, const cv::Ma
 }
 //  Alternative Edge Blurring Method using Distance Transform
 // This method uses distance transform to create smooth edge transitions
-static cv::Mat applyEdgeBlurringAlternative(const cv::Mat &segmentedObject, const cv::Mat &objectMask, float blurRadius)
+// Made non-static so it can be used by capture_dynamic.cpp
+cv::Mat applyEdgeBlurringAlternative(const cv::Mat &segmentedObject, const cv::Mat &objectMask, float blurRadius)
 {
     CV_Assert(!segmentedObject.empty());
     CV_Assert(!objectMask.empty());
