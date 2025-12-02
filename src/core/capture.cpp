@@ -2,7 +2,6 @@
 #include "core/camera.h"
 #include "ui/foreground.h"
 #include "ui_capture.h"
-// Hand detection removed per user request
 #include <QDebug>
 #include <QImage>
 #include <QPixmap>
@@ -87,92 +86,6 @@ static double intersectionOverUnion(const cv::Rect &a, const cv::Rect &b)
 }
 
 // Consolidate near-identical boxes (very high IoU) to ensure one box per person
-static std::vector<cv::Rect> enforceOneBoxPerPerson(const std::vector<cv::Rect> &detections)
-{
-    if (detections.size() <= 1) {
-        return detections;
-    }
-
-    const double highIoU = 0.75; // only merge near-duplicates; preserves nearby people
-
-    std::vector<cv::Rect> boxes = detections;
-    std::vector<bool> removed(boxes.size(), false);
-
-    for (size_t i = 0; i < boxes.size(); ++i) {
-        if (removed[i]) continue;
-        for (size_t j = i + 1; j < boxes.size(); ++j) {
-            if (removed[j]) continue;
-            double iou = intersectionOverUnion(boxes[i], boxes[j]);
-            if (iou >= highIoU) {
-                // Merge duplicates by taking the union to retain full-body coverage
-                boxes[i] = boxes[i] | boxes[j];
-                removed[j] = true;
-            }
-        }
-    }
-
-    std::vector<cv::Rect> result;
-    result.reserve(boxes.size());
-    for (size_t i = 0; i < boxes.size(); ++i) {
-        if (!removed[i]) {
-            result.push_back(boxes[i]);
-        }
-    }
-    return result;
-}
-
-std::vector<cv::Rect> Capture::smoothDetections(const std::vector<cv::Rect> &current)
-{
-    // Parameters: EMA smoothing and IoU matching
-    const double iouMatchThreshold = 0.3;
-    const double alpha = 0.7; // keep majority of current box to avoid lag
-
-    if (m_prevSmoothedDetections.empty()) {
-        m_prevSmoothedDetections = current;
-        m_smoothingHoldCounter = m_smoothingHoldFrames;
-        return current;
-    }
-
-    std::vector<cv::Rect> result;
-    std::vector<bool> matchedPrev(m_prevSmoothedDetections.size(), false);
-
-    // Greedy match current to previous by IoU
-    for (const auto &cur : current) {
-        int bestIdx = -1;
-        double bestIou = 0.0;
-        for (size_t j = 0; j < m_prevSmoothedDetections.size(); ++j) {
-            if (matchedPrev[j]) continue;
-            double iou = intersectionOverUnion(cur, m_prevSmoothedDetections[j]);
-            if (iou > bestIou) { bestIou = iou; bestIdx = static_cast<int>(j); }
-        }
-
-        if (bestIdx >= 0 && bestIou >= iouMatchThreshold) {
-            const cv::Rect &prev = m_prevSmoothedDetections[bestIdx];
-            matchedPrev[bestIdx] = true;
-            // EMA on position and size
-            cv::Rect smoothed;
-            smoothed.x = cvRound(alpha * cur.x + (1.0 - alpha) * prev.x);
-            smoothed.y = cvRound(alpha * cur.y + (1.0 - alpha) * prev.y);
-            smoothed.width = cvRound(alpha * cur.width + (1.0 - alpha) * prev.width);
-            smoothed.height = cvRound(alpha * cur.height + (1.0 - alpha) * prev.height);
-            result.push_back(smoothed);
-        } else {
-            // New detection, accept as is
-            result.push_back(cur);
-        }
-    }
-
-    // Holdover: keep unmatched previous for a few frames to avoid flicker
-    if (result.empty() && m_smoothingHoldCounter > 0) {
-        m_smoothingHoldCounter--;
-        return m_prevSmoothedDetections;
-    }
-
-    m_prevSmoothedDetections = result;
-    m_smoothingHoldCounter = m_smoothingHoldFrames;
-    return result;
-}
-
 Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, QThread *existingCameraThread)
     : QWidget(parent)
     , ui(new Ui::Capture)
@@ -210,8 +123,6 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     , m_lastSegmentedFrame()
     , m_personDetectionMutex()
     , m_personDetectionTimer()
-    , m_hogDetector()
-    , m_hogDetectorDaimler(cv::Size(48, 96), cv::Size(16, 16), cv::Size(8, 8), cv::Size(8, 8), 9)
     , m_bgSubtractor()
     , m_subtractionReferenceImage()
     , m_subtractionReferenceImage2()
@@ -219,7 +130,6 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     , m_useGPU(false)
     , m_useCUDA(false)
     , m_gpuUtilized(false)
-    // Hand detection completely removed
     , m_systemMonitor(nullptr)
     , m_cudaUtilized(false)
     , m_personDetectionWatcher(nullptr)
@@ -245,7 +155,6 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     , m_gpuBackgroundFrame()
     , m_gpuOnlyProcessingEnabled(false)
     , m_gpuProcessingAvailable(false)
-    , m_cudaHogDetector()
     , m_gpuMemoryPool()
     , m_gpuMemoryPoolInitialized(false)
     , m_recordingThread(nullptr)
@@ -254,26 +163,14 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     , debugWidget(nullptr)
     , debugLabel(nullptr)
     , m_recordingThreadActive(false)
-    // Hand detection UI removed
     , m_recordingFrameQueue()
     , m_recordingStream()
     , debugUpdateTimer(nullptr)
     , m_currentFPS(0)
     , m_recordingGpuBuffer()
     , m_cachedPixmap(640, 480)
-    , m_cudaHogScales{0.5, 0.75}
-    , m_cudaHogHitThresholdPrimary(0.0)
-    , m_cudaHogHitThresholdSecondary(-0.2)
-    , m_cudaHogWinStridePrimary(8, 8)
-    , m_cudaHogWinStrideSecondary(16, 16)
-    , m_detectionNmsOverlap(0.35)
-    , m_detectionMotionOverlap(0.12)
-    , m_smoothingHoldFrames(5)
-    , m_smoothingHoldCounter(0)
-    , m_detectionSkipInterval(2)
     // Lighting Correction Member
     , m_lightingCorrector(nullptr)
-    , m_detectionSkipCounter(0)
     //  Simplified Lighting Processing (POST-PROCESSING ONLY)
     , m_lightingProcessingThread(nullptr)
     , m_lightingWatcher(nullptr)
@@ -486,8 +383,6 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     // Initialize Enhanced Person Detection and Segmentation
     initializePersonDetection();
 
-    // Initialize Hand Detection (disabled by default)
-    // Hand detection completely removed
     m_captureReady = true;  // Start with capture ready
     // Initialize MediaPipe-like tracker
     // TODO: Initialize hand tracker when available
@@ -522,8 +417,6 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     m_personDetectionWatcher = new QFutureWatcher<cv::Mat>(this);
     connect(m_personDetectionWatcher, &QFutureWatcher<cv::Mat>::finished,
             this, &Capture::onPersonDetectionFinished);
-
-    // Hand detection completely removed
 
     ui->capture->setEnabled(true);
 
@@ -588,7 +481,6 @@ Capture::~Capture()
     if (foreground) {
         disconnect(foreground, nullptr, this, nullptr);
     }
-    // Hand detection removed
 
     if (debugUpdateTimer) {
         disconnect(debugUpdateTimer, nullptr, this, nullptr);
@@ -620,9 +512,6 @@ Capture::~Capture()
     // Clean up debug widgets
     if (debugWidget){ delete debugWidget; debugWidget = nullptr; }
     if (debugLabel){ delete debugLabel; debugLabel = nullptr; }
-    // Hand detection UI removed
-
-    // Hand detection removed
     
     // Clean up lighting corrector
     if (m_lightingCorrector){ 
@@ -789,8 +678,6 @@ void Capture::updateCameraFeed(const QImage &image)
             });
             m_personDetectionWatcher->setFuture(future);
         }
-
-        // Hand detection removed
     }
 
     // --- Performance stats (always run for every valid frame received) ---
@@ -985,7 +872,6 @@ void Capture::printPerformanceStats() {
     qDebug() << "CUDA Utilized:" << (m_cudaUtilized ? "ACTIVE" : "IDLE");
     qDebug() << "Person Detection FPS:" << (m_segmentationEnabledInCapture ? QString::number(m_personDetectionFPS, 'f', 1) : "N/A (DISABLED)");
     qDebug() << "Unified Detection FPS:" << (m_segmentationEnabledInCapture ? QString::number(m_personDetectionFPS, 'f', 1) : "N/A (DISABLED)");
-    qDebug() << "Hand Detection FPS: N/A (DISABLED)";
     qDebug() << "Person Scale Factor:" << QString::number(m_personScaleFactor * 100, 'f', 0) << "%";
     qDebug() << "----------------------------------------";
 
@@ -1193,9 +1079,7 @@ void Capture::on_capture_clicked()
         return;
     }
 
-    // Hand detection removed
-
-    // If hand detection is already enabled, then start the countdown
+    // Start the countdown
     ui->capture->setEnabled(false);
 
     // Start the countdown timer properly
@@ -1410,8 +1294,6 @@ void Capture::setupDebugDisplay()
     qDebug() << "Debug display setup complete - FPS, GPU, and CUDA status should be visible";
 }
 
-// Hand detection completely removed - enableHandDetectionForCapture removed
-
 void Capture::setCaptureReady(bool ready)
 {
     m_captureReady = ready;
@@ -1451,15 +1333,11 @@ void Capture::resetCapturePage()
     ui->capture->setEnabled(true);
     qDebug() << "Capture button reset to enabled";
 
-    // Hand detection removed
     m_captureReady = true;
 
     // Reset segmentation state for capture interface
     enableSegmentationInCapture();
     qDebug() << "Segmentation reset for capture interface";
-
-    // Hand detection removed
-    // Hand detection removed
 
     // BUG FIX: Don't reset capture mode - preserve user's mode selection (static/dynamic)
     // The mode should only be changed when user explicitly selects a different template type
@@ -1614,8 +1492,6 @@ void Capture::keyPressEvent(QKeyEvent *event)
             updateDebugDisplay();
                             break;
         case Qt::Key_H:
-            // Toggle hand detection
-            // Hand detection removed - 'H' key disabled
             updateDebugDisplay();
             break;
         case Qt::Key_F12:
@@ -1633,12 +1509,10 @@ void Capture::showEvent(QShowEvent *event)
     qDebug() << "Capture widget shown - camera should already be running continuously";
 
     // Camera is now managed continuously by brbooth.cpp, no need to start it here
-    // Just enable segmentation after a short delay (hand detection is user-controlled)
+    // Just enable segmentation after a short delay
     QTimer::singleShot(100, [this]() {
-        // Hand detection removed
         enableSegmentationInCapture();
         qDebug() << "Segmentation ENABLED for capture interface";
-        qDebug() << "Hand detection is DISABLED by default - use debug menu to enable";
 
         // Restore dynamic video background if a path was previously set
         if (!m_dynamicVideoPath.isEmpty() && !m_useDynamicVideoBackground) {
@@ -1651,10 +1525,7 @@ void Capture::showEvent(QShowEvent *event)
 void Capture::hideEvent(QHideEvent *event)
 {
     QWidget::hideEvent(event);
-    qDebug() << "Capture widget hidden - OPTIMIZED camera and hand detection shutdown";
-
-    // Keep hand detection state as set by user (don't auto-disable)
-    qDebug() << "Hand detection state preserved during page transition";
+    qDebug() << "Capture widget hidden - OPTIMIZED camera shutdown";
 
     // Disable segmentation when leaving capture page
     disableSegmentationOutsideCapture();
@@ -1664,9 +1535,6 @@ void Capture::hideEvent(QHideEvent *event)
     // This prevents lag when returning to capture page
 }
 
-// Hand detection completely removed - drawHandBoundingBoxes implementation removed
-
-
 
 void Capture::updateDebugDisplay()
 {
@@ -1674,8 +1542,7 @@ void Capture::updateDebugDisplay()
     static int updateCount = 0;
     updateCount++;
     
-    // Always log hand detection state for debugging
-        qDebug() << "updateDebugDisplay #" << updateCount;
+    qDebug() << "updateDebugDisplay #" << updateCount;
     
     if (updateCount % 10 == 0) { // Log every 5 seconds (10 updates * 500ms)
         qDebug() << "Debug display update #" << updateCount << "FPS:" << m_currentFPS << "GPU:" << m_useGPU << "CUDA:" << m_useCUDA;
@@ -1791,9 +1658,6 @@ void Capture::startRecording()
     qDebug() << "  - Video template:" << m_currentVideoTemplate.name;
     qDebug() << "  - Target frames:" << m_videoTotalFrames;
 
-    // RECORDING OPTIMIZATION: Disable frame skipping during recording for smooth capture
-    m_detectionSkipCounter = 0; // Force detection every frame during recording
-    qDebug() << "RECORDING: Disabled detection frame skipping for smooth capture";
 
     int frameIntervalMs = qMax(1, static_cast<int>(1000.0 / m_adjustedRecordingFPS));
 
@@ -2831,59 +2695,6 @@ void Capture::initializePersonDetection()
     qDebug() << "===== initializePersonDetection() CALLED =====";
     qDebug() << "Initializing Enhanced Person Detection and Segmentation...";
 
-    // Initialize HOG detectors for person detection
-    qDebug() << "===== CAPTURE INITIALIZATION STARTED =====";
-    m_hogDetector.setSVMDetector(cv::HOGDescriptor::getDefaultPeopleDetector());
-    m_hogDetectorDaimler.setSVMDetector(cv::HOGDescriptor::getDaimlerPeopleDetector());
-
-    // Initialize CUDA HOG detector for GPU acceleration
-    qDebug() << "===== STARTING CUDA HOG INITIALIZATION =====";
-
-    // Check if CUDA is available
-    int cudaDevices = cv::cuda::getCudaEnabledDeviceCount();
-    qDebug() << "CUDA devices found:" << cudaDevices;
-
-    if (cudaDevices > 0) {
-        try {
-            qDebug() << "Creating CUDA HOG detector...";
-            // Create CUDA HOG with default people detector
-            m_cudaHogDetector = cv::cuda::HOG::create(
-                cv::Size(64, 128),  // win_size
-                cv::Size(16, 16),   // block_size
-                cv::Size(8, 8),     // block_stride
-                cv::Size(8, 8),     // cell_size
-                9                   // nbins
-            );
-
-            if (!m_cudaHogDetector.empty()) {
-                qDebug() << "CUDA HOG detector created successfully";
-                m_cudaHogDetector->setSVMDetector(m_cudaHogDetector->getDefaultPeopleDetector());
-                qDebug() << "CUDA HOG detector ready for GPU acceleration";
-            } else {
-                qWarning() << "CUDA HOG creation failed - detector is empty";
-                m_cudaHogDetector = nullptr;
-            }
-        } catch (const cv::Exception& e) {
-            qWarning() << "CUDA HOG initialization failed:" << e.what();
-            m_cudaHogDetector = nullptr;
-        }
-    } else {
-        qDebug() << "CUDA not available for HOG initialization";
-        m_cudaHogDetector = nullptr;
-    }
-    qDebug() << "===== FINAL CUDA HOG INITIALIZATION CHECK =====";
-    qDebug() << "CUDA HOG detector pointer:" << m_cudaHogDetector.get();
-    qDebug() << "CUDA HOG detector empty:" << (m_cudaHogDetector && m_cudaHogDetector.empty() ? "yes" : "no");
-
-    if (m_cudaHogDetector && !m_cudaHogDetector.empty()) {
-        qDebug() << "CUDA HOG detector successfully initialized and ready!";
-        m_useCUDA = true; // Ensure CUDA is enabled
-    } else {
-        qWarning() << "CUDA HOG detector initialization failed or not available";
-        m_cudaHogDetector = nullptr;
-    }
-    qDebug() << "===== CUDA HOG INITIALIZATION COMPLETE =====";
-
     // Initialize background subtractor for motion detection (matching peopledetect_v1.cpp)
     // OPTIMIZATION: Only create if not already initialized to avoid recreating unnecessarily
     if (m_bgSubtractor.empty()) {
@@ -2952,73 +2763,6 @@ void Capture::initializePersonDetection()
         m_useCUDA = false;
     }
 
-    // Check if OpenCL is available for HOG detection (ALWAYS ENABLE FOR HOG)
-    try {
-        if (cv::ocl::useOpenCL()) {
-            m_useGPU = true;
-            qDebug() << "OpenCL GPU acceleration enabled for HOG detection";
-            qDebug() << "OpenCL will be used for HOG detection (GPU acceleration)";
-
-            // Force OpenCL usage
-            cv::ocl::setUseOpenCL(true);
-
-            // Test OpenCL with a simple operation
-            cv::UMat testMat;
-            testMat.create(100, 100, CV_8UC3);
-            if (!testMat.empty()) {
-                qDebug() << "OpenCL memory allocation test passed";
-
-                // Test OpenCL with a simple operation
-                cv::UMat testResult;
-                cv::cvtColor(testMat, testResult, cv::COLOR_BGR2GRAY);
-                qDebug() << "OpenCL color conversion test passed";
-
-                // Pre-allocate GPU memory pools for better performance
-                qDebug() << "Pre-allocating GPU memory pools...";
-                try {
-                    // Pre-allocate common frame sizes for GPU operations
-                    cv::UMat gpuFramePool1, gpuFramePool2, gpuFramePool3;
-                    gpuFramePool1.create(720, 1280, CV_8UC3);  // Common camera resolution
-                    gpuFramePool2.create(480, 640, CV_8UC3);   // Smaller processing size
-                    gpuFramePool3.create(360, 640, CV_8UC1);   // Grayscale processing
-
-                    qDebug() << "GPU memory pools pre-allocated successfully";
-                    qDebug() << "  - Frame pool 1: 1280x720 (RGB)";
-                    qDebug() << "  - Frame pool 2: 640x480 (RGB)";
-                    qDebug() << "  - Frame pool 3: 640x360 (Grayscale)";
-                } catch (const cv::Exception& e) {
-                    qWarning() << "GPU memory pool allocation failed:" << e.what();
-                }
-            }
-
-            // OpenCL device info not available in this OpenCV version
-            qDebug() << "OpenCL GPU acceleration ready for HOG detection";
-
-        } else {
-            qDebug() << "OpenCL not available for HOG, will use CPU";
-            m_useGPU = false;
-        }
-    } catch (...) {
-        qDebug() << "OpenCL initialization failed for HOG, will use CPU";
-        m_useGPU = false;
-    }
-
-    // Check if OpenCL is available for AMD GPU acceleration (FALLBACK)
-    if (!m_useCUDA) {
-        try {
-            if (cv::ocl::useOpenCL()) {
-                m_useGPU = true;
-                qDebug() << "OpenCL GPU acceleration enabled for AMD GPU (fallback)";
-                qDebug() << "Using UMat for GPU memory management";
-            } else {
-                qDebug() << "OpenCL not available, using CPU";
-                m_useGPU = false;
-            }
-        } catch (...) {
-            qDebug() << "OpenCL initialization failed, using CPU";
-            m_useGPU = false;
-        }
-    }
 
     // Initialize async processing
     m_personDetectionWatcher = new QFutureWatcher<cv::Mat>(this);
@@ -3056,225 +2800,6 @@ void Capture::initializePersonDetection()
 
     qDebug() << "Enhanced Person Detection and Segmentation initialized successfully";
     qDebug() << "GPU Priority: CUDA (NVIDIA) > OpenCL (AMD) > CPU (fallback)";
-}
-
-void Capture::adjustRect(cv::Rect &r) const
-{
-    // Ensure the detection rectangle covers the full person: do not shrink.
-    // Keeping the original detector rectangle preserves full-body coverage.
-    // No-op for performance and coverage.
-    (void)r; // Suppress unused parameter warning
-}
-
-std::vector<cv::Rect> Capture::runCudaHogPass(const cv::Mat &frame,
-                                             double resizeScale,
-                                             double hitThreshold,
-                                             const cv::Size &winStride)
-{
-    std::vector<cv::Rect> detections;
-
-    if (!m_useCUDA || !m_cudaHogDetector || m_cudaHogDetector->empty() || frame.empty()) {
-        return detections;
-    }
-
-    if (resizeScale <= 0.0) {
-        return detections;
-    }
-
-    try {
-        // CRASH PREVENTION: Validate frame has 3 channels before BGR2GRAY conversion
-        if (frame.empty() || frame.channels() != 3) {
-            qWarning() << "Invalid frame for CUDA HOG: empty or not 3 channels";
-            return std::vector<cv::Rect>();
-        }
-        
-        cv::cuda::GpuMat gpuFrame;
-        gpuFrame.upload(frame);
-
-        cv::cuda::GpuMat gpuGray;
-        cv::cuda::cvtColor(gpuFrame, gpuGray, cv::COLOR_BGR2GRAY);
-
-        cv::Size targetSize(cvRound(frame.cols * resizeScale), cvRound(frame.rows * resizeScale));
-        if (targetSize.width < 128 || targetSize.height < 256) {
-            targetSize.width = std::max(targetSize.width, 128);
-            targetSize.height = std::max(targetSize.height, 256);
-        }
-
-        cv::cuda::GpuMat gpuResized;
-        cv::cuda::resize(gpuGray, gpuResized, targetSize, 0, 0, cv::INTER_LINEAR);
-
-        m_cudaHogDetector->setHitThreshold(hitThreshold);
-        // Validate winStride against block stride (8x8) and window size (64x128)
-        cv::Size validatedStride = winStride;
-        const cv::Size blockStride(8, 8);
-        const cv::Size winSize(64, 128);
-        if (validatedStride.width <= 0 || validatedStride.height <= 0 ||
-            (validatedStride.width % blockStride.width) != 0 ||
-            (validatedStride.height % blockStride.height) != 0 ||
-            validatedStride.width > winSize.width ||
-            validatedStride.height > winSize.height) {
-            // Prefer 16x16 for speed; otherwise fallback to 8x8
-            validatedStride = cv::Size(16, 16);
-        }
-        m_cudaHogDetector->setWinStride(validatedStride);
-
-        std::vector<cv::Rect> found;
-        m_cudaHogDetector->detectMultiScale(gpuResized, found);
-
-        const double invScale = 1.0 / resizeScale;
-        for (auto &rect : found) {
-            rect.x = cvRound(rect.x * invScale);
-            rect.y = cvRound(rect.y * invScale);
-            rect.width = cvRound(rect.width * invScale);
-            rect.height = cvRound(rect.height * invScale);
-            detections.push_back(rect);
-        }
-
-    } catch (const cv::Exception &e) {
-        qWarning() << "CUDA HOG pass failed:" << e.what();
-    }
-
-    return detections;
-}
-
-std::vector<cv::Rect> Capture::runCudaHogMultiPass(const cv::Mat &frame)
-{
-    std::vector<cv::Rect> combined;
-
-    for (size_t i = 0; i < m_cudaHogScales.size(); ++i) {
-        const double scale = m_cudaHogScales[i];
-        const double hitThreshold = (i == 0) ? m_cudaHogHitThresholdPrimary : m_cudaHogHitThresholdSecondary;
-        const cv::Size &stride = (i == 0) ? m_cudaHogWinStridePrimary : m_cudaHogWinStrideSecondary;
-
-        std::vector<cv::Rect> passDetections = runCudaHogPass(frame, scale, hitThreshold, stride);
-        combined.insert(combined.end(), passDetections.begin(), passDetections.end());
-
-        // Early exit only if primary pass already found at least 2 detections
-        if (i == 0 && passDetections.size() >= 2) {
-            break;
-        }
-    }
-
-    // If CUDA pass failed or found nothing, fall back to classic HOG
-    if (combined.empty()) {
-        try {
-            std::vector<cv::Rect> cpuDetections = runClassicHogPass(frame);
-            combined.insert(combined.end(), cpuDetections.begin(), cpuDetections.end());
-        } catch (...) {
-            // Keep empty if CPU also fails
-        }
-    }
-
-    return combined;
-}
-
-std::vector<cv::Rect> Capture::runClassicHogPass(const cv::Mat &frame)
-{
-    std::vector<cv::Rect> combined;
-
-    if (frame.empty()) {
-        return combined;
-    }
-
-    cv::Mat resized;
-    cv::resize(frame, resized, cv::Size(), 0.5, 0.5, cv::INTER_LINEAR);
-
-    std::vector<cv::Rect> defaultDetections;
-    m_hogDetector.detectMultiScale(resized, defaultDetections, 0.0, cv::Size(8, 8), cv::Size(), 1.05, 2, false);
-
-    std::vector<cv::Rect> daimlerDetections;
-    m_hogDetectorDaimler.detectMultiScale(resized, daimlerDetections, 0.0, cv::Size(8, 8), cv::Size(), 1.05, 2, false);
-
-    auto upscale = [](std::vector<cv::Rect> &rects) {
-        for (auto &rect : rects) {
-            rect.x = cvRound(rect.x * 2.0);
-            rect.y = cvRound(rect.y * 2.0);
-            rect.width = cvRound(rect.width * 2.0);
-            rect.height = cvRound(rect.height * 2.0);
-        }
-    };
-
-    upscale(defaultDetections);
-    upscale(daimlerDetections);
-
-    combined.insert(combined.end(), defaultDetections.begin(), defaultDetections.end());
-    combined.insert(combined.end(), daimlerDetections.begin(), daimlerDetections.end());
-
-    return combined;
-}
-
-std::vector<cv::Rect> Capture::nonMaximumSuppression(const std::vector<cv::Rect> &detections,
-                                                     double overlapThreshold)
-{
-    if (detections.empty()) {
-        return {};
-    }
-
-    std::vector<cv::Rect> boxes = detections;
-    std::vector<cv::Rect> result;
-    result.reserve(boxes.size());
-
-    std::sort(boxes.begin(), boxes.end(), [](const cv::Rect &a, const cv::Rect &b) {
-        return a.area() > b.area();
-    });
-
-    std::vector<bool> suppressed(boxes.size(), false);
-
-    for (size_t i = 0; i < boxes.size(); ++i) {
-        if (suppressed[i]) {
-            continue;
-        }
-
-        const cv::Rect &a = boxes[i];
-        result.push_back(a);
-
-        for (size_t j = i + 1; j < boxes.size(); ++j) {
-            if (suppressed[j]) {
-                continue;
-            }
-
-            const cv::Rect &b = boxes[j];
-            const int intersectionArea = (a & b).area();
-            const int unionArea = a.area() + b.area() - intersectionArea;
-
-            if (unionArea <= 0) {
-                continue;
-            }
-
-            const double overlap = static_cast<double>(intersectionArea) / static_cast<double>(unionArea);
-            if (overlap > overlapThreshold) {
-                suppressed[j] = true;
-            }
-        }
-    }
-
-    return result;
-}
-
-std::vector<cv::Rect> Capture::detectPeople(const cv::Mat &frame)
-{
-    std::vector<cv::Rect> detections;
-
-    if (m_useCUDA && m_cudaHogDetector && !m_cudaHogDetector->empty()) {
-        detections = runCudaHogMultiPass(frame);
-    } else {
-        detections = runClassicHogPass(frame);
-    }
-
-    // Adjust rectangles
-    for (auto &rect : detections) {
-        adjustRect(rect);
-    }
-
-    // Non-maximum suppression
-    detections = nonMaximumSuppression(detections, 0.6);
-    // Merge near-duplicates to ensure one box per person without heavy grouping
-    detections = enforceOneBoxPerPerson(detections);
-
-    // Lightweight temporal smoothing for stability
-    detections = smoothDetections(detections);
-
-    return detections;
 }
 
 cv::Mat Capture::processFrameWithUnifiedDetection(const cv::Mat &frame)
@@ -3656,11 +3181,9 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
             const auto& detection = detections[i];
 
             // Draw detection rectangles with thick green lines
-            cv::Rect adjustedRect = detection;
-            adjustRect(adjustedRect);
-            cv::rectangle(displayFrame, adjustedRect.tl(), adjustedRect.br(), cv::Scalar(0, 255, 0), 3);
+            cv::rectangle(displayFrame, detection.tl(), detection.br(), cv::Scalar(0, 255, 0), 3);
 
-            qDebug() << "Rectangle" << i << "at" << adjustedRect.x << adjustedRect.y << adjustedRect.width << "x" << adjustedRect.height;
+            qDebug() << "Rectangle" << i << "at" << detection.x << detection.y << detection.width << "x" << detection.height;
         }
 
         return displayFrame;
@@ -4508,30 +4031,6 @@ cv::Mat Capture::enhancedSilhouetteSegmentGPUOnly(const cv::cuda::GpuMat &gpuFra
 }
 
 // Phase 2A: GPU Result Validation
-void Capture::validateGPUResults(const cv::Mat &gpuResult, const cv::Mat &cpuResult)
-{
-    if (gpuResult.empty() || cpuResult.empty()) {
-        qWarning() << "Phase 2A: GPU/CPU result validation failed - empty results";
-        return;
-    }
-
-    if (gpuResult.size() != cpuResult.size() || gpuResult.type() != cpuResult.type()) {
-        qWarning() << "Phase 2A: GPU/CPU result validation failed - size/type mismatch";
-        return;
-    }
-
-    // Compare results (allow small differences due to floating-point precision)
-    cv::Mat diff;
-    cv::absdiff(gpuResult, cpuResult, diff);
-    double maxDiff = cv::norm(diff, cv::NORM_INF);
-
-    if (maxDiff > 5.0) { // Allow small differences
-        qWarning() << "Phase 2A: GPU/CPU result validation failed - max difference:" << maxDiff;
-    } else {
-        qDebug() << "Phase 2A: GPU/CPU result validation passed - max difference:" << maxDiff;
-    }
-}
-
 void Capture::onPersonDetectionFinished()
 {
     if (m_personDetectionWatcher && m_personDetectionWatcher->isFinished()) {
@@ -4675,170 +4174,6 @@ void Capture::setGreenSaturationMin(int sMin)
 void Capture::setGreenValueMin(int vMin)
 {
     m_greenValMin = std::max(0, std::min(255, vMin));
-}
-
-cv::Mat Capture::getMotionMask(const cv::Mat &frame)
-{
-    cv::Mat fgMask;
-
-    // Check if static reference image(s) are available - use them for subtraction
-    if (!m_subtractionReferenceImage.empty() || !m_subtractionReferenceImage2.empty()) {
-        cv::Mat refResized;
-        
-        // If both reference images are available, blend them
-        if (!m_subtractionReferenceImage.empty() && !m_subtractionReferenceImage2.empty()) {
-            cv::Mat ref1, ref2;
-            if (m_subtractionReferenceImage.size() != frame.size()) {
-                cv::resize(m_subtractionReferenceImage, ref1, frame.size(), 0, 0, cv::INTER_LINEAR);
-            } else {
-                ref1 = m_subtractionReferenceImage;
-            }
-            if (m_subtractionReferenceImage2.size() != frame.size()) {
-                cv::resize(m_subtractionReferenceImage2, ref2, frame.size(), 0, 0, cv::INTER_LINEAR);
-            } else {
-                ref2 = m_subtractionReferenceImage2;
-            }
-            
-            // Blend the two reference images: weight * ref2 + (1-weight) * ref1
-            double alpha = m_subtractionBlendWeight;
-            double beta = 1.0 - alpha;
-            cv::addWeighted(ref1, beta, ref2, alpha, 0.0, refResized);
-        } else if (!m_subtractionReferenceImage.empty()) {
-            // Use only first reference image
-            if (m_subtractionReferenceImage.size() != frame.size()) {
-                cv::resize(m_subtractionReferenceImage, refResized, frame.size(), 0, 0, cv::INTER_LINEAR);
-            } else {
-                refResized = m_subtractionReferenceImage;
-            }
-        } else {
-            // Use only second reference image
-            if (m_subtractionReferenceImage2.size() != frame.size()) {
-                cv::resize(m_subtractionReferenceImage2, refResized, frame.size(), 0, 0, cv::INTER_LINEAR);
-            } else {
-                refResized = m_subtractionReferenceImage2;
-            }
-        }
-        
-        if (m_useCUDA) {
-            try {
-                // GPU-accelerated absolute difference
-                cv::cuda::GpuMat gpu_frame, gpu_ref, gpu_diff;
-                gpu_frame.upload(frame);
-                gpu_ref.upload(refResized);
-                
-                cv::cuda::absdiff(gpu_frame, gpu_ref, gpu_diff);
-                
-                // CRASH PREVENTION: Validate diff has 3 channels before BGR2GRAY conversion
-                if (gpu_diff.empty() || gpu_diff.channels() != 3) {
-                    qWarning() << "Invalid diff for GPU processing: empty or not 3 channels";
-                    // Fallback to CPU
-                    cv::Mat diff;
-                    cv::absdiff(frame, refResized, diff);
-                    if (diff.channels() == 3) {
-                        cv::Mat gray;
-                        cv::cvtColor(diff, gray, cv::COLOR_BGR2GRAY);
-                        cv::threshold(gray, fgMask, 30, 255, cv::THRESH_BINARY);
-                    } else {
-                        qWarning() << "Diff is not 3 channels, using empty mask";
-                        fgMask = cv::Mat::zeros(frame.size(), CV_8UC1);
-                    }
-                    return fgMask; // Return empty mask
-                }
-                
-                // CRASH PREVENTION: Validate gpu_diff has 3 channels before BGR2GRAY conversion
-                if (gpu_diff.empty() || gpu_diff.channels() != 3) {
-                    qWarning() << "Invalid gpu_diff for GPU processing: empty or not 3 channels";
-                    fgMask = cv::Mat::zeros(frame.size(), CV_8UC1);
-                    return fgMask; // Return empty mask
-                }
-                
-                // Convert to grayscale and threshold
-                cv::cuda::GpuMat gpu_gray;
-                cv::cuda::cvtColor(gpu_diff, gpu_gray, cv::COLOR_BGR2GRAY);
-                
-                cv::cuda::GpuMat gpu_mask;
-                cv::cuda::threshold(gpu_gray, gpu_mask, 30, 255, cv::THRESH_BINARY);
-                
-                gpu_mask.download(fgMask);
-            } catch (...) {
-                // Fallback to CPU
-                cv::Mat diff;
-                cv::absdiff(frame, refResized, diff);
-                // CRASH PREVENTION: Validate diff has 3 channels before BGR2GRAY conversion
-                if (diff.empty() || diff.channels() != 3) {
-                    qWarning() << "Invalid diff for CPU fallback: empty or not 3 channels";
-                    fgMask = cv::Mat::zeros(frame.size(), CV_8UC1);
-                    return fgMask; // Return empty mask
-                }
-                cv::Mat gray;
-                cv::cvtColor(diff, gray, cv::COLOR_BGR2GRAY);
-                cv::threshold(gray, fgMask, 30, 255, cv::THRESH_BINARY);
-            }
-        } else {
-            // CPU static reference subtraction
-            cv::Mat diff;
-            cv::absdiff(frame, refResized, diff);
-            // CRASH PREVENTION: Validate diff has 3 channels before BGR2GRAY conversion
-            if (diff.empty() || diff.channels() != 3) {
-                qWarning() << "Invalid diff for CPU processing: empty or not 3 channels";
-                fgMask = cv::Mat::zeros(frame.size(), CV_8UC1);
-                return fgMask;
-            }
-            cv::Mat gray;
-            cv::cvtColor(diff, gray, cv::COLOR_BGR2GRAY);
-            cv::threshold(gray, fgMask, 30, 255, cv::THRESH_BINARY);
-        }
-        
-        // Apply morphological operations
-        cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
-        cv::morphologyEx(fgMask, fgMask, cv::MORPH_OPEN, kernel);
-        cv::morphologyEx(fgMask, fgMask, cv::MORPH_CLOSE, kernel);
-        
-        return fgMask;
-    }
-
-    // Fallback to MOG2 background subtractor if no static reference
-    if (m_useCUDA) {
-        // CUDA-accelerated background subtraction using cv::cuda::BackgroundSubtractorMOG2
-        try {
-            // Upload to GPU
-            cv::cuda::GpuMat gpu_frame;
-            gpu_frame.upload(frame);
-
-            // Create CUDA background subtractor if not already created
-            static cv::Ptr<cv::cuda::BackgroundSubtractorMOG2> cuda_bg_subtractor;
-            if (cuda_bg_subtractor.empty()) {
-                cuda_bg_subtractor = cv::cuda::createBackgroundSubtractorMOG2(500, 16, false);
-            }
-
-            // CUDA-accelerated background subtraction
-            cv::cuda::GpuMat gpu_fgmask;
-            cuda_bg_subtractor->apply(gpu_frame, gpu_fgmask, -1);
-
-            // Download result to CPU
-            gpu_fgmask.download(fgMask);
-
-            // Apply morphological operations on CPU (OpenCV CUDA limitation)
-            cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
-            cv::morphologyEx(fgMask, fgMask, cv::MORPH_OPEN, kernel);
-            cv::morphologyEx(fgMask, fgMask, cv::MORPH_CLOSE, kernel);
-
-        } catch (...) {
-            // Fallback to CPU if CUDA fails
-            m_bgSubtractor->apply(frame, fgMask);
-            cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
-            cv::morphologyEx(fgMask, fgMask, cv::MORPH_OPEN, kernel);
-            cv::morphologyEx(fgMask, fgMask, cv::MORPH_CLOSE, kernel);
-        }
-    } else {
-        // CPU fallback
-        m_bgSubtractor->apply(frame, fgMask);
-        cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
-        cv::morphologyEx(fgMask, fgMask, cv::MORPH_OPEN, kernel);
-        cv::morphologyEx(fgMask, fgMask, cv::MORPH_CLOSE, kernel);
-    }
-
-    return fgMask;
 }
 
 void Capture::updateGreenBackgroundModel(const cv::Mat &frame) const
@@ -5161,440 +4496,6 @@ cv::cuda::GpuMat Capture::createGreenScreenPersonMaskGPU(const cv::cuda::GpuMat 
     }
 }
 
-// CONTOUR-BASED MASK REFINEMENT - Remove all fragments, keep only person
-cv::Mat Capture::refineGreenScreenMaskWithContours(const cv::Mat &mask, int minArea) const
-{
-    if (mask.empty()) return cv::Mat();
-
-    try {
-        cv::Mat refinedMask = cv::Mat::zeros(mask.size(), CV_8UC1);
-        
-        // Find all contours in the mask
-        std::vector<std::vector<cv::Point>> contours;
-        std::vector<cv::Vec4i> hierarchy;
-        cv::Mat maskCopy = mask.clone();
-        cv::findContours(maskCopy, contours, hierarchy, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
-        
-        if (contours.empty()) {
-            qDebug() << "No contours found in green screen mask";
-            return refinedMask;
-        }
-        
-        // Sort contours by area (largest first)
-        std::vector<std::pair<int, double>> contourAreas;
-        for (size_t i = 0; i < contours.size(); i++) {
-            double area = cv::contourArea(contours[i]);
-            contourAreas.push_back({static_cast<int>(i), area});
-        }
-        std::sort(contourAreas.begin(), contourAreas.end(), 
-                  [](const std::pair<int, double>& a, const std::pair<int, double>& b) {
-                      return a.second > b.second;
-                  });
-        
-        // Keep only the largest contours (person) that meet minimum area
-        int keptContours = 0;
-        const int MAX_PERSONS = 3; // Support up to 3 people
-        
-        for (size_t i = 0; i < std::min(contourAreas.size(), (size_t)MAX_PERSONS); i++) {
-            int idx = contourAreas[i].first;
-            double area = contourAreas[i].second;
-            
-            if (area >= minArea) {
-                // STRATEGY 1: Draw filled contour (aggressive - includes all pixels)
-                cv::drawContours(refinedMask, contours, idx, cv::Scalar(255), cv::FILLED);
-                keptContours++;
-                qDebug() << "Kept contour" << i << "with area:" << area;
-            } else {
-                qDebug() << "Rejected contour" << i << "with area:" << area << "(too small)";
-            }
-        }
-        
-        if (keptContours == 0) {
-            qWarning() << "No valid contours found - all below minimum area" << minArea;
-            return refinedMask;
-        }
-        
-        // STRATEGY 2: Apply convex hull to smooth boundaries and remove concave artifacts
-        // ENHANCED: Less aggressive - use union instead of intersection to preserve black regions
-        cv::Mat hullMask = cv::Mat::zeros(mask.size(), CV_8UC1);
-        for (size_t i = 0; i < std::min(contourAreas.size(), (size_t)MAX_PERSONS); i++) {
-            int idx = contourAreas[i].first;
-            double area = contourAreas[i].second;
-            
-            if (area >= minArea) {
-                std::vector<cv::Point> hull;
-                cv::convexHull(contours[idx], hull);
-                
-                // Only apply convex hull if it doesn't expand area too much (< 30% increase)
-                // Increased threshold to be less aggressive with black clothing
-                double hullArea = cv::contourArea(hull);
-                if (hullArea < area * 1.3) {
-                    std::vector<std::vector<cv::Point>> hullContours = {hull};
-                    cv::drawContours(hullMask, hullContours, 0, cv::Scalar(255), cv::FILLED);
-                }
-            }
-        }
-        
-        // ENHANCED: Use union instead of intersection to preserve black regions with holes
-        // This prevents removal of valid person pixels in black clothing areas
-        if (!hullMask.empty() && cv::countNonZero(hullMask) > 0) {
-            cv::bitwise_or(refinedMask, hullMask, refinedMask);
-        }
-        
-        // STRATEGY 3: Final morphological cleanup with larger kernel to fill holes in black regions
-        // ENHANCED: Use larger kernel to fill larger holes that may appear in black clothing
-        cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(7, 7));
-        cv::morphologyEx(refinedMask, refinedMask, cv::MORPH_CLOSE, kernel); // Fill small/medium holes
-        cv::morphologyEx(refinedMask, refinedMask, cv::MORPH_OPEN, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5)));  // Remove small protrusions
-        
-        // Additional pass with even larger kernel for very large holes (e.g., in black clothing)
-        cv::Mat largeKernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(15, 15));
-        cv::morphologyEx(refinedMask, refinedMask, cv::MORPH_CLOSE, largeKernel);
-        
-        qDebug() << "Contour refinement complete - kept" << keptContours << "contours";
-        return refinedMask;
-        
-    } catch (const cv::Exception &e) {
-        qWarning() << "Contour refinement failed:" << e.what();
-        return mask.clone();
-    } catch (const std::exception &e) {
-        qWarning() << "Exception in contour refinement:" << e.what();
-        return mask.clone();
-    }
-}
-
-// TEMPORAL MASK SMOOTHING - Ensure consistency across frames
-cv::Mat Capture::applyTemporalMaskSmoothing(const cv::Mat &currentMask) const
-{
-    if (currentMask.empty()) return cv::Mat();
-
-    // First frame or after reset
-    if (m_lastGreenScreenMask.empty() || m_lastGreenScreenMask.size() != currentMask.size()) {
-        m_lastGreenScreenMask = currentMask.clone();
-        m_greenScreenMaskStableCount = 0;
-        return currentMask.clone();
-    }
-
-    try {
-        // Calculate difference between current and last mask
-        cv::Mat diff;
-        cv::absdiff(currentMask, m_lastGreenScreenMask, diff);
-        int diffPixels = cv::countNonZero(diff);
-        double diffRatio = (double)diffPixels / (currentMask.rows * currentMask.cols);
-        
-        // If masks are very similar (< 5% difference), blend them
-        cv::Mat smoothedMask;
-        if (diffRatio < 0.05) {
-            // Blend current with last mask (70% current, 30% last) for stability
-            cv::addWeighted(currentMask, 0.7, m_lastGreenScreenMask, 0.3, 0, smoothedMask, CV_8U);
-            cv::threshold(smoothedMask, smoothedMask, 127, 255, cv::THRESH_BINARY);
-            m_greenScreenMaskStableCount++;
-        } else if (diffRatio < 0.15) {
-            // Medium change - blend with more weight to current (80% current, 20% last)
-            cv::addWeighted(currentMask, 0.8, m_lastGreenScreenMask, 0.2, 0, smoothedMask, CV_8U);
-            cv::threshold(smoothedMask, smoothedMask, 127, 255, cv::THRESH_BINARY);
-            m_greenScreenMaskStableCount = std::max(0, m_greenScreenMaskStableCount - 1);
-        } else {
-            // Large change - use current mask directly (new person or movement)
-            smoothedMask = currentMask.clone();
-            m_greenScreenMaskStableCount = 0;
-        }
-        
-        // Update last mask for next frame
-        m_lastGreenScreenMask = smoothedMask.clone();
-        
-        return smoothedMask;
-        
-    } catch (const cv::Exception &e) {
-        qWarning() << "Temporal smoothing failed:" << e.what();
-        m_lastGreenScreenMask = currentMask.clone();
-        return currentMask.clone();
-    } catch (const std::exception &e) {
-        qWarning() << "Exception in temporal smoothing:" << e.what();
-        m_lastGreenScreenMask = currentMask.clone();
-        return currentMask.clone();
-    }
-}
-
-// GRABCUT REFINEMENT - Advanced foreground/background separation
-cv::Mat Capture::refineWithGrabCut(const cv::Mat &frame, const cv::Mat &initialMask) const
-{
-    if (frame.empty() || initialMask.empty()) {
-        qWarning() << "GrabCut: Empty input";
-        return initialMask.clone();
-    }
-
-    // VALIDATION: Check frame and mask dimensions match
-    if (frame.size() != initialMask.size()) {
-        qWarning() << "GrabCut: Size mismatch - frame:" << frame.cols << "x" << frame.rows 
-                   << "mask:" << initialMask.cols << "x" << initialMask.rows;
-        return initialMask.clone();
-    }
-
-    // VALIDATION: Check mask has sufficient non-zero pixels
-    int nonZeroCount = cv::countNonZero(initialMask);
-    if (nonZeroCount < 1000) {
-        qWarning() << "GrabCut: Insufficient mask pixels:" << nonZeroCount;
-        return initialMask.clone();
-    }
-
-    try {
-        qDebug() << "Applying GrabCut refinement for precise segmentation";
-        
-        // Create GrabCut mask from initial mask
-        // GC_BGD=0 (definite background), GC_FGD=1 (definite foreground)
-        // GC_PR_BGD=2 (probably background), GC_PR_FGD=3 (probably foreground)
-        cv::Mat grabCutMask = cv::Mat::zeros(frame.size(), CV_8UC1);
-        
-        // SAFE EROSION: Check if mask is large enough before eroding
-        cv::Mat definiteFG;
-        cv::Rect maskBounds = cv::boundingRect(initialMask);
-        if (maskBounds.width > 30 && maskBounds.height > 30) {
-            cv::erode(initialMask, definiteFG, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(15, 15)));
-        } else {
-            // Mask too small for erosion, use smaller kernel
-            cv::erode(initialMask, definiteFG, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5)));
-        }
-        
-        // VALIDATION: Ensure we still have some foreground pixels
-        if (cv::countNonZero(definiteFG) < 100) {
-            qWarning() << "GrabCut: Eroded mask too small, using original";
-            return initialMask.clone();
-        }
-        
-        grabCutMask.setTo(cv::GC_FGD, definiteFG);
-        
-        // Dilate mask to get probable foreground region
-        cv::Mat probableFG;
-        cv::dilate(initialMask, probableFG, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(25, 25)));
-        cv::Mat unknownRegion = probableFG - definiteFG;
-        grabCutMask.setTo(cv::GC_PR_FGD, unknownRegion);
-        
-        // Everything else is definite background
-        cv::Mat bgMask = (grabCutMask == cv::GC_BGD);
-        grabCutMask.setTo(cv::GC_BGD, bgMask);
-        
-        // Apply GrabCut algorithm (ONLY 1 iteration for speed and stability)
-        cv::Mat bgModel, fgModel;
-        cv::Rect roi = cv::boundingRect(initialMask);
-        
-        // VALIDATION: Ensure ROI is valid and reasonable
-        roi.x = std::max(0, roi.x - 10);
-        roi.y = std::max(0, roi.y - 10);
-        roi.width = std::min(frame.cols - roi.x, roi.width + 20);
-        roi.height = std::min(frame.rows - roi.y, roi.height + 20);
-        
-        if (roi.width > 50 && roi.height > 50 && 
-            roi.x >= 0 && roi.y >= 0 && 
-            roi.x + roi.width <= frame.cols && 
-            roi.y + roi.height <= frame.rows) {
-            
-            // CRITICAL: Use only 1 iteration to prevent crashes
-            cv::grabCut(frame, grabCutMask, roi, bgModel, fgModel, 1, cv::GC_INIT_WITH_MASK);
-            
-            // Extract foreground
-            cv::Mat refinedMask = (grabCutMask == cv::GC_FGD) | (grabCutMask == cv::GC_PR_FGD);
-            refinedMask.convertTo(refinedMask, CV_8U, 255);
-            
-            // VALIDATION: Ensure output is reasonable
-            int refinedCount = cv::countNonZero(refinedMask);
-            if (refinedCount > 500 && refinedCount < frame.rows * frame.cols * 0.9) {
-                qDebug() << "GrabCut refinement complete";
-                return refinedMask;
-            } else {
-                qWarning() << "GrabCut produced invalid result, using original";
-                return initialMask.clone();
-            }
-        } else {
-            qWarning() << "Invalid ROI for GrabCut:" << roi.x << roi.y << roi.width << roi.height;
-            return initialMask.clone();
-        }
-        
-    } catch (const cv::Exception &e) {
-        qWarning() << "GrabCut OpenCV exception:" << e.what();
-        return initialMask.clone();
-    } catch (const std::exception &e) {
-        qWarning() << "GrabCut std exception:" << e.what();
-        return initialMask.clone();
-    } catch (...) {
-        qWarning() << "GrabCut unknown exception";
-        return initialMask.clone();
-    }
-}
-
-// DISTANCE-BASED REFINEMENT - Ensure no green pixels near person edges
-cv::Mat Capture::applyDistanceBasedRefinement(const cv::Mat &frame, const cv::Mat &mask) const
-{
-    if (frame.empty() || mask.empty()) {
-        return mask.clone();
-    }
-
-    try {
-        qDebug() << "Applying distance-based refinement to remove edge artifacts";
-        
-        // Convert to HSV for green detection
-        cv::Mat hsv;
-        cv::cvtColor(frame, hsv, cv::COLOR_BGR2HSV);
-        
-        // Create strict green mask (more aggressive than chroma key)
-        cv::Scalar lowerGreen(m_greenHueMin, m_greenSatMin + 40, m_greenValMin + 30);  // Much stricter: only bright, saturated greens
-        cv::Scalar upperGreen(m_greenHueMax, 255, 255);
-        cv::Mat strictGreenMask;
-        cv::inRange(hsv, lowerGreen, upperGreen, strictGreenMask);
-        
-        // Calculate distance transform from green pixels
-        cv::Mat greenDist;
-        cv::distanceTransform(~strictGreenMask, greenDist, cv::DIST_L2, 5);
-        
-        // Normalize distance to [0, 1]
-        cv::Mat normalizedDist;
-        cv::normalize(greenDist, normalizedDist, 0, 1.0, cv::NORM_MINMAX, CV_32F);
-        
-        // Create safety buffer: pixels must be at least 10 pixels away from green
-        cv::Mat safetyMask;
-        cv::threshold(normalizedDist, safetyMask, 0.05, 1.0, cv::THRESH_BINARY);
-        safetyMask.convertTo(safetyMask, CV_8U, 255);
-        
-        // Apply safety mask to person mask
-        cv::Mat refinedMask;
-        cv::bitwise_and(mask, safetyMask, refinedMask);
-        
-        // Fill any holes created by the safety buffer
-        cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(7, 7));
-        cv::morphologyEx(refinedMask, refinedMask, cv::MORPH_CLOSE, kernel);
-        
-        qDebug() << "Distance-based refinement complete";
-        return refinedMask;
-        
-    } catch (const cv::Exception &e) {
-        qWarning() << "Distance refinement failed:" << e.what();
-        return mask.clone();
-    } catch (const std::exception &e) {
-        qWarning() << "Exception in distance refinement:" << e.what();
-        return mask.clone();
-    }
-}
-
-// CREATE TRIMAP - Three-zone map for alpha matting
-cv::Mat Capture::createTrimap(const cv::Mat &mask, int erodeSize, int dilateSize) const
-{
-    if (mask.empty()) {
-        return cv::Mat();
-    }
-
-    try {
-        cv::Mat trimap = cv::Mat::zeros(mask.size(), CV_8UC1);
-        
-        // Definite foreground (eroded mask) = 255
-        cv::Mat definiteFG;
-        cv::Mat erodeKernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(erodeSize, erodeSize));
-        cv::erode(mask, definiteFG, erodeKernel);
-        trimap.setTo(255, definiteFG);
-        
-        // Definite background (inverse of dilated mask) = 0
-        cv::Mat dilateKernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(dilateSize, dilateSize));
-        cv::Mat dilatedMask;
-        cv::dilate(mask, dilatedMask, dilateKernel);
-        cv::Mat definiteBG = (dilatedMask == 0);
-        trimap.setTo(0, definiteBG);
-        
-        // Unknown region (between eroded and dilated) = 128
-        cv::Mat unknownRegion = (trimap != 0) & (trimap != 255);
-        trimap.setTo(128, unknownRegion);
-        
-        return trimap;
-        
-    } catch (const cv::Exception &e) {
-        qWarning() << "Trimap creation failed:" << e.what();
-        return mask.clone();
-    }
-}
-
-// CUSTOM GUIDED FILTER IMPLEMENTATION - Edge-preserving smoothing without ximgproc
-cv::Mat Capture::customGuidedFilter(const cv::Mat &guide, const cv::Mat &src, int radius, double eps) const
-{
-    // Convert to float
-    cv::Mat guideFloat, srcFloat;
-    guide.convertTo(guideFloat, CV_32F);
-    src.convertTo(srcFloat, CV_32F);
-    
-    // Mean of guide and source
-    cv::Mat meanI, meanP;
-    cv::boxFilter(guideFloat, meanI, CV_32F, cv::Size(radius, radius));
-    cv::boxFilter(srcFloat, meanP, CV_32F, cv::Size(radius, radius));
-    
-    // Correlation and variance
-    cv::Mat corrI, corrIp;
-    cv::boxFilter(guideFloat.mul(guideFloat), corrI, CV_32F, cv::Size(radius, radius));
-    cv::boxFilter(guideFloat.mul(srcFloat), corrIp, CV_32F, cv::Size(radius, radius));
-    
-    cv::Mat varI = corrI - meanI.mul(meanI);
-    cv::Mat covIp = corrIp - meanI.mul(meanP);
-    
-    // Linear coefficients a and b
-    cv::Mat a = covIp / (varI + eps);
-    cv::Mat b = meanP - a.mul(meanI);
-    
-    // Mean of a and b
-    cv::Mat meanA, meanB;
-    cv::boxFilter(a, meanA, CV_32F, cv::Size(radius, radius));
-    cv::boxFilter(b, meanB, CV_32F, cv::Size(radius, radius));
-    
-    // Output
-    return meanA.mul(guideFloat) + meanB;
-}
-
-// ALPHA MATTING - Extract precise alpha channel for natural edges
-cv::Mat Capture::extractPersonWithAlphaMatting(const cv::Mat &frame, const cv::Mat &trimap) const
-{
-    if (frame.empty() || trimap.empty()) {
-        return cv::Mat();
-    }
-
-    try {
-        qDebug() << "Applying alpha matting for natural edge extraction";
-        
-        // Simple but effective alpha matting using custom guided filter
-        cv::Mat alpha = trimap.clone();
-        alpha.convertTo(alpha, CV_32F, 1.0/255.0);
-        
-        // Convert frame to grayscale for guidance
-        cv::Mat frameGray;
-        if (frame.channels() == 3) {
-            cv::cvtColor(frame, frameGray, cv::COLOR_BGR2GRAY);
-        } else {
-            frameGray = frame.clone();
-        }
-        
-        // Apply custom guided filter for smooth alpha matte
-        cv::Mat guidedAlpha = customGuidedFilter(frameGray, alpha, 8, 1e-6);
-        
-        // Threshold to get clean binary mask
-        cv::Mat refinedMask;
-        cv::threshold(guidedAlpha, refinedMask, 0.5, 1.0, cv::THRESH_BINARY);
-        refinedMask.convertTo(refinedMask, CV_8U, 255);
-        
-        // Additional cleanup with morphology
-        cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
-        cv::morphologyEx(refinedMask, refinedMask, cv::MORPH_OPEN, kernel);
-        
-        qDebug() << "Alpha matting complete";
-        return refinedMask;
-        
-    } catch (const cv::Exception &e) {
-        qWarning() << "Alpha matting failed:" << e.what();
-        // Fallback: convert trimap to binary mask
-        cv::Mat fallback;
-        cv::threshold(trimap, fallback, 127, 255, cv::THRESH_BINARY);
-        return fallback;
-    } catch (const std::exception &e) {
-        qWarning() << "Exception in alpha matting:" << e.what();
-        cv::Mat fallback;
-        cv::threshold(trimap, fallback, 127, 255, cv::THRESH_BINARY);
-        return fallback;
-    }
-}
-
 // GPU-ACCELERATED GREEN SPILL REMOVAL - Remove green tint from person pixels
 cv::cuda::GpuMat Capture::removeGreenSpillGPU(const cv::cuda::GpuMat &gpuFrame, const cv::cuda::GpuMat &gpuMask) const
 {
@@ -5712,38 +4613,6 @@ std::vector<cv::Rect> Capture::deriveDetectionsFromMask(const cv::Mat &mask) con
     return detections;
 }
 
-std::vector<cv::Rect> Capture::filterDetectionsByMotion(const std::vector<cv::Rect> &detections, const cv::Mat &motionMask, double overlapThreshold) const
-{
-    std::vector<cv::Rect> filtered;
-
-    for (const auto& rect : detections) {
-        // Validate rectangle bounds to prevent crashes
-        if (rect.x < 0 || rect.y < 0 ||
-            rect.width <= 0 || rect.height <= 0 ||
-            rect.x + rect.width > motionMask.cols ||
-            rect.y + rect.height > motionMask.rows) {
-            continue; // Skip invalid rectangles
-        }
-
-        // Create ROI for this detection
-        cv::Mat roi = motionMask(rect);
-
-        // Calculate percentage of motion pixels in the detection area
-        int motionPixels = cv::countNonZero(roi);
-        double motionRatio = (double)motionPixels / (roi.rows * roi.cols);
-
-        // Keep detection if there's significant motion (more than the overlap threshold)
-        if (motionRatio > overlapThreshold) {
-            filtered.push_back(rect);
-        }
-    }
-
-    return filtered;
-}
-
-// Hand Detection Method Implementations
-// Hand detection completely removed - all method implementations removed
-
 // New method to safely enable processing modes after camera is stable
 void Capture::enableProcessingModes()
 {
@@ -5757,8 +4626,6 @@ void Capture::enableProcessingModes()
 void Capture::disableProcessingModes()
 {
     qDebug() << "Disabling heavy processing modes for non-capture pages";
-
-    // Hand detection removed
 
     // Disable segmentation outside capture interface
     disableSegmentationOutsideCapture();
@@ -6610,7 +5477,6 @@ void Capture::cleanupResources()
     
     // Clear detection results
     m_lastDetections.clear();
-    // Hand detection removed
     
     qDebug() << "Capture::cleanupResources - Resource cleanup completed";
 }
@@ -6628,9 +5494,6 @@ void Capture::initializeResources()
     
     // Initialize person detection
     initializePersonDetection();
-    
-    // Initialize hand detection
-    // Hand detection removed
     
     // Start debug update timer
     if (debugUpdateTimer) {
@@ -7190,55 +6053,6 @@ void Capture::cleanupAsyncLightingSystem()
 //    - applySimpleDynamicCompositing()
 
 //  NEW: Lightweight Segmented Frame Creation for Recording Performance
-cv::Mat Capture::createLightweightSegmentedFrame(const cv::Mat &frame)
-{
-    // Fast segmentation without heavy processing for recording performance
-    if (frame.empty()) {
-        return frame;
-    }
-    
-    // Use simple center detection for recording performance
-    cv::Rect centerRect(frame.cols * 0.2, frame.rows * 0.1, 
-                       frame.cols * 0.6, frame.rows * 0.8);
-    
-    cv::Mat result = frame.clone();
-    
-    // Apply background if available
-    if (m_useDynamicVideoBackground && !m_dynamicVideoFrame.empty()) {
-        // Resize dynamic background to match frame
-        cv::Mat bgResized;
-        cv::resize(m_dynamicVideoFrame, bgResized, cv::Size(frame.cols, frame.rows));
-        
-        // Simple mask-based compositing
-        cv::Mat mask = cv::Mat::zeros(frame.size(), CV_8UC1);
-        cv::rectangle(mask, centerRect, cv::Scalar(255), -1);
-        
-        // Apply gaussian blur for smoother edges
-        cv::GaussianBlur(mask, mask, cv::Size(21, 21), 10);
-        
-        // Composite
-        bgResized.copyTo(result);
-        frame.copyTo(result, mask);
-    } else if (m_useBackgroundTemplate && !m_selectedTemplate.empty()) {
-        // Use static background template
-        cv::Mat bgResized;
-        cv::resize(m_selectedTemplate, bgResized, cv::Size(frame.cols, frame.rows));
-        
-        // Simple mask-based compositing
-        cv::Mat mask = cv::Mat::zeros(frame.size(), CV_8UC1);
-        cv::rectangle(mask, centerRect, cv::Scalar(255), -1);
-        
-        // Apply gaussian blur for smoother edges
-        cv::GaussianBlur(mask, mask, cv::Size(21, 21), 10);
-        
-        // Composite
-        bgResized.copyTo(result);
-        frame.copyTo(result, mask);
-    }
-    
-    return result;
-}
-
 //  Performance Control Methods
 //  REMOVED: Real-time lighting methods - not needed for post-processing only mode
 

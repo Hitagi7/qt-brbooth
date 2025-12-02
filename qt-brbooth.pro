@@ -54,10 +54,7 @@ SOURCES += \
     src/ui/idle.cpp \
     src/ui/iconhover.cpp \
     src/ui/ui_manager.cpp \
-    src/algorithms/hand_detection/hand_detector.cpp \
     src/algorithms/lighting_correction/lighting_corrector.cpp
-    # src/algorithms/hand_detection/advanced_hand_detector.cpp \
-    # src/algorithms/hand_detection/mediapipe_like_hand_tracker.cpp
 
 HEADERS += \
     include/core/brbooth.h \
@@ -75,10 +72,7 @@ HEADERS += \
     include/ui/idle.h \
     include/ui/iconhover.h \
     include/ui/ui_manager.h \
-    include/algorithms/hand_detection/hand_detector.h \
     include/algorithms/lighting_correction/lighting_corrector.h
-    # include/algorithms/advanced_hand_detector.h \
-    # include/algorithms/mediapipe_like_hand_tracker.h
 
 FORMS += \
     ui/background.ui \
