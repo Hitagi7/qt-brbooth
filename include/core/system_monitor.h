@@ -30,7 +30,10 @@ public:
     struct Statistics {
         double cpuUsage;          // CPU usage (%)
         double gpuUsage;          // GPU usage (%)
-        double peakMemoryGB;      // Peak memory usage (GB)
+        double peakMemoryGB;      // Peak memory usage (GB) - process memory
+        double systemMemoryUsageGB; // System-wide memory usage (GB)
+        double systemMemoryTotalGB; // Total system memory (GB)
+        double systemMemoryAvailableGB; // Available system memory (GB)
         double averageFPS;        // Average FPS
         double accuracy;          // Accuracy metric (%)
         QDateTime timestamp;      // When these stats were collected
@@ -63,8 +66,18 @@ private:
     // Windows-specific monitoring functions
     double getCpuUsage();
     double getGpuUsage();
-    double getMemoryUsage();
+    double getMemoryUsage(); // Process memory
+    void getSystemMemoryInfo(double& totalGB, double& usedGB, double& availableGB);
     void updatePeakMemory();
+    
+    // GPU monitoring methods (tries multiple approaches)
+    double getGpuUsageNVML();      // NVIDIA NVML (NVIDIA GPUs only)
+    double getGpuUsageDXGI();      // Placeholder (not used - PDH preferred)
+    double getGpuUsagePDH();       // Windows Performance Counters (AMD/NVIDIA/Intel - best for AMD)
+    
+    // CPU monitoring methods
+    double getCpuUsagePDH();       // Performance Data Helper
+    double getCpuUsageSystemTimes(); // GetSystemTimes (more accurate)
 
     // Internal state
     QTimer* m_timer;
@@ -79,6 +92,20 @@ private:
     void* m_gpuQueryHandle;
     void* m_gpuCounterHandle;
     
+    // CPU monitoring using GetSystemTimes
+    qint64 m_lastCpuIdleTime;
+    qint64 m_lastCpuKernelTime;
+    qint64 m_lastCpuUserTime;
+    bool m_cpuTimesInitialized;
+    
+    // GPU monitoring method tracking
+    enum GpuMonitoringMethod {
+        GPU_METHOD_NONE = 0,
+        GPU_METHOD_NVML = 1,
+        GPU_METHOD_PDH = 2
+    };
+    GpuMonitoringMethod m_activeGpuMethod;
+    
     // FPS tracking (volatile for thread-safe access)
     volatile double m_latestFPS;
     QElapsedTimer m_fpsTrackingTimer;
@@ -87,6 +114,7 @@ private:
     double m_cpuSum;
     double m_gpuSum;
     double m_memorySum;
+    double m_systemMemorySum;
     double m_fpsSum;
     int m_sampleCount;
     

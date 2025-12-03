@@ -28,6 +28,11 @@ SystemMonitor::SystemMonitor(QObject *parent)
     , m_cpuCounterHandle(nullptr)
     , m_gpuQueryHandle(nullptr)
     , m_gpuCounterHandle(nullptr)
+    , m_lastCpuIdleTime(0)
+    , m_lastCpuKernelTime(0)
+    , m_lastCpuUserTime(0)
+    , m_cpuTimesInitialized(false)
+    , m_activeGpuMethod(GPU_METHOD_NONE)
     , m_latestFPS(0.0)  // Initialize volatile FPS variable
     , m_peakMemoryGB(0.0)
     , m_initialized(false)
@@ -37,6 +42,9 @@ SystemMonitor::SystemMonitor(QObject *parent)
     m_lastStats.cpuUsage = 0.0;
     m_lastStats.gpuUsage = 0.0;
     m_lastStats.peakMemoryGB = 0.0;
+    m_lastStats.systemMemoryUsageGB = 0.0;
+    m_lastStats.systemMemoryTotalGB = 0.0;
+    m_lastStats.systemMemoryAvailableGB = 0.0;
     m_lastStats.averageFPS = 0.0;
     m_lastStats.accuracy = 0.0;
     m_lastStats.timestamp = QDateTime::currentDateTime();
@@ -48,6 +56,7 @@ SystemMonitor::SystemMonitor(QObject *parent)
     m_cpuSum = 0.0;
     m_gpuSum = 0.0;
     m_memorySum = 0.0;
+    m_systemMemorySum = 0.0;
     m_fpsSum = 0.0;
     m_sampleCount = 0;
     
@@ -79,6 +88,8 @@ SystemMonitor::~SystemMonitor()
         PdhCloseQuery(m_gpuQueryHandle);
         m_gpuQueryHandle = nullptr;
     }
+    
+    // DXGI cleanup removed - using PDH for AMD/NVIDIA/Intel GPU monitoring
 }
 
 bool SystemMonitor::initialize()
@@ -106,33 +117,64 @@ bool SystemMonitor::initialize()
     // Collect initial sample for CPU
     PdhCollectQueryData(m_cpuQueryHandle);
     
-    // Initialize GPU monitoring - try NVML first, then fallback to Windows Performance Counters
+    // Initialize GPU monitoring - try multiple methods in order of preference
+    // 1. NVML (NVIDIA GPUs only, most accurate)
+    // 2. PDH (works with NVIDIA, AMD, Intel GPUs - best for AMD systems)
+    
     #ifdef NVML_AVAILABLE
     nvmlReturn_t nvmlStatus = nvmlInit();
     if (nvmlStatus == NVML_SUCCESS) {
-        qDebug() << "SystemMonitor: NVML initialized successfully";
-    } else {
-        qWarning() << "SystemMonitor: NVML initialization failed, using Windows Performance Counters";
+        // Test if we can actually get GPU usage
+        nvmlDevice_t device;
+        nvmlReturn_t result = nvmlDeviceGetHandleByIndex(0, &device);
+        if (result == NVML_SUCCESS) {
+            nvmlUtilization_t utilization;
+            result = nvmlDeviceGetUtilizationRates(device, &utilization);
+            if (result == NVML_SUCCESS) {
+                m_activeGpuMethod = GPU_METHOD_NVML;
+                qDebug() << "SystemMonitor: NVML initialized successfully for GPU monitoring (NVIDIA GPU detected)";
+            }
+        }
     }
     #endif
     
-    // Try to initialize GPU monitoring using Windows Performance Counters
-    // This may not work on all systems, but it's a fallback
-    status = PdhOpenQuery(nullptr, 0, &m_gpuQueryHandle);
-    if (status == ERROR_SUCCESS) {
-        // Try to add GPU counter - this path may vary by system
-        // Common paths: "\GPU Engine(*)\Utilization Percentage" or "\GPU Engine(*engtype_3D*)\Utilization Percentage"
-        status = PdhAddCounter(m_gpuQueryHandle, L"\\GPU Engine(*engtype_3D*)\\Utilization Percentage", 0, &m_gpuCounterHandle);
-        if (status != ERROR_SUCCESS) {
-            // Try alternative path
-            status = PdhAddCounter(m_gpuQueryHandle, L"\\GPU Engine(*)\\Utilization Percentage", 0, &m_gpuCounterHandle);
-            if (status != ERROR_SUCCESS) {
-                qWarning() << "SystemMonitor: GPU counter not available, GPU monitoring may be limited";
-                m_gpuCounterHandle = nullptr;
+    // Use PDH for GPU monitoring (works excellently with AMD, NVIDIA, and Intel GPUs)
+    // PDH is the recommended method for AMD GPUs on Windows
+    if (m_activeGpuMethod == GPU_METHOD_NONE) {
+        status = PdhOpenQuery(nullptr, 0, &m_gpuQueryHandle);
+        if (status == ERROR_SUCCESS) {
+            // Try multiple GPU counter paths - AMD GPUs typically use these paths
+            // Order matters: try most specific first, then fallback to generic
+            const wchar_t* gpuPaths[] = {
+                L"\\GPU Engine(*engtype_3D*)\\Utilization Percentage",      // 3D graphics (most common)
+                L"\\GPU Engine(*engtype_Compute*)\\Utilization Percentage", // Compute workloads
+                L"\\GPU Engine(*engtype_VideoDecode*)\\Utilization Percentage", // Video decoding
+                L"\\GPU Engine(*engtype_VideoEncode*)\\Utilization Percentage", // Video encoding
+                L"\\GPU Engine(*)\\Utilization Percentage"                  // All engines (fallback)
+            };
+            
+            bool foundCounter = false;
+            for (const wchar_t* path : gpuPaths) {
+                status = PdhAddCounter(m_gpuQueryHandle, path, 0, &m_gpuCounterHandle);
+                if (status == ERROR_SUCCESS) {
+                    // Collect initial sample
+                    PdhCollectQueryData(m_gpuQueryHandle);
+                    m_activeGpuMethod = GPU_METHOD_PDH;
+                    qDebug() << "SystemMonitor: Using PDH for GPU monitoring (AMD/NVIDIA/Intel compatible)";
+                    qDebug() << "SystemMonitor: GPU counter path:" << QString::fromWCharArray(path);
+                    foundCounter = true;
+                    break;
+                }
             }
-        }
-        if (m_gpuCounterHandle) {
-            PdhCollectQueryData(m_gpuQueryHandle);
+            
+            if (!foundCounter) {
+                qWarning() << "SystemMonitor: GPU monitoring not available - GPU performance counters may not be enabled";
+                qWarning() << "SystemMonitor: Try running as administrator or enable GPU performance counters in Windows";
+                PdhCloseQuery(m_gpuQueryHandle);
+                m_gpuQueryHandle = nullptr;
+            }
+        } else {
+            qWarning() << "SystemMonitor: Failed to open PDH query for GPU monitoring";
         }
     }
     
@@ -188,13 +230,16 @@ void SystemMonitor::collectStatistics()
     // Collect GPU usage
     stats.gpuUsage = getGpuUsage();
     
-    // Collect memory usage and update peak
+    // Collect memory usage and update peak (process memory)
     double currentMemory = getMemoryUsage();
     stats.peakMemoryGB = m_peakMemoryGB;
     if (currentMemory > m_peakMemoryGB) {
         m_peakMemoryGB = currentMemory;
         stats.peakMemoryGB = m_peakMemoryGB;
     }
+    
+    // Collect system-wide memory information
+    getSystemMemoryInfo(stats.systemMemoryTotalGB, stats.systemMemoryUsageGB, stats.systemMemoryAvailableGB);
     
     // Use the FPS value we read atomically
     // If FPS is 0 or invalid, keep the last known good value
@@ -224,6 +269,7 @@ void SystemMonitor::collectStatistics()
     if (stats.cpuUsage > m_peakStats.cpuUsage) m_peakStats.cpuUsage = stats.cpuUsage;
     if (stats.gpuUsage > m_peakStats.gpuUsage) m_peakStats.gpuUsage = stats.gpuUsage;
     if (stats.peakMemoryGB > m_peakStats.peakMemoryGB) m_peakStats.peakMemoryGB = stats.peakMemoryGB;
+    if (stats.systemMemoryUsageGB > m_peakStats.systemMemoryUsageGB) m_peakStats.systemMemoryUsageGB = stats.systemMemoryUsageGB;
     if (stats.averageFPS > m_peakStats.averageFPS) m_peakStats.averageFPS = stats.averageFPS;
     if (stats.accuracy > m_peakStats.accuracy) m_peakStats.accuracy = stats.accuracy;
     
@@ -231,6 +277,7 @@ void SystemMonitor::collectStatistics()
     m_cpuSum += stats.cpuUsage;
     m_gpuSum += stats.gpuUsage;
     m_memorySum += currentMemory;
+    m_systemMemorySum += stats.systemMemoryUsageGB;
     m_fpsSum += stats.averageFPS;
     m_sampleCount++;
     
@@ -238,6 +285,9 @@ void SystemMonitor::collectStatistics()
         m_averageStats.cpuUsage = m_cpuSum / m_sampleCount;
         m_averageStats.gpuUsage = m_gpuSum / m_sampleCount;
         m_averageStats.peakMemoryGB = m_memorySum / m_sampleCount;
+        m_averageStats.systemMemoryUsageGB = m_systemMemorySum / m_sampleCount;
+        m_averageStats.systemMemoryTotalGB = stats.systemMemoryTotalGB; // Total doesn't change
+        m_averageStats.systemMemoryAvailableGB = stats.systemMemoryAvailableGB; // Available changes frequently
         m_averageStats.averageFPS = m_fpsSum / m_sampleCount;
         m_averageStats.accuracy = stats.accuracy; // Keep current accuracy average
         m_averageStats.timestamp = stats.timestamp;
@@ -250,18 +300,22 @@ void SystemMonitor::collectStatistics()
     qDebug() << "--- LAST STATISTICS ---";
     qDebug() << "CPU Usage:" << QString::number(stats.cpuUsage, 'f', 2) << "%";
     qDebug() << "GPU Usage:" << QString::number(stats.gpuUsage, 'f', 2) << "%";
-    qDebug() << "Peak Memory Usage:" << QString::number(stats.peakMemoryGB, 'f', 2) << "GB";
+    qDebug() << "Process Memory Usage:" << QString::number(stats.peakMemoryGB, 'f', 2) << "GB";
+    qDebug() << "System Memory Usage:" << QString::number(stats.systemMemoryUsageGB, 'f', 2) << "GB /" << QString::number(stats.systemMemoryTotalGB, 'f', 2) << "GB";
+    qDebug() << "System Memory Available:" << QString::number(stats.systemMemoryAvailableGB, 'f', 2) << "GB";
     qDebug() << "Average FPS:" << QString::number(stats.averageFPS, 'f', 2) << "FPS";
     qDebug() << "Accuracy:" << QString::number(stats.accuracy, 'f', 2) << "%";
     qDebug() << "--- AVERAGE STATISTICS ---";
     qDebug() << "Average CPU Usage:" << QString::number(m_averageStats.cpuUsage, 'f', 2) << "%";
     qDebug() << "Average GPU Usage:" << QString::number(m_averageStats.gpuUsage, 'f', 2) << "%";
-    qDebug() << "Average Memory Usage:" << QString::number(m_averageStats.peakMemoryGB, 'f', 2) << "GB";
+    qDebug() << "Average Process Memory Usage:" << QString::number(m_averageStats.peakMemoryGB, 'f', 2) << "GB";
+    qDebug() << "Average System Memory Usage:" << QString::number(m_averageStats.systemMemoryUsageGB, 'f', 2) << "GB";
     qDebug() << "Average FPS:" << QString::number(m_averageStats.averageFPS, 'f', 2) << "FPS";
     qDebug() << "--- PEAK STATISTICS ---";
     qDebug() << "Peak CPU Usage:" << QString::number(m_peakStats.cpuUsage, 'f', 2) << "%";
     qDebug() << "Peak GPU Usage:" << QString::number(m_peakStats.gpuUsage, 'f', 2) << "%";
-    qDebug() << "Peak Memory Usage:" << QString::number(m_peakStats.peakMemoryGB, 'f', 2) << "GB";
+    qDebug() << "Peak Process Memory Usage:" << QString::number(m_peakStats.peakMemoryGB, 'f', 2) << "GB";
+    qDebug() << "Peak System Memory Usage:" << QString::number(m_peakStats.systemMemoryUsageGB, 'f', 2) << "GB";
     qDebug() << "Peak Average FPS:" << QString::number(m_peakStats.averageFPS, 'f', 2) << "FPS";
     qDebug() << "Peak Accuracy:" << QString::number(m_peakStats.accuracy, 'f', 2) << "%";
     qDebug() << "========================================";
@@ -270,6 +324,18 @@ void SystemMonitor::collectStatistics()
 }
 
 double SystemMonitor::getCpuUsage()
+{
+    // Try GetSystemTimes first (more accurate)
+    double cpuUsage = getCpuUsageSystemTimes();
+    if (cpuUsage >= 0.0) {
+        return cpuUsage;
+    }
+    
+    // Fallback to PDH
+    return getCpuUsagePDH();
+}
+
+double SystemMonitor::getCpuUsagePDH()
 {
     if (!m_cpuQueryHandle || !m_cpuCounterHandle) {
         return 0.0;
@@ -289,10 +355,75 @@ double SystemMonitor::getCpuUsage()
     return value.doubleValue;
 }
 
+double SystemMonitor::getCpuUsageSystemTimes()
+{
+    FILETIME idleTime, kernelTime, userTime;
+    
+    if (!GetSystemTimes(&idleTime, &kernelTime, &userTime)) {
+        return -1.0; // Error indicator
+    }
+    
+    // Convert FILETIME to qint64 (100-nanosecond intervals)
+    ULARGE_INTEGER idle, kernel, user;
+    idle.LowPart = idleTime.dwLowDateTime;
+    idle.HighPart = idleTime.dwHighDateTime;
+    kernel.LowPart = kernelTime.dwLowDateTime;
+    kernel.HighPart = kernelTime.dwHighDateTime;
+    user.LowPart = userTime.dwLowDateTime;
+    user.HighPart = userTime.dwHighDateTime;
+    
+    qint64 totalIdle = idle.QuadPart;
+    qint64 totalKernel = kernel.QuadPart;
+    qint64 totalUser = user.QuadPart;
+    
+    if (!m_cpuTimesInitialized) {
+        // First call - just store values
+        m_lastCpuIdleTime = totalIdle;
+        m_lastCpuKernelTime = totalKernel;
+        m_lastCpuUserTime = totalUser;
+        m_cpuTimesInitialized = true;
+        return 0.0; // Can't calculate percentage on first call
+    }
+    
+    // Calculate difference
+    qint64 idleDiff = totalIdle - m_lastCpuIdleTime;
+    qint64 kernelDiff = totalKernel - m_lastCpuKernelTime;
+    qint64 userDiff = totalUser - m_lastCpuUserTime;
+    
+    // Total CPU time = kernel + user
+    qint64 totalDiff = kernelDiff + userDiff;
+    
+    if (totalDiff == 0) {
+        return 0.0; // Avoid division by zero
+    }
+    
+    // CPU usage = (total - idle) / total * 100
+    double cpuUsage = ((double)(totalDiff - idleDiff) / (double)totalDiff) * 100.0;
+    
+    // Update stored values
+    m_lastCpuIdleTime = totalIdle;
+    m_lastCpuKernelTime = totalKernel;
+    m_lastCpuUserTime = totalUser;
+    
+    // Clamp to valid range
+    return qBound(0.0, cpuUsage, 100.0);
+}
+
 double SystemMonitor::getGpuUsage()
 {
+    switch (m_activeGpuMethod) {
+        case GPU_METHOD_NVML:
+            return getGpuUsageNVML();
+        case GPU_METHOD_PDH:
+            return getGpuUsagePDH();
+        default:
+            return 0.0;
+    }
+}
+
+double SystemMonitor::getGpuUsageNVML()
+{
     #ifdef NVML_AVAILABLE
-    // Try NVML first
     nvmlDevice_t device;
     nvmlReturn_t result = nvmlDeviceGetHandleByIndex(0, &device);
     if (result == NVML_SUCCESS) {
@@ -303,8 +434,19 @@ double SystemMonitor::getGpuUsage()
         }
     }
     #endif
-    
-    // Fallback to Windows Performance Counters
+    return 0.0;
+}
+
+double SystemMonitor::getGpuUsageDXGI()
+{
+    // DXGI method removed - using PDH for AMD/NVIDIA/Intel GPU monitoring
+    // PDH provides accurate GPU utilization for all GPU vendors on Windows
+    // This method is kept for interface compatibility but always returns 0
+    return 0.0;
+}
+
+double SystemMonitor::getGpuUsagePDH()
+{
     if (!m_gpuQueryHandle || !m_gpuCounterHandle) {
         return 0.0;
     }
@@ -320,7 +462,11 @@ double SystemMonitor::getGpuUsage()
         return 0.0;
     }
     
-    return value.doubleValue;
+    // PDH returns utilization as a percentage (0-100)
+    // Clamp to valid range to ensure accuracy
+    double gpuUsage = qBound(0.0, value.doubleValue, 100.0);
+    
+    return gpuUsage;
 }
 
 double SystemMonitor::getMemoryUsage()
@@ -332,6 +478,23 @@ double SystemMonitor::getMemoryUsage()
         return memoryGB;
     }
     return 0.0;
+}
+
+void SystemMonitor::getSystemMemoryInfo(double& totalGB, double& usedGB, double& availableGB)
+{
+    MEMORYSTATUSEX memStatus;
+    memStatus.dwLength = sizeof(MEMORYSTATUSEX);
+    
+    if (GlobalMemoryStatusEx(&memStatus)) {
+        // Convert bytes to GB
+        totalGB = static_cast<double>(memStatus.ullTotalPhys) / (1024.0 * 1024.0 * 1024.0);
+        availableGB = static_cast<double>(memStatus.ullAvailPhys) / (1024.0 * 1024.0 * 1024.0);
+        usedGB = totalGB - availableGB;
+    } else {
+        totalGB = 0.0;
+        usedGB = 0.0;
+        availableGB = 0.0;
+    }
 }
 
 void SystemMonitor::updatePeakMemory()
@@ -481,22 +644,26 @@ void SystemMonitor::saveStatisticsToDocx(const QString& filePath) const
 <w:p><w:r><w:t>Timestamp: %2</w:t></w:r></w:p>
 <w:p><w:r><w:t>CPU Usage: %3%</w:t></w:r></w:p>
 <w:p><w:r><w:t>GPU Usage: %4%</w:t></w:r></w:p>
-<w:p><w:r><w:t>Peak Memory Usage: %5 GB</w:t></w:r></w:p>
-<w:p><w:r><w:t>Average FPS: %6 FPS</w:t></w:r></w:p>
-<w:p><w:r><w:t>Accuracy: %7%</w:t></w:r></w:p>
+<w:p><w:r><w:t>Process Memory Usage: %5 GB</w:t></w:r></w:p>
+<w:p><w:r><w:t>System Memory Usage: %6 GB / %7 GB</w:t></w:r></w:p>
+<w:p><w:r><w:t>System Memory Available: %8 GB</w:t></w:r></w:p>
+<w:p><w:r><w:t>Average FPS: %9 FPS</w:t></w:r></w:p>
+<w:p><w:r><w:t>Accuracy: %10%</w:t></w:r></w:p>
 <w:p><w:r><w:t></w:t></w:r></w:p>
 <w:p><w:r><w:t>Average Statistics:</w:t></w:r></w:p>
-<w:p><w:r><w:t>Average CPU Usage: %8%</w:t></w:r></w:p>
-<w:p><w:r><w:t>Average GPU Usage: %9%</w:t></w:r></w:p>
-<w:p><w:r><w:t>Average Memory Usage: %10 GB</w:t></w:r></w:p>
-<w:p><w:r><w:t>Average FPS: %11 FPS</w:t></w:r></w:p>
+<w:p><w:r><w:t>Average CPU Usage: %11%</w:t></w:r></w:p>
+<w:p><w:r><w:t>Average GPU Usage: %12%</w:t></w:r></w:p>
+<w:p><w:r><w:t>Average Process Memory Usage: %13 GB</w:t></w:r></w:p>
+<w:p><w:r><w:t>Average System Memory Usage: %14 GB</w:t></w:r></w:p>
+<w:p><w:r><w:t>Average FPS: %15 FPS</w:t></w:r></w:p>
 <w:p><w:r><w:t></w:t></w:r></w:p>
 <w:p><w:r><w:t>Peak Statistics:</w:t></w:r></w:p>
-<w:p><w:r><w:t>Peak CPU Usage: %12%</w:t></w:r></w:p>
-<w:p><w:r><w:t>Peak GPU Usage: %13%</w:t></w:r></w:p>
-<w:p><w:r><w:t>Peak Memory Usage: %14 GB</w:t></w:r></w:p>
-<w:p><w:r><w:t>Peak Average FPS: %15 FPS</w:t></w:r></w:p>
-<w:p><w:r><w:t>Peak Accuracy: %16%</w:t></w:r></w:p>
+<w:p><w:r><w:t>Peak CPU Usage: %16%</w:t></w:r></w:p>
+<w:p><w:r><w:t>Peak GPU Usage: %17%</w:t></w:r></w:p>
+<w:p><w:r><w:t>Peak Process Memory Usage: %18 GB</w:t></w:r></w:p>
+<w:p><w:r><w:t>Peak System Memory Usage: %19 GB</w:t></w:r></w:p>
+<w:p><w:r><w:t>Peak Average FPS: %20 FPS</w:t></w:r></w:p>
+<w:p><w:r><w:t>Peak Accuracy: %21%</w:t></w:r></w:p>
 </w:body>
 </w:document>)")
         .arg(QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm:ss"))
@@ -504,15 +671,20 @@ void SystemMonitor::saveStatisticsToDocx(const QString& filePath) const
         .arg(QString::number(m_lastStats.cpuUsage, 'f', 2))
         .arg(QString::number(m_lastStats.gpuUsage, 'f', 2))
         .arg(QString::number(m_lastStats.peakMemoryGB, 'f', 2))
+        .arg(QString::number(m_lastStats.systemMemoryUsageGB, 'f', 2))
+        .arg(QString::number(m_lastStats.systemMemoryTotalGB, 'f', 2))
+        .arg(QString::number(m_lastStats.systemMemoryAvailableGB, 'f', 2))
         .arg(QString::number(latestFPS, 'f', 2))
         .arg(QString::number(m_lastStats.accuracy, 'f', 2))
         .arg(QString::number(m_averageStats.cpuUsage, 'f', 2))
         .arg(QString::number(m_averageStats.gpuUsage, 'f', 2))
         .arg(QString::number(m_averageStats.peakMemoryGB, 'f', 2))
+        .arg(QString::number(m_averageStats.systemMemoryUsageGB, 'f', 2))
         .arg(QString::number(m_averageStats.averageFPS, 'f', 2))
         .arg(QString::number(m_peakStats.cpuUsage, 'f', 2))
         .arg(QString::number(m_peakStats.gpuUsage, 'f', 2))
         .arg(QString::number(m_peakStats.peakMemoryGB, 'f', 2))
+        .arg(QString::number(m_peakStats.systemMemoryUsageGB, 'f', 2))
         .arg(QString::number(m_peakStats.averageFPS, 'f', 2))
         .arg(QString::number(m_peakStats.accuracy, 'f', 2));
     
@@ -596,7 +768,9 @@ void SystemMonitor::saveStatisticsToText(const QString& filePath) const
     out << "Timestamp: " << m_lastStats.timestamp.toString("yyyy-MM-dd hh:mm:ss") << "\n";
     out << "CPU Usage: " << QString::number(m_lastStats.cpuUsage, 'f', 2) << "%\n";
     out << "GPU Usage: " << QString::number(m_lastStats.gpuUsage, 'f', 2) << "%\n";
-    out << "Peak Memory Usage: " << QString::number(m_lastStats.peakMemoryGB, 'f', 2) << " GB\n";
+    out << "Process Memory Usage: " << QString::number(m_lastStats.peakMemoryGB, 'f', 2) << " GB\n";
+    out << "System Memory Usage: " << QString::number(m_lastStats.systemMemoryUsageGB, 'f', 2) << " GB / " << QString::number(m_lastStats.systemMemoryTotalGB, 'f', 2) << " GB\n";
+    out << "System Memory Available: " << QString::number(m_lastStats.systemMemoryAvailableGB, 'f', 2) << " GB\n";
     out << "Average FPS: " << QString::number(latestFPS, 'f', 2) << " FPS\n";
     out << "Accuracy: " << QString::number(m_lastStats.accuracy, 'f', 2) << "%\n\n";
     
@@ -604,14 +778,16 @@ void SystemMonitor::saveStatisticsToText(const QString& filePath) const
     out << "----------------\n";
     out << "Average CPU Usage: " << QString::number(m_averageStats.cpuUsage, 'f', 2) << "%\n";
     out << "Average GPU Usage: " << QString::number(m_averageStats.gpuUsage, 'f', 2) << "%\n";
-    out << "Average Memory Usage: " << QString::number(m_averageStats.peakMemoryGB, 'f', 2) << " GB\n";
+    out << "Average Process Memory Usage: " << QString::number(m_averageStats.peakMemoryGB, 'f', 2) << " GB\n";
+    out << "Average System Memory Usage: " << QString::number(m_averageStats.systemMemoryUsageGB, 'f', 2) << " GB\n";
     out << "Average FPS: " << QString::number(m_averageStats.averageFPS, 'f', 2) << " FPS\n\n";
     
     out << "PEAK STATISTICS:\n";
     out << "----------------\n";
     out << "Peak CPU Usage: " << QString::number(m_peakStats.cpuUsage, 'f', 2) << "%\n";
     out << "Peak GPU Usage: " << QString::number(m_peakStats.gpuUsage, 'f', 2) << "%\n";
-    out << "Peak Memory Usage: " << QString::number(m_peakStats.peakMemoryGB, 'f', 2) << " GB\n";
+    out << "Peak Process Memory Usage: " << QString::number(m_peakStats.peakMemoryGB, 'f', 2) << " GB\n";
+    out << "Peak System Memory Usage: " << QString::number(m_peakStats.systemMemoryUsageGB, 'f', 2) << " GB\n";
     out << "Peak Average FPS: " << QString::number(m_peakStats.averageFPS, 'f', 2) << " FPS\n";
     out << "Peak Accuracy: " << QString::number(m_peakStats.accuracy, 'f', 2) << "%\n";
     out << "========================================\n";
