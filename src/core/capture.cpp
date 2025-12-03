@@ -272,25 +272,6 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     , m_hasLightingComparison(false)
     , m_hasVideoLightingComparison(false)
     , m_recordedPersonScaleFactor(1.0) // Initialize to default scale (100%)
-    , m_bgModelInitialized(false)
-    , m_bgHueMean(60.0)
-    , m_bgHueStd(10.0)
-    , m_bgSatMean(120.0)
-    , m_bgSatStd(20.0)
-    , m_bgValMean(120.0)
-    , m_bgValStd(20.0)
-    , m_bgCbMean(90.0)
-    , m_bgCbStd(10.0)
-    , m_bgCrMean(120.0)
-    , m_bgCrStd(10.0)
-    , m_bgRedMean(60.0)
-    , m_bgGreenMean(150.0)
-    , m_bgBlueMean(60.0)
-    , m_bgRedStd(20.0)
-    , m_bgGreenStd(20.0)
-    , m_bgBlueStd(20.0)
-    , m_bgColorInvCov(cv::Matx33d::eye())
-    , m_bgColorInvCovReady(false)
 
 {
     ui->setupUi(this);
@@ -355,18 +336,7 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     overlayImageLabel->resize(this->size());
     overlayImageLabel->hide();
 
-    // Green-screen defaults (robust to both ring/ceiling light scenarios)
-    m_greenScreenEnabled = true;  // ENABLED BY DEFAULT - pure green removal only
-    // Typical green in OpenCV HSV: H=[35, 85], allow wider tolerance for lighting shifts
-    m_greenHueMin = 30;  // Target true greens, not dark teals
-    m_greenHueMax = 95;  // Limit to avoid catching person's dark teal/greenish colors
-    m_greenSatMin = 30;  // Higher saturation to target actual green screen, not person's dark colors
-    m_greenValMin = 40;  // Higher brightness to avoid dark greenish colors on person
-    // Morphological cleanup sizes (pixels)
-    m_greenMaskOpen = 3;
-    m_greenMaskClose = 7;
-    // Temporal mask smoothing
-    m_greenScreenMaskStableCount = 0;
+    // Watershed segmentation is used for person detection (no configuration needed)
 
     // Initialize status overlay
     statusOverlay = new QLabel(this);
@@ -2625,7 +2595,7 @@ cv::Mat Capture::processFrameWithGPUOnlyPipeline(const cv::Mat &frame)
         return cv::Mat();
     }
 
-    updateGreenBackgroundModel(frame);
+    // Background model update removed - watershed doesn't need it
     m_personDetectionTimer.start();
 
     try {
@@ -2634,48 +2604,32 @@ cv::Mat Capture::processFrameWithGPUOnlyPipeline(const cv::Mat &frame)
         // Upload frame to GPU (OpenCL) - single transfer
         frame.copyTo(m_gpuVideoFrame);
 
-        // GREEN SCREEN MODE: Use GPU-accelerated green screen masking
-        if (m_greenScreenEnabled && m_segmentationEnabledInCapture) {
-            qDebug() << "Processing green screen with GPU acceleration";
+        // WATERSHED SEGMENTATION MODE: Use GPU-accelerated watershed masking
+        if (m_segmentationEnabledInCapture) {
+            qDebug() << "Processing watershed segmentation with GPU acceleration";
             
             // VALIDATION: Ensure GPU frame is valid
             if (m_gpuVideoFrame.empty() || m_gpuVideoFrame.cols == 0 || m_gpuVideoFrame.rows == 0) {
-                qWarning() << "GPU video frame is invalid for green screen, falling back to CPU";
+                qWarning() << "GPU video frame is invalid for watershed segmentation, falling back to CPU";
                 return processFrameWithUnifiedDetection(frame);
             }
             
-            // Create GPU-accelerated green screen mask with crash protection
+            // Create GPU-accelerated watershed mask with crash protection
             cv::UMat gpuPersonMask;
             try {
-                gpuPersonMask = createGreenScreenPersonMaskGPU(m_gpuVideoFrame);
+                gpuPersonMask = createWatershedPersonMaskGPU(m_gpuVideoFrame);
             } catch (const cv::Exception &e) {
-                qWarning() << "GPU green screen mask creation failed:" << e.what() << "- falling back to CPU";
+                qWarning() << "GPU watershed mask creation failed:" << e.what() << "- falling back to CPU";
                 return processFrameWithUnifiedDetection(frame);
             } catch (const std::exception &e) {
-                qWarning() << "Exception in GPU green screen:" << e.what() << "- falling back to CPU";
+                qWarning() << "Exception in GPU watershed:" << e.what() << "- falling back to CPU";
                 return processFrameWithUnifiedDetection(frame);
             }
             
             // VALIDATION: Ensure mask is valid
             if (gpuPersonMask.empty()) {
-                qWarning() << "GPU green screen mask is empty, falling back to CPU";
+                qWarning() << "GPU watershed mask is empty, falling back to CPU";
                 return processFrameWithUnifiedDetection(frame);
-            }
-            
-            // REMOVE GREEN SPILL: Desaturate green tint from person pixels (OpenCL)
-            cv::UMat gpuCleanedFrame;
-            cv::Mat cleanedFrame;
-            try {
-                gpuCleanedFrame = removeGreenSpillGPU(m_gpuVideoFrame, gpuPersonMask);
-                if (!gpuCleanedFrame.empty()) {
-                    gpuCleanedFrame.copyTo(cleanedFrame);
-                    qDebug() << "Green spill removal applied to person pixels";
-                } else {
-                    cleanedFrame = frame.clone();
-                }
-            } catch (const cv::Exception &e) {
-                qWarning() << "Green spill removal failed:" << e.what() << "- using original frame";
-                cleanedFrame = frame.clone();
             }
             
             // Download mask to derive detections on CPU (for bounding boxes)
@@ -2695,7 +2649,7 @@ cv::Mat Capture::processFrameWithGPUOnlyPipeline(const cv::Mat &frame)
             std::vector<cv::Rect> detections = deriveDetectionsFromMask(personMask);
             m_lastDetections = detections;
             
-            qDebug() << "Derived" << detections.size() << "detections from green screen mask";
+            qDebug() << "Derived" << detections.size() << "detections from watershed mask";
             
             // Use cleaned frame (with green spill removed) for GPU-only segmentation
             cv::Mat segmentedFrame;
@@ -2720,7 +2674,7 @@ cv::Mat Capture::processFrameWithGPUOnlyPipeline(const cv::Mat &frame)
             m_lastPersonDetectionTime = m_personDetectionTimer.elapsed() / 1000.0;
             m_personDetectionFPS = (m_lastPersonDetectionTime > 0) ? 1.0 / m_lastPersonDetectionTime : 0;
             
-            qDebug() << "GPU green screen processing completed successfully";
+            qDebug() << "GPU watershed processing completed successfully";
             return segmentedFrame;
         }
 
@@ -3045,9 +2999,30 @@ cv::Mat Capture::processFrameWithUnifiedDetection(const cv::Mat &frame)
     //  PERFORMANCE OPTIMIZATION: NEVER apply lighting during real-time processing
     // Lighting is ONLY applied in post-processing after recording, just like static mode
 
-    // If green-screen is enabled, bypass HOG and derive mask directly
-    if (m_greenScreenEnabled && m_segmentationEnabledInCapture) {
-        cv::Mat personMask = createGreenScreenPersonMask(frame);
+    // Use watershed segmentation for person detection
+    if (m_segmentationEnabledInCapture) {
+        cv::Mat personMask;
+        try {
+            personMask = createWatershedPersonMask(frame);
+        } catch (const cv::Exception& e) {
+            qWarning() << "Exception in createWatershedPersonMask:" << e.what();
+            personMask = cv::Mat();
+        } catch (...) {
+            qWarning() << "Unknown exception in createWatershedPersonMask";
+            personMask = cv::Mat();
+        }
+        
+        // Validate mask before using it
+        if (personMask.empty() || personMask.rows != frame.rows || personMask.cols != frame.cols) {
+            qWarning() << "Invalid watershed mask, using empty detections";
+            std::vector<cv::Rect> emptyDetections;
+            m_lastDetections = emptyDetections;
+            cv::Mat segmentedFrame = createSegmentedFrame(frame, emptyDetections);
+            m_lastPersonDetectionTime = m_personDetectionTimer.elapsed() / 1000.0;
+            m_personDetectionFPS = (m_lastPersonDetectionTime > 0) ? 1.0 / m_lastPersonDetectionTime : 0;
+            return segmentedFrame;
+        }
+        
         std::vector<cv::Rect> detections = deriveDetectionsFromMask(personMask);
         m_lastDetections = detections;
         cv::Mat segmentedFrame = createSegmentedFrame(frame, detections);
@@ -3284,15 +3259,71 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
         // If m_useDynamicVideoBackground is true, segmentedFrame should already be set with video frame
 
         {
-            // ALWAYS use green-screen removal (pure green-only detection)
-            cv::Mat personMask = createGreenScreenPersonMask(frame);
+            // Ensure segmentedFrame is initialized before using it
+            if (segmentedFrame.empty()) {
+                // Fallback: initialize with black background if not set
+                segmentedFrame = cv::Mat::zeros(frame.size(), frame.type());
+                qWarning() << "segmentedFrame was empty, initialized with black background";
+            }
+            
+            // ALWAYS use watershed segmentation
+            cv::Mat personMask;
+            try {
+                personMask = createWatershedPersonMask(frame);
+            } catch (const cv::Exception& e) {
+                qWarning() << "Exception in createWatershedPersonMask (createSegmentedFrame):" << e.what();
+                personMask = cv::Mat();
+            } catch (...) {
+                qWarning() << "Unknown exception in createWatershedPersonMask (createSegmentedFrame)";
+                personMask = cv::Mat();
+            }
+
+            // Validate mask before using it
+            if (personMask.empty()) {
+                qDebug() << "Watershed mask is empty, returning background only";
+                return segmentedFrame;
+            }
+            
+            // Validate mask size matches frame size
+            if (personMask.rows != frame.rows || personMask.cols != frame.cols) {
+                qWarning() << "Watershed mask size mismatch in createSegmentedFrame: mask=" 
+                          << personMask.cols << "x" << personMask.rows 
+                          << ", frame=" << frame.cols << "x" << frame.rows 
+                          << " - returning background only";
+                return segmentedFrame;
+            }
 
             int nonZeroPixels = cv::countNonZero(personMask);
-            qDebug() << "Green-screen person mask non-zero:" << nonZeroPixels;
+            qDebug() << "Watershed person mask non-zero:" << nonZeroPixels;
+
+            // If mask is empty, just return the background
+            if (nonZeroPixels == 0) {
+                qDebug() << "Watershed mask has no non-zero pixels, returning background only";
+                return segmentedFrame;
+            }
+
+            // Validate mask size matches frame size before using it
+            if (personMask.rows != frame.rows || personMask.cols != frame.cols) {
+                qWarning() << "Watershed mask size mismatch: mask=" << personMask.cols << "x" << personMask.rows 
+                          << ", frame=" << frame.cols << "x" << frame.rows << " - returning background only";
+                return segmentedFrame;
+            }
 
             // Apply mask to extract person from camera frame
             cv::Mat personRegion;
-            frame.copyTo(personRegion, personMask);
+            try {
+                frame.copyTo(personRegion, personMask);
+                if (personRegion.empty()) {
+                    qWarning() << "Failed to extract person region from frame - returning background only";
+                    return segmentedFrame;
+                }
+            } catch (const cv::Exception& e) {
+                qWarning() << "Exception while extracting person region:" << e.what() << " - returning background only";
+                return segmentedFrame;
+            } catch (...) {
+                qWarning() << "Unknown exception while extracting person region - returning background only";
+                return segmentedFrame;
+            }
 
             // CRITICAL FIX: Use mutex to protect shared person data from race conditions
             // Store raw person data for post-processing (lighting will be applied after capture)
@@ -3334,6 +3365,12 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
             cv::Mat scaledPersonRegion, scaledPersonMask;
 
             if ((m_useBackgroundTemplate && !m_selectedBackgroundTemplate.isEmpty()) || m_useDynamicVideoBackground) {
+                // Validate segmentedFrame before using its size
+                if (segmentedFrame.empty()) {
+                    qWarning() << "segmentedFrame is empty, cannot scale person - returning background only";
+                    return segmentedFrame;
+                }
+                
                 cv::Size backgroundSize = segmentedFrame.size();
                 cv::Size scaledPersonSize;
 
@@ -3379,16 +3416,33 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
                         scaledPersonRegion.rows == scaledPersonMask.rows) {
                         
                         try {
-                            cv::Rect backgroundRect(cv::Point(xOffset, yOffset), actualScaledSize);
-                            cv::Mat backgroundROI = segmentedFrame(backgroundRect);
-                            scaledPersonRegion.copyTo(backgroundROI, scaledPersonMask);
-                            qDebug() << " COMPOSITING: Successfully composited scaled person at offset" << xOffset << "," << yOffset;
+                            // Validate rect is within bounds
+                            if (xOffset < 0 || yOffset < 0 || 
+                                xOffset + actualScaledSize.width > segmentedFrame.cols ||
+                                yOffset + actualScaledSize.height > segmentedFrame.rows) {
+                                qWarning() << " CRASH PREVENTION: ROI rect out of bounds - skipping compositing";
+                            } else {
+                                cv::Rect backgroundRect(cv::Point(xOffset, yOffset), actualScaledSize);
+                                cv::Mat backgroundROI = segmentedFrame(backgroundRect);
+                                
+                                // Validate ROI and scaled region sizes match
+                                if (backgroundROI.rows == scaledPersonRegion.rows && 
+                                    backgroundROI.cols == scaledPersonRegion.cols &&
+                                    backgroundROI.rows == scaledPersonMask.rows &&
+                                    backgroundROI.cols == scaledPersonMask.cols) {
+                                    scaledPersonRegion.copyTo(backgroundROI, scaledPersonMask);
+                                    qDebug() << " COMPOSITING: Successfully composited scaled person at offset" << xOffset << "," << yOffset;
+                                } else {
+                                    qWarning() << " CRASH PREVENTION: Size mismatch in ROI compositing - skipping";
+                                }
+                            }
                         } catch (const cv::Exception& e) {
-                            qWarning() << " CRASH PREVENTION: Compositing failed:" << e.what() << "- using fallback";
-                            scaledPersonRegion.copyTo(segmentedFrame, scaledPersonMask);
+                            qWarning() << " CRASH PREVENTION: Compositing failed:" << e.what() << "- skipping compositing";
+                        } catch (...) {
+                            qWarning() << " CRASH PREVENTION: Unknown exception in compositing - skipping";
                         }
                     } else {
-                        scaledPersonRegion.copyTo(segmentedFrame, scaledPersonMask);
+                        qWarning() << " CRASH PREVENTION: Invalid offsets or size mismatch - skipping compositing";
                         qDebug() << " COMPOSITING: Using fallback compositing due to bounds check";
                     }
                 } else {
@@ -4405,32 +4459,7 @@ bool Capture::isOpenCLAvailable() const
     return m_useOpenCL && cv::ocl::useOpenCL();
 }
 
-// --- Green-screen configuration API ---
-void Capture::setGreenScreenEnabled(bool enabled)
-{
-    m_greenScreenEnabled = enabled;
-}
-
-bool Capture::isGreenScreenEnabled() const
-{
-    return m_greenScreenEnabled;
-}
-
-void Capture::setGreenHueRange(int hueMin, int hueMax)
-{
-    m_greenHueMin = std::max(0, std::min(179, hueMin));
-    m_greenHueMax = std::max(0, std::min(179, hueMax));
-}
-
-void Capture::setGreenSaturationMin(int sMin)
-{
-    m_greenSatMin = std::max(0, std::min(255, sMin));
-}
-
-void Capture::setGreenValueMin(int vMin)
-{
-    m_greenValMin = std::max(0, std::min(255, vMin));
-}
+// --- Watershed segmentation API (no configuration needed) ---
 
 cv::Mat Capture::getMotionMask(const cv::Mat &frame)
 {
@@ -4593,844 +4622,281 @@ cv::Mat Capture::getMotionMask(const cv::Mat &frame)
     return fgMask;
 }
 
-void Capture::updateGreenBackgroundModel(const cv::Mat &frame) const
-{
-    if (frame.empty() || frame.channels() != 3) {
-        return;
-    }
-
-    const int rawBorderX = std::max(6, frame.cols / 24);
-    const int rawBorderY = std::max(6, frame.rows / 24);
-    const int borderX = std::min(rawBorderX, frame.cols);
-    const int borderY = std::min(rawBorderY, frame.rows);
-
-    if (borderX <= 0 || borderY <= 0) {
-        return;
-    }
-
-    cv::Mat sampleMask = cv::Mat::zeros(frame.size(), CV_8UC1);
-    const cv::Rect topRect(0, 0, frame.cols, borderY);
-    const cv::Rect bottomRect(0, std::max(0, frame.rows - borderY), frame.cols, borderY);
-    const cv::Rect leftRect(0, 0, borderX, frame.rows);
-    const cv::Rect rightRect(std::max(0, frame.cols - borderX), 0, borderX, frame.rows);
-
-    cv::rectangle(sampleMask, topRect, cv::Scalar(255), cv::FILLED);
-    cv::rectangle(sampleMask, bottomRect, cv::Scalar(255), cv::FILLED);
-    cv::rectangle(sampleMask, leftRect, cv::Scalar(255), cv::FILLED);
-    cv::rectangle(sampleMask, rightRect, cv::Scalar(255), cv::FILLED);
-
-    const int samplePixels = cv::countNonZero(sampleMask);
-    if (samplePixels < (frame.rows + frame.cols)) {
-        return;
-    }
-
-    cv::Mat hsv, ycrcb;
-    cv::cvtColor(frame, hsv, cv::COLOR_BGR2HSV);
-    cv::cvtColor(frame, ycrcb, cv::COLOR_BGR2YCrCb);
-
-    cv::Scalar hsvMean, hsvStd;
-    cv::Scalar ycrcbMean, ycrcbStd;
-    cv::Scalar bgrMean, bgrStd;
-
-    cv::meanStdDev(hsv, hsvMean, hsvStd, sampleMask);
-    cv::meanStdDev(ycrcb, ycrcbMean, ycrcbStd, sampleMask);
-    cv::meanStdDev(frame, bgrMean, bgrStd, sampleMask);
-
-    cv::Mat sampleData(samplePixels, 3, CV_32F);
-    int idx = 0;
-    for (int y = 0; y < frame.rows; ++y) {
-        const uchar *maskPtr = sampleMask.ptr<uchar>(y);
-        const cv::Vec3b *pixPtr = frame.ptr<cv::Vec3b>(y);
-        for (int x = 0; x < frame.cols; ++x) {
-            if (!maskPtr[x]) continue;
-            float *row = sampleData.ptr<float>(idx++);
-            row[0] = static_cast<float>(pixPtr[x][0]);
-            row[1] = static_cast<float>(pixPtr[x][1]);
-            row[2] = static_cast<float>(pixPtr[x][2]);
-        }
-    }
-    if (idx > 3) {
-        cv::Mat cropped = sampleData.rowRange(0, idx);
-        cv::Mat cov, meanRow;
-        cv::calcCovarMatrix(cropped, cov, meanRow,
-                            cv::COVAR_NORMAL | cv::COVAR_ROWS | cv::COVAR_SCALE);
-        cv::Mat covDouble;
-        cov.convertTo(covDouble, CV_64F);
-        covDouble += cv::Mat::eye(3, 3, CV_64F) * 1e-3;
-        cv::Mat invCov;
-        if (cv::invert(covDouble, invCov, cv::DECOMP_SVD)) {
-            m_bgColorInvCov(0, 0) = invCov.at<double>(0, 0);
-            m_bgColorInvCov(0, 1) = invCov.at<double>(0, 1);
-            m_bgColorInvCov(0, 2) = invCov.at<double>(0, 2);
-            m_bgColorInvCov(1, 0) = invCov.at<double>(1, 0);
-            m_bgColorInvCov(1, 1) = invCov.at<double>(1, 1);
-            m_bgColorInvCov(1, 2) = invCov.at<double>(1, 2);
-            m_bgColorInvCov(2, 0) = invCov.at<double>(2, 0);
-            m_bgColorInvCov(2, 1) = invCov.at<double>(2, 1);
-            m_bgColorInvCov(2, 2) = invCov.at<double>(2, 2);
-            m_bgColorInvCovReady = true;
-        }
-    }
-
-    const bool alreadyInitialized = m_bgModelInitialized;
-    auto blendValue = [alreadyInitialized](double current, double measurement) {
-        if (!alreadyInitialized) return measurement;
-        return 0.85 * current + 0.15 * measurement;
-    };
-
-    m_bgHueMean = blendValue(m_bgHueMean, hsvMean[0]);
-    m_bgHueStd = blendValue(m_bgHueStd, std::max(1.0, hsvStd[0]));
-    m_bgSatMean = blendValue(m_bgSatMean, hsvMean[1]);
-    m_bgSatStd = blendValue(m_bgSatStd, std::max(1.0, hsvStd[1]));
-    m_bgValMean = blendValue(m_bgValMean, hsvMean[2]);
-    m_bgValStd = blendValue(m_bgValStd, std::max(1.0, hsvStd[2]));
-
-    m_bgCbMean = blendValue(m_bgCbMean, ycrcbMean[2]);
-    m_bgCbStd = blendValue(m_bgCbStd, std::max(1.0, ycrcbStd[2]));
-    m_bgCrMean = blendValue(m_bgCrMean, ycrcbMean[1]);
-    m_bgCrStd = blendValue(m_bgCrStd, std::max(1.0, ycrcbStd[1]));
-
-    m_bgBlueMean = blendValue(m_bgBlueMean, bgrMean[0]);
-    m_bgGreenMean = blendValue(m_bgGreenMean, bgrMean[1]);
-    m_bgRedMean = blendValue(m_bgRedMean, bgrMean[2]);
-    m_bgBlueStd = blendValue(m_bgBlueStd, std::max(4.0, bgrStd[0]));
-    m_bgGreenStd = blendValue(m_bgGreenStd, std::max(4.0, bgrStd[1]));
-    m_bgRedStd = blendValue(m_bgRedStd, std::max(4.0, bgrStd[2]));
-
-    m_bgModelInitialized = true;
-}
-
-Capture::AdaptiveGreenThresholds Capture::computeAdaptiveGreenThresholds() const
-{
-    AdaptiveGreenThresholds thresholds;
-
-    auto clampHue = [](int value) {
-        return std::max(0, std::min(179, value));
-    };
-    auto clampByte = [](int value) {
-        return std::max(0, std::min(255, value));
-    };
-
-    if (!m_bgModelInitialized) {
-        thresholds.hueMin = clampHue(m_greenHueMin);
-        thresholds.hueMax = clampHue(m_greenHueMax);
-        thresholds.strictSatMin = clampByte(m_greenSatMin);
-        thresholds.relaxedSatMin = clampByte(std::max(10, m_greenSatMin - 10));
-        thresholds.strictValMin = clampByte(m_greenValMin);
-        thresholds.relaxedValMin = clampByte(std::max(10, m_greenValMin - 10));
-        thresholds.darkSatMin = clampByte(std::max(5, m_greenSatMin - 10));
-        thresholds.darkValMax = clampByte(m_greenValMin + 50);
-        thresholds.cbMin = 50.0;
-        thresholds.cbMax = 150.0;
-        thresholds.crMax = 150.0;
-        thresholds.greenDelta = 8.0;
-        thresholds.greenRatioMin = 0.45;
-        thresholds.lumaMin = 45.0;
-        thresholds.probabilityThreshold = 0.55;
-        thresholds.guardValueMax = 150;
-        thresholds.guardSatMax = 90;
-        thresholds.edgeGuardMin = 45.0;
-        thresholds.hueGuardPadding = 6;
-        return thresholds;
-    }
-
-    const double hueStd = std::max(4.0, m_bgHueStd);
-    const double satStd = std::max(4.0, m_bgSatStd);
-    const double valStd = std::max(4.0, m_bgValStd);
-    const double cbStd = std::max(2.5, m_bgCbStd);
-    const double crStd = std::max(2.5, m_bgCrStd);
-
-    const int huePadding = static_cast<int>(std::round(2.5 * hueStd)) + 4;
-    const int relaxedSatAmount = static_cast<int>(std::round(1.9 * satStd)) + 5;
-    const int relaxedValAmount = static_cast<int>(std::round(1.6 * valStd)) + 5;
-
-    thresholds.hueMin = clampHue(static_cast<int>(std::round(m_bgHueMean)) - huePadding);
-    thresholds.hueMax = clampHue(static_cast<int>(std::round(m_bgHueMean)) + huePadding);
-    thresholds.strictSatMin = clampByte(static_cast<int>(std::round(m_bgSatMean - 0.6 * satStd)));
-    thresholds.relaxedSatMin = clampByte(std::max(18, static_cast<int>(std::round(m_bgSatMean - relaxedSatAmount))));
-    thresholds.strictValMin = clampByte(static_cast<int>(std::round(m_bgValMean - 0.6 * valStd)));
-    thresholds.relaxedValMin = clampByte(std::max(18, static_cast<int>(std::round(m_bgValMean - relaxedValAmount))));
-    thresholds.darkSatMin = clampByte(std::max(5, static_cast<int>(std::round(m_bgSatMean - 0.8 * satStd))));
-    thresholds.darkValMax = clampByte(static_cast<int>(std::round(m_bgValMean + 2.2 * valStd)));
-
-    const double cbRange = 2.2 * cbStd + 6.0;
-    thresholds.cbMin = std::max(0.0, m_bgCbMean - cbRange);
-    thresholds.cbMax = std::min(255.0, m_bgCbMean + cbRange);
-    thresholds.crMax = std::min(255.0, m_bgCrMean + 2.4 * crStd + 6.0);
-
-    const double greenDominance = m_bgGreenMean - std::max(m_bgRedMean, m_bgBlueMean);
-    thresholds.greenDelta = std::max(4.0, greenDominance * 0.35 + 6.0);
-    const double sumRGB = std::max(1.0, m_bgRedMean + m_bgGreenMean + m_bgBlueMean);
-    const double bgRatio = m_bgGreenMean / sumRGB;
-    thresholds.greenRatioMin = std::clamp(bgRatio - 0.05, 0.35, 0.8);
-    thresholds.lumaMin = std::max(25.0, m_bgValMean - 1.2 * valStd);
-    thresholds.probabilityThreshold = 0.58;
-    thresholds.guardValueMax = clampByte(static_cast<int>(std::round(std::min(200.0, thresholds.lumaMin + 70.0))));
-    thresholds.guardSatMax = clampByte(std::max(25, static_cast<int>(std::round(m_bgSatMean - 0.3 * satStd))));
-    thresholds.edgeGuardMin = std::max(35.0, 55.0 - 0.25 * valStd);
-    thresholds.hueGuardPadding = 8;
-    auto invVariance = [](double stdVal) {
-        const double boundedStd = std::max(5.0, stdVal);
-        return 1.0 / (boundedStd * boundedStd + 50.0);
-    };
-    thresholds.invVarB = invVariance(m_bgBlueStd);
-    thresholds.invVarG = invVariance(m_bgGreenStd);
-    thresholds.invVarR = invVariance(m_bgRedStd);
-    const double avgStd = (m_bgBlueStd + m_bgGreenStd + m_bgRedStd) / 3.0;
-    thresholds.colorDistanceThreshold = std::max(2.5, std::min(4.5, 1.2 + avgStd * 0.08));
-    thresholds.colorGuardThreshold = thresholds.colorDistanceThreshold + 1.6;
-
-    return thresholds;
-}
-
-// AGGRESSIVE GREEN REMOVAL: Remove all green pixels including boundary pixels
+// WATERSHED SEGMENTATION: Marker-based segmentation algorithm
 // FAST & ACCURATE: Works for both green AND teal/cyan backdrops
-cv::Mat Capture::createGreenScreenPersonMask(const cv::Mat &frame) const
+cv::Mat Capture::createWatershedPersonMask(const cv::Mat &frame) const
 {
     if (frame.empty()) return cv::Mat();
 
     try {
-        // Split BGR channels
-        std::vector<cv::Mat> channels;
-        cv::split(frame, channels);
-        cv::Mat green = channels[1];
-        cv::Mat red = channels[2];
-
-        // FIXED: Properly detect green/cyan/teal while preserving blue colors
-        // Green: G > R, G > B  
-        // Cyan/Teal: G > R, B > R, G ≈ B
-        // Blue: B > R, B > G (should NOT be removed)
-        cv::Mat blue = channels[0];
-        cv::Mat greenDominantR;
-        cv::subtract(green, red, greenDominantR);  // G - R
+        // Validate input frame
+        if (frame.empty() || frame.rows <= 0 || frame.cols <= 0) {
+            qWarning() << "Watershed: Invalid input frame";
+            return cv::Mat::zeros(frame.size(), CV_8UC1);
+        }
         
-        cv::Mat greenDominantB;
-        cv::subtract(green, blue, greenDominantB);  // G - B
+        // Convert to grayscale for processing
+        cv::Mat gray;
+        cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
+        if (gray.empty() || gray.rows != frame.rows || gray.cols != frame.cols) {
+            qWarning() << "Watershed: Failed to convert to grayscale";
+            return cv::Mat::zeros(frame.size(), CV_8UC1);
+        }
         
-        // Green/cyan/teal: G > R AND (G > B OR G ≈ B)
-        // This excludes pure blue colors where B > G
-        cv::Mat greenOrTeal;
-        cv::threshold(greenDominantR, greenOrTeal, 15, 255, cv::THRESH_BINARY);  // G > R
+        // Apply Gaussian blur to reduce noise
+        cv::Mat blurred;
+        cv::GaussianBlur(gray, blurred, cv::Size(5, 5), 0);
+        if (blurred.empty()) {
+            qWarning() << "Watershed: Failed to apply Gaussian blur";
+            return cv::Mat::zeros(frame.size(), CV_8UC1);
+        }
         
-        cv::Mat greenDominatesBlue;
-        cv::threshold(greenDominantB, greenDominatesBlue, -10, 255, cv::THRESH_BINARY);  // G > B - 10 (allows G ≈ B)
+        // Apply threshold to get binary image
+        cv::Mat thresh;
+        cv::threshold(blurred, thresh, 0, 255, cv::THRESH_BINARY_INV + cv::THRESH_OTSU);
+        if (thresh.empty()) {
+            qWarning() << "Watershed: Failed to apply threshold";
+            return cv::Mat::zeros(frame.size(), CV_8UC1);
+        }
         
-        // Combine: green/teal = (G > R) AND (G > B - 10)
-        cv::Mat greenMask;
-        cv::bitwise_and(greenOrTeal, greenDominatesBlue, greenMask);
-
-        // Invert: NOT green/teal = person (preserves blue colors)
-        cv::Mat personMask;
-        cv::bitwise_not(greenMask, personMask);
-
+        // Noise removal using morphological operations
+        cv::Mat kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3));
+        cv::Mat opening;
+        cv::morphologyEx(thresh, opening, cv::MORPH_OPEN, kernel, cv::Point(-1, -1), 2);
+        if (opening.empty()) {
+            qWarning() << "Watershed: Failed morphological opening";
+            return cv::Mat::zeros(frame.size(), CV_8UC1);
+        }
+        
+        // Sure background area (dilate to get background)
+        cv::Mat sureBg;
+        cv::dilate(opening, sureBg, kernel, cv::Point(-1, -1), 3);
+        if (sureBg.empty()) {
+            qWarning() << "Watershed: Failed dilation";
+            return cv::Mat::zeros(frame.size(), CV_8UC1);
+        }
+        
+        // Finding sure foreground area using distance transform
+        cv::Mat distTransform;
+        cv::distanceTransform(opening, distTransform, cv::DIST_L2, 5);
+        if (distTransform.empty()) {
+            qWarning() << "Watershed: Failed distance transform";
+            return cv::Mat::zeros(frame.size(), CV_8UC1);
+        }
+        
+        // Normalize distance transform for thresholding
+        cv::Mat distNorm;
+        cv::normalize(distTransform, distNorm, 0, 255, cv::NORM_MINMAX, CV_8UC1);
+        if (distNorm.empty()) {
+            qWarning() << "Watershed: Failed normalization";
+            return cv::Mat::zeros(frame.size(), CV_8UC1);
+        }
+        
+        // Threshold to get sure foreground (center of objects)
+        cv::Mat sureFg;
+        cv::threshold(distNorm, sureFg, 0.4 * 255, 255, cv::THRESH_BINARY);
+        sureFg.convertTo(sureFg, CV_8UC1);
+        if (sureFg.empty()) {
+            qWarning() << "Watershed: Failed to create sure foreground";
+            return cv::Mat::zeros(frame.size(), CV_8UC1);
+        }
+        
+        // Find unknown region (boundary between foreground and background)
+        cv::Mat unknown;
+        cv::subtract(sureBg, sureFg, unknown);
+        if (unknown.empty()) {
+            qWarning() << "Watershed: Failed to create unknown region";
+            return cv::Mat::zeros(frame.size(), CV_8UC1);
+        }
+        
+        // Create markers for watershed
+        cv::Mat markers;
+        int numComponents = cv::connectedComponents(sureFg, markers);
+        
+        // Check if we have any foreground components
+        if (numComponents <= 1) {
+            // No foreground detected, return empty mask
+            return cv::Mat::zeros(frame.size(), CV_8UC1);
+        }
+        
+        // Convert markers to 32-bit signed integer for watershed
+        cv::Mat markers32s;
+        markers.convertTo(markers32s, CV_32S);
+        
+        // Validate Mat sizes before processing
+        if (markers32s.empty() || markers32s.rows != frame.rows || markers32s.cols != frame.cols) {
+            qWarning() << "Watershed: Invalid markers32s size, returning empty mask";
+            return cv::Mat::zeros(frame.size(), CV_8UC1);
+        }
+        
+        if (unknown.empty() || unknown.rows != frame.rows || unknown.cols != frame.cols) {
+            qWarning() << "Watershed: Invalid unknown mask size, returning empty mask";
+            return cv::Mat::zeros(frame.size(), CV_8UC1);
+        }
+        
+        // Add 1 to all labels so that sure background is 1, not 0
+        markers32s = markers32s + cv::Scalar(1);
+        
+        // Mark the unknown region with 0 (use direct comparison to avoid Mat creation issues)
+        // Safe row-by-row access
+        try {
+            for (int y = 0; y < markers32s.rows && y < unknown.rows; y++) {
+                const uchar* unknownRow = unknown.ptr<uchar>(y);
+                int* markerRow = markers32s.ptr<int>(y);
+                
+                int cols = qMin(markers32s.cols, unknown.cols);
+                for (int x = 0; x < cols; x++) {
+                    if (unknownRow[x] == 255) {
+                        markerRow[x] = 0;
+                    }
+                }
+            }
+        } catch (const cv::Exception& e) {
+            qWarning() << "Watershed: Exception while marking unknown region:" << e.what();
+            return cv::Mat::zeros(frame.size(), CV_8UC1);
+        } catch (...) {
+            qWarning() << "Watershed: Unknown exception while marking unknown region";
+            return cv::Mat::zeros(frame.size(), CV_8UC1);
+        }
+        
+        // Apply watershed algorithm (watershed modifies the markers in place)
+        cv::Mat frameCopy = frame.clone();
+        if (frameCopy.empty()) {
+            qWarning() << "Watershed: Failed to clone frame";
+            return cv::Mat::zeros(frame.size(), CV_8UC1);
+        }
+        
+        // Validate frameCopy and markers32s before watershed
+        if (frameCopy.rows != markers32s.rows || frameCopy.cols != markers32s.cols) {
+            qWarning() << "Watershed: Size mismatch between frameCopy and markers32s";
+            return cv::Mat::zeros(frame.size(), CV_8UC1);
+        }
+        
+        try {
+            cv::watershed(frameCopy, markers32s);
+        } catch (const cv::Exception& e) {
+            qWarning() << "Watershed: Exception in watershed algorithm:" << e.what();
+            return cv::Mat::zeros(frame.size(), CV_8UC1);
+        } catch (...) {
+            qWarning() << "Watershed: Unknown exception in watershed algorithm";
+            return cv::Mat::zeros(frame.size(), CV_8UC1);
+        }
+        
+        // Create mask: foreground regions (markers > 1, and not -1 which is boundary)
+        cv::Mat personMask = cv::Mat::zeros(frame.size(), CV_8UC1);
+        // Watershed marks boundaries as -1, foreground as > 1
+        // Iterate through markers to create mask (more reliable than compare for CV_32S)
+        try {
+            for (int y = 0; y < markers32s.rows && y < personMask.rows; y++) {
+                const int* markerRow = markers32s.ptr<int>(y);
+                uchar* maskRow = personMask.ptr<uchar>(y);
+                
+                int cols = qMin(markers32s.cols, personMask.cols);
+                for (int x = 0; x < cols; x++) {
+                    if (markerRow[x] > 1) {
+                        maskRow[x] = 255;
+                    }
+                }
+            }
+        } catch (const cv::Exception& e) {
+            qWarning() << "Watershed: Exception while creating mask:" << e.what();
+            return cv::Mat::zeros(frame.size(), CV_8UC1);
+        } catch (...) {
+            qWarning() << "Watershed: Unknown exception while creating mask";
+            return cv::Mat::zeros(frame.size(), CV_8UC1);
+        }
+        
+        // Refine mask with morphological operations
+        try {
+            cv::Mat refineKernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
+            if (!refineKernel.empty()) {
+                cv::morphologyEx(personMask, personMask, cv::MORPH_CLOSE, refineKernel);
+                cv::morphologyEx(personMask, personMask, cv::MORPH_OPEN, refineKernel);
+            }
+            
+            // Fill holes in the mask using a better approach
+            if (!personMask.empty()) {
+                cv::Mat maskFilled = personMask.clone();
+                if (!maskFilled.empty()) {
+                    cv::floodFill(maskFilled, cv::Mat(), cv::Point(0, 0), cv::Scalar(255));
+                    cv::bitwise_not(maskFilled, maskFilled);
+                    personMask = personMask | maskFilled;
+                }
+            }
+        } catch (const cv::Exception& e) {
+            qWarning() << "Watershed: Exception in morphological operations:" << e.what();
+            // Return mask as-is if refinement fails
+        } catch (...) {
+            qWarning() << "Watershed: Unknown exception in morphological operations";
+            // Return mask as-is if refinement fails
+        }
+        
         return personMask;
         
     } catch (const cv::Exception& e) {
-        qWarning() << "Error in createGreenScreenPersonMask:" << e.what();
+        qWarning() << "Error in createWatershedPersonMask:" << e.what();
         return cv::Mat();
     }
 }
 
-//  GPU-ACCELERATED GREEN SCREEN MASKING with Optimized Memory Management
-cv::UMat Capture::createGreenScreenPersonMaskGPU(const cv::UMat &gpuFrame) const
+//  GPU-ACCELERATED WATERSHED MASKING with Optimized Memory Management
+cv::UMat Capture::createWatershedPersonMaskGPU(const cv::UMat &gpuFrame) const
 {
     cv::UMat emptyMask;
     if (gpuFrame.empty()) {
-        qWarning() << "GPU frame is empty, cannot create green screen mask";
+        qWarning() << "GPU frame is empty, cannot create watershed mask";
         return emptyMask;
     }
 
-    if (!m_bgModelInitialized) {
-        try {
-            cv::Mat fallbackFrame;
-            gpuFrame.copyTo(fallbackFrame);
-            updateGreenBackgroundModel(fallbackFrame);
-        } catch (const cv::Exception &) {
-            // Ignore download errors; thresholds fallback to defaults
-        }
-    }
-
     try {
-        //  INITIALIZE CACHED FILTERS (once only, reused for all frames)
-        static bool filtersInitialized = false;
-        if (!filtersInitialized && cv::ocl::useOpenCL()) {
-            try {
-                // Cache filters removed - OpenCL uses direct operations
-                // Canny and GaussianBlur work directly with UMat
-                filtersInitialized = true;
-                qDebug() << "GPU green screen filters initialized and cached";
-            } catch (const cv::Exception &e) {
-                qWarning() << "Failed to initialize GPU green screen filters:" << e.what();
-                filtersInitialized = false;
-            }
-        }
-
-        // GPU: FAST & ACCURATE - Works for both green AND teal/cyan backdrops
-        // Split BGR channels
-        std::vector<cv::UMat> channels(3);
-        cv::split(gpuFrame, channels);
-        cv::UMat green = channels[1];
-        cv::UMat red = channels[2];
-
-        // FIXED: Properly detect green/cyan/teal while preserving blue colors
-        // Green: G > R, G > B  |  Cyan/Teal: G > R, B > R, G ≈ B
-        // Blue: B > R, B > G (should NOT be removed)
-        cv::UMat blue = channels[0];
-        cv::UMat greenDominantR;
-        cv::subtract(green, red, greenDominantR);  // G - R
+        // Download to CPU for watershed (watershed algorithm not fully GPU-accelerated in OpenCV)
+        cv::Mat cpuFrame;
+        gpuFrame.copyTo(cpuFrame);
         
-        cv::UMat greenDominantB;
-        cv::subtract(green, blue, greenDominantB);  // G - B
+        // Use CPU watershed implementation
+        cv::Mat cpuMask = createWatershedPersonMask(cpuFrame);
         
-        // Green/cyan/teal: G > R AND (G > B OR G ≈ B)
-        // This excludes pure blue colors where B > G
-        cv::UMat greenOrTeal;
-        cv::threshold(greenDominantR, greenOrTeal, 15, 255, cv::THRESH_BINARY);  // G > R
-        
-        cv::UMat greenDominatesBlue;
-        cv::threshold(greenDominantB, greenDominatesBlue, -10, 255, cv::THRESH_BINARY);  // G > B - 10 (allows G ≈ B)
-        
-        // Combine: green/teal = (G > R) AND (G > B - 10)
-        cv::UMat greenMask;
-        cv::bitwise_and(greenOrTeal, greenDominatesBlue, greenMask);
-
-        // Invert: NOT green/teal = person (preserves blue colors)
+        // Upload back to GPU
         cv::UMat gpuPersonMask;
-        cv::bitwise_not(greenMask, gpuPersonMask);
-
+        cpuMask.copyTo(gpuPersonMask);
+        
         return gpuPersonMask;
 
     } catch (const cv::Exception &e) {
-        qWarning() << "GPU green screen masking failed:" << e.what() << "- returning empty mask";
+        qWarning() << "GPU watershed masking failed:" << e.what() << "- returning empty mask";
         return emptyMask;
     } catch (const std::exception &e) {
-        qWarning() << "Exception in GPU green screen masking:" << e.what();
+        qWarning() << "Exception in GPU watershed masking:" << e.what();
         return emptyMask;
     } catch (...) {
-        qWarning() << "Unknown exception in GPU green screen masking";
+        qWarning() << "Unknown exception in GPU watershed masking";
         return emptyMask;
     }
 }
 
-// CONTOUR-BASED MASK REFINEMENT - Remove all fragments, keep only person
-cv::Mat Capture::refineGreenScreenMaskWithContours(const cv::Mat &mask, int minArea) const
-{
-    if (mask.empty()) return cv::Mat();
-
-    try {
-        cv::Mat refinedMask = cv::Mat::zeros(mask.size(), CV_8UC1);
-        
-        // Find all contours in the mask
-        std::vector<std::vector<cv::Point>> contours;
-        std::vector<cv::Vec4i> hierarchy;
-        cv::Mat maskCopy = mask.clone();
-        cv::findContours(maskCopy, contours, hierarchy, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
-        
-        if (contours.empty()) {
-            qDebug() << "No contours found in green screen mask";
-            return refinedMask;
-        }
-        
-        // Sort contours by area (largest first)
-        std::vector<std::pair<int, double>> contourAreas;
-        for (size_t i = 0; i < contours.size(); i++) {
-            double area = cv::contourArea(contours[i]);
-            contourAreas.push_back({static_cast<int>(i), area});
-        }
-        std::sort(contourAreas.begin(), contourAreas.end(), 
-                  [](const std::pair<int, double>& a, const std::pair<int, double>& b) {
-                      return a.second > b.second;
-                  });
-        
-        // Keep only the largest contours (person) that meet minimum area
-        int keptContours = 0;
-        const int MAX_PERSONS = 3; // Support up to 3 people
-        
-        for (size_t i = 0; i < std::min(contourAreas.size(), (size_t)MAX_PERSONS); i++) {
-            int idx = contourAreas[i].first;
-            double area = contourAreas[i].second;
-            
-            if (area >= minArea) {
-                // STRATEGY 1: Draw filled contour (aggressive - includes all pixels)
-                cv::drawContours(refinedMask, contours, idx, cv::Scalar(255), cv::FILLED);
-                keptContours++;
-                qDebug() << "Kept contour" << i << "with area:" << area;
-            } else {
-                qDebug() << "Rejected contour" << i << "with area:" << area << "(too small)";
-            }
-        }
-        
-        if (keptContours == 0) {
-            qWarning() << "No valid contours found - all below minimum area" << minArea;
-            return refinedMask;
-        }
-        
-        // STRATEGY 2: Apply convex hull to smooth boundaries and remove concave artifacts
-        // ENHANCED: Less aggressive - use union instead of intersection to preserve black regions
-        cv::Mat hullMask = cv::Mat::zeros(mask.size(), CV_8UC1);
-        for (size_t i = 0; i < std::min(contourAreas.size(), (size_t)MAX_PERSONS); i++) {
-            int idx = contourAreas[i].first;
-            double area = contourAreas[i].second;
-            
-            if (area >= minArea) {
-                std::vector<cv::Point> hull;
-                cv::convexHull(contours[idx], hull);
-                
-                // Only apply convex hull if it doesn't expand area too much (< 30% increase)
-                // Increased threshold to be less aggressive with black clothing
-                double hullArea = cv::contourArea(hull);
-                if (hullArea < area * 1.3) {
-                    std::vector<std::vector<cv::Point>> hullContours = {hull};
-                    cv::drawContours(hullMask, hullContours, 0, cv::Scalar(255), cv::FILLED);
-                }
-            }
-        }
-        
-        // ENHANCED: Use union instead of intersection to preserve black regions with holes
-        // This prevents removal of valid person pixels in black clothing areas
-        if (!hullMask.empty() && cv::countNonZero(hullMask) > 0) {
-            cv::bitwise_or(refinedMask, hullMask, refinedMask);
-        }
-        
-        // STRATEGY 3: Final morphological cleanup with larger kernel to fill holes in black regions
-        // ENHANCED: Use larger kernel to fill larger holes that may appear in black clothing
-        cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(7, 7));
-        cv::morphologyEx(refinedMask, refinedMask, cv::MORPH_CLOSE, kernel); // Fill small/medium holes
-        cv::morphologyEx(refinedMask, refinedMask, cv::MORPH_OPEN, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5)));  // Remove small protrusions
-        
-        // Additional pass with even larger kernel for very large holes (e.g., in black clothing)
-        cv::Mat largeKernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(15, 15));
-        cv::morphologyEx(refinedMask, refinedMask, cv::MORPH_CLOSE, largeKernel);
-        
-        qDebug() << "Contour refinement complete - kept" << keptContours << "contours";
-        return refinedMask;
-        
-    } catch (const cv::Exception &e) {
-        qWarning() << "Contour refinement failed:" << e.what();
-        return mask.clone();
-    } catch (const std::exception &e) {
-        qWarning() << "Exception in contour refinement:" << e.what();
-        return mask.clone();
-    }
-}
-
-// TEMPORAL MASK SMOOTHING - Ensure consistency across frames
-cv::Mat Capture::applyTemporalMaskSmoothing(const cv::Mat &currentMask) const
-{
-    if (currentMask.empty()) return cv::Mat();
-
-    // First frame or after reset
-    if (m_lastGreenScreenMask.empty() || m_lastGreenScreenMask.size() != currentMask.size()) {
-        m_lastGreenScreenMask = currentMask.clone();
-        m_greenScreenMaskStableCount = 0;
-        return currentMask.clone();
-    }
-
-    try {
-        // Calculate difference between current and last mask
-        cv::Mat diff;
-        cv::absdiff(currentMask, m_lastGreenScreenMask, diff);
-        int diffPixels = cv::countNonZero(diff);
-        double diffRatio = (double)diffPixels / (currentMask.rows * currentMask.cols);
-        
-        // If masks are very similar (< 5% difference), blend them
-        cv::Mat smoothedMask;
-        if (diffRatio < 0.05) {
-            // Blend current with last mask (70% current, 30% last) for stability
-            cv::addWeighted(currentMask, 0.7, m_lastGreenScreenMask, 0.3, 0, smoothedMask, CV_8U);
-            cv::threshold(smoothedMask, smoothedMask, 127, 255, cv::THRESH_BINARY);
-            m_greenScreenMaskStableCount++;
-        } else if (diffRatio < 0.15) {
-            // Medium change - blend with more weight to current (80% current, 20% last)
-            cv::addWeighted(currentMask, 0.8, m_lastGreenScreenMask, 0.2, 0, smoothedMask, CV_8U);
-            cv::threshold(smoothedMask, smoothedMask, 127, 255, cv::THRESH_BINARY);
-            m_greenScreenMaskStableCount = std::max(0, m_greenScreenMaskStableCount - 1);
-        } else {
-            // Large change - use current mask directly (new person or movement)
-            smoothedMask = currentMask.clone();
-            m_greenScreenMaskStableCount = 0;
-        }
-        
-        // Update last mask for next frame
-        m_lastGreenScreenMask = smoothedMask.clone();
-        
-        return smoothedMask;
-        
-    } catch (const cv::Exception &e) {
-        qWarning() << "Temporal smoothing failed:" << e.what();
-        m_lastGreenScreenMask = currentMask.clone();
-        return currentMask.clone();
-    } catch (const std::exception &e) {
-        qWarning() << "Exception in temporal smoothing:" << e.what();
-        m_lastGreenScreenMask = currentMask.clone();
-        return currentMask.clone();
-    }
-}
-
-// GRABCUT REFINEMENT - Advanced foreground/background separation
-cv::Mat Capture::refineWithGrabCut(const cv::Mat &frame, const cv::Mat &initialMask) const
-{
-    if (frame.empty() || initialMask.empty()) {
-        qWarning() << "GrabCut: Empty input";
-        return initialMask.clone();
-    }
-
-    // VALIDATION: Check frame and mask dimensions match
-    if (frame.size() != initialMask.size()) {
-        qWarning() << "GrabCut: Size mismatch - frame:" << frame.cols << "x" << frame.rows 
-                   << "mask:" << initialMask.cols << "x" << initialMask.rows;
-        return initialMask.clone();
-    }
-
-    // VALIDATION: Check mask has sufficient non-zero pixels
-    int nonZeroCount = cv::countNonZero(initialMask);
-    if (nonZeroCount < 1000) {
-        qWarning() << "GrabCut: Insufficient mask pixels:" << nonZeroCount;
-        return initialMask.clone();
-    }
-
-    try {
-        qDebug() << "Applying GrabCut refinement for precise segmentation";
-        
-        // Create GrabCut mask from initial mask
-        // GC_BGD=0 (definite background), GC_FGD=1 (definite foreground)
-        // GC_PR_BGD=2 (probably background), GC_PR_FGD=3 (probably foreground)
-        cv::Mat grabCutMask = cv::Mat::zeros(frame.size(), CV_8UC1);
-        
-        // SAFE EROSION: Check if mask is large enough before eroding
-        cv::Mat definiteFG;
-        cv::Rect maskBounds = cv::boundingRect(initialMask);
-        if (maskBounds.width > 30 && maskBounds.height > 30) {
-            cv::erode(initialMask, definiteFG, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(15, 15)));
-        } else {
-            // Mask too small for erosion, use smaller kernel
-            cv::erode(initialMask, definiteFG, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5)));
-        }
-        
-        // VALIDATION: Ensure we still have some foreground pixels
-        if (cv::countNonZero(definiteFG) < 100) {
-            qWarning() << "GrabCut: Eroded mask too small, using original";
-            return initialMask.clone();
-        }
-        
-        grabCutMask.setTo(cv::GC_FGD, definiteFG);
-        
-        // Dilate mask to get probable foreground region
-        cv::Mat probableFG;
-        cv::dilate(initialMask, probableFG, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(25, 25)));
-        cv::Mat unknownRegion = probableFG - definiteFG;
-        grabCutMask.setTo(cv::GC_PR_FGD, unknownRegion);
-        
-        // Everything else is definite background
-        cv::Mat bgMask = (grabCutMask == cv::GC_BGD);
-        grabCutMask.setTo(cv::GC_BGD, bgMask);
-        
-        // Apply GrabCut algorithm (ONLY 1 iteration for speed and stability)
-        cv::Mat bgModel, fgModel;
-        cv::Rect roi = cv::boundingRect(initialMask);
-        
-        // VALIDATION: Ensure ROI is valid and reasonable
-        roi.x = std::max(0, roi.x - 10);
-        roi.y = std::max(0, roi.y - 10);
-        roi.width = std::min(frame.cols - roi.x, roi.width + 20);
-        roi.height = std::min(frame.rows - roi.y, roi.height + 20);
-        
-        if (roi.width > 50 && roi.height > 50 && 
-            roi.x >= 0 && roi.y >= 0 && 
-            roi.x + roi.width <= frame.cols && 
-            roi.y + roi.height <= frame.rows) {
-            
-            // CRITICAL: Use only 1 iteration to prevent crashes
-            cv::grabCut(frame, grabCutMask, roi, bgModel, fgModel, 1, cv::GC_INIT_WITH_MASK);
-            
-            // Extract foreground
-            cv::Mat refinedMask = (grabCutMask == cv::GC_FGD) | (grabCutMask == cv::GC_PR_FGD);
-            refinedMask.convertTo(refinedMask, CV_8U, 255);
-            
-            // VALIDATION: Ensure output is reasonable
-            int refinedCount = cv::countNonZero(refinedMask);
-            if (refinedCount > 500 && refinedCount < frame.rows * frame.cols * 0.9) {
-                qDebug() << "GrabCut refinement complete";
-                return refinedMask;
-            } else {
-                qWarning() << "GrabCut produced invalid result, using original";
-                return initialMask.clone();
-            }
-        } else {
-            qWarning() << "Invalid ROI for GrabCut:" << roi.x << roi.y << roi.width << roi.height;
-            return initialMask.clone();
-        }
-        
-    } catch (const cv::Exception &e) {
-        qWarning() << "GrabCut OpenCV exception:" << e.what();
-        return initialMask.clone();
-    } catch (const std::exception &e) {
-        qWarning() << "GrabCut std exception:" << e.what();
-        return initialMask.clone();
-    } catch (...) {
-        qWarning() << "GrabCut unknown exception";
-        return initialMask.clone();
-    }
-}
-
-// DISTANCE-BASED REFINEMENT - Ensure no green pixels near person edges
-cv::Mat Capture::applyDistanceBasedRefinement(const cv::Mat &frame, const cv::Mat &mask) const
-{
-    if (frame.empty() || mask.empty()) {
-        return mask.clone();
-    }
-
-    try {
-        qDebug() << "Applying distance-based refinement to remove edge artifacts";
-        
-        // Convert to HSV for green detection
-        cv::Mat hsv;
-        cv::cvtColor(frame, hsv, cv::COLOR_BGR2HSV);
-        
-        // Create strict green mask (more aggressive than chroma key)
-        cv::Scalar lowerGreen(m_greenHueMin, m_greenSatMin + 40, m_greenValMin + 30);  // Much stricter: only bright, saturated greens
-        cv::Scalar upperGreen(m_greenHueMax, 255, 255);
-        cv::Mat strictGreenMask;
-        cv::inRange(hsv, lowerGreen, upperGreen, strictGreenMask);
-        
-        // Calculate distance transform from green pixels
-        cv::Mat greenDist;
-        cv::distanceTransform(~strictGreenMask, greenDist, cv::DIST_L2, 5);
-        
-        // Normalize distance to [0, 1]
-        cv::Mat normalizedDist;
-        cv::normalize(greenDist, normalizedDist, 0, 1.0, cv::NORM_MINMAX, CV_32F);
-        
-        // Create safety buffer: pixels must be at least 10 pixels away from green
-        cv::Mat safetyMask;
-        cv::threshold(normalizedDist, safetyMask, 0.05, 1.0, cv::THRESH_BINARY);
-        safetyMask.convertTo(safetyMask, CV_8U, 255);
-        
-        // Apply safety mask to person mask
-        cv::Mat refinedMask;
-        cv::bitwise_and(mask, safetyMask, refinedMask);
-        
-        // Fill any holes created by the safety buffer
-        cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(7, 7));
-        cv::morphologyEx(refinedMask, refinedMask, cv::MORPH_CLOSE, kernel);
-        
-        qDebug() << "Distance-based refinement complete";
-        return refinedMask;
-        
-    } catch (const cv::Exception &e) {
-        qWarning() << "Distance refinement failed:" << e.what();
-        return mask.clone();
-    } catch (const std::exception &e) {
-        qWarning() << "Exception in distance refinement:" << e.what();
-        return mask.clone();
-    }
-}
-
-// CREATE TRIMAP - Three-zone map for alpha matting
-cv::Mat Capture::createTrimap(const cv::Mat &mask, int erodeSize, int dilateSize) const
-{
-    if (mask.empty()) {
-        return cv::Mat();
-    }
-
-    try {
-        cv::Mat trimap = cv::Mat::zeros(mask.size(), CV_8UC1);
-        
-        // Definite foreground (eroded mask) = 255
-        cv::Mat definiteFG;
-        cv::Mat erodeKernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(erodeSize, erodeSize));
-        cv::erode(mask, definiteFG, erodeKernel);
-        trimap.setTo(255, definiteFG);
-        
-        // Definite background (inverse of dilated mask) = 0
-        cv::Mat dilateKernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(dilateSize, dilateSize));
-        cv::Mat dilatedMask;
-        cv::dilate(mask, dilatedMask, dilateKernel);
-        cv::Mat definiteBG = (dilatedMask == 0);
-        trimap.setTo(0, definiteBG);
-        
-        // Unknown region (between eroded and dilated) = 128
-        cv::Mat unknownRegion = (trimap != 0) & (trimap != 255);
-        trimap.setTo(128, unknownRegion);
-        
-        return trimap;
-        
-    } catch (const cv::Exception &e) {
-        qWarning() << "Trimap creation failed:" << e.what();
-        return mask.clone();
-    }
-}
-
-// CUSTOM GUIDED FILTER IMPLEMENTATION - Edge-preserving smoothing without ximgproc
-cv::Mat Capture::customGuidedFilter(const cv::Mat &guide, const cv::Mat &src, int radius, double eps) const
-{
-    // Convert to float
-    cv::Mat guideFloat, srcFloat;
-    guide.convertTo(guideFloat, CV_32F);
-    src.convertTo(srcFloat, CV_32F);
-    
-    // Mean of guide and source
-    cv::Mat meanI, meanP;
-    cv::boxFilter(guideFloat, meanI, CV_32F, cv::Size(radius, radius));
-    cv::boxFilter(srcFloat, meanP, CV_32F, cv::Size(radius, radius));
-    
-    // Correlation and variance
-    cv::Mat corrI, corrIp;
-    cv::boxFilter(guideFloat.mul(guideFloat), corrI, CV_32F, cv::Size(radius, radius));
-    cv::boxFilter(guideFloat.mul(srcFloat), corrIp, CV_32F, cv::Size(radius, radius));
-    
-    cv::Mat varI = corrI - meanI.mul(meanI);
-    cv::Mat covIp = corrIp - meanI.mul(meanP);
-    
-    // Linear coefficients a and b
-    cv::Mat a = covIp / (varI + eps);
-    cv::Mat b = meanP - a.mul(meanI);
-    
-    // Mean of a and b
-    cv::Mat meanA, meanB;
-    cv::boxFilter(a, meanA, CV_32F, cv::Size(radius, radius));
-    cv::boxFilter(b, meanB, CV_32F, cv::Size(radius, radius));
-    
-    // Output
-    return meanA.mul(guideFloat) + meanB;
-}
-
-// ALPHA MATTING - Extract precise alpha channel for natural edges
-cv::Mat Capture::extractPersonWithAlphaMatting(const cv::Mat &frame, const cv::Mat &trimap) const
-{
-    if (frame.empty() || trimap.empty()) {
-        return cv::Mat();
-    }
-
-    try {
-        qDebug() << "Applying alpha matting for natural edge extraction";
-        
-        // Simple but effective alpha matting using custom guided filter
-        cv::Mat alpha = trimap.clone();
-        alpha.convertTo(alpha, CV_32F, 1.0/255.0);
-        
-        // Convert frame to grayscale for guidance
-        cv::Mat frameGray;
-        if (frame.channels() == 3) {
-            cv::cvtColor(frame, frameGray, cv::COLOR_BGR2GRAY);
-        } else {
-            frameGray = frame.clone();
-        }
-        
-        // Apply custom guided filter for smooth alpha matte
-        cv::Mat guidedAlpha = customGuidedFilter(frameGray, alpha, 8, 1e-6);
-        
-        // Threshold to get clean binary mask
-        cv::Mat refinedMask;
-        cv::threshold(guidedAlpha, refinedMask, 0.5, 1.0, cv::THRESH_BINARY);
-        refinedMask.convertTo(refinedMask, CV_8U, 255);
-        
-        // Additional cleanup with morphology
-        cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
-        cv::morphologyEx(refinedMask, refinedMask, cv::MORPH_OPEN, kernel);
-        
-        qDebug() << "Alpha matting complete";
-        return refinedMask;
-        
-    } catch (const cv::Exception &e) {
-        qWarning() << "Alpha matting failed:" << e.what();
-        // Fallback: convert trimap to binary mask
-        cv::Mat fallback;
-        cv::threshold(trimap, fallback, 127, 255, cv::THRESH_BINARY);
-        return fallback;
-    } catch (const std::exception &e) {
-        qWarning() << "Exception in alpha matting:" << e.what();
-        cv::Mat fallback;
-        cv::threshold(trimap, fallback, 127, 255, cv::THRESH_BINARY);
-        return fallback;
-    }
-}
-
-// GPU-ACCELERATED GREEN SPILL REMOVAL - Remove green tint from person pixels
-cv::UMat Capture::removeGreenSpillGPU(const cv::UMat &gpuFrame, const cv::UMat &gpuMask) const
-{
-    cv::UMat result;
-    if (gpuFrame.empty() || gpuMask.empty()) {
-        return gpuFrame.clone();
-    }
-
-    try {
-        // Convert to HSV for color correction
-        cv::UMat gpuHSV;
-        cv::cvtColor(gpuFrame, gpuHSV, cv::COLOR_BGR2HSV);
-
-        // Split HSV channels
-        std::vector<cv::UMat> hsvChannels(3);
-        cv::split(gpuHSV, hsvChannels);
-
-        // Create a desaturation map based on green hue proximity
-        // Pixels closer to green hue will be more desaturated
-        cv::UMat hueChannel = hsvChannels[0].clone();
-        
-        // Create desaturation mask for greenish pixels (narrower range to preserve person's colors)
-        cv::UMat greenishMask1, greenishMask2;
-        cv::threshold(hueChannel, greenishMask1, m_greenHueMin, 255, cv::THRESH_BINARY);  // No extra margin
-        cv::threshold(hueChannel, greenishMask2, m_greenHueMax, 255, cv::THRESH_BINARY_INV);  // No extra margin
-        cv::UMat greenishRange;
-        cv::bitwise_and(greenishMask1, greenishMask2, greenishRange);
-        
-        // Desaturate pixels in green hue range
-        cv::UMat satChannel = hsvChannels[1].clone();
-        cv::UMat desaturated;
-        cv::multiply(satChannel, cv::Scalar(0.3), desaturated, 1.0, satChannel.type()); // Reduce saturation to 30%
-        
-        // Apply desaturation only to greenish pixels within person mask
-        cv::UMat spillMask;
-        cv::bitwise_and(greenishRange, gpuMask, spillMask);
-        desaturated.copyTo(satChannel, spillMask);
-        
-        // Merge back
-        hsvChannels[1] = satChannel;
-        cv::merge(hsvChannels, gpuHSV);
-        
-        // Convert back to BGR
-        cv::cvtColor(gpuHSV, result, cv::COLOR_HSV2BGR);
-        
-        // Also apply color correction in BGR space to remove green channel dominance
-        std::vector<cv::UMat> bgrChannels(3);
-        cv::split(result, bgrChannels);
-        
-        // Reduce green channel where spill is detected
-        cv::UMat reducedGreen;
-        cv::multiply(bgrChannels[1], cv::Scalar(0.85), reducedGreen, 1.0, bgrChannels[1].type());
-        reducedGreen.copyTo(bgrChannels[1], spillMask);
-        
-        // Slightly boost blue and red to compensate
-        cv::UMat boostedBlue, boostedRed;
-        cv::multiply(bgrChannels[0], cv::Scalar(1.08), boostedBlue, 1.0, bgrChannels[0].type());
-        cv::multiply(bgrChannels[2], cv::Scalar(1.08), boostedRed, 1.0, bgrChannels[2].type());
-        boostedBlue.copyTo(bgrChannels[0], spillMask);
-        boostedRed.copyTo(bgrChannels[2], spillMask);
-        
-        cv::merge(bgrChannels, result);
-        
-        // Synchronize
-        // OpenCL synchronization is automatic
-        
-        return result;
-
-    } catch (const cv::Exception &e) {
-        qWarning() << "GPU green spill removal failed:" << e.what();
-        return gpuFrame.clone();
-    } catch (const std::exception &e) {
-        qWarning() << "Exception in GPU green spill removal:" << e.what();
-        return gpuFrame.clone();
-    }
-}
+// All green screen helper methods removed - using watershed algorithm instead
+// Removed methods: refineGreenScreenMaskWithContours, applyTemporalMaskSmoothing, 
+// refineWithGrabCut, applyDistanceBasedRefinement, createTrimap, customGuidedFilter,
+// extractPersonWithAlphaMatting, removeGreenSpillGPU
 
 // Derive bounding boxes from a binary person mask
 std::vector<cv::Rect> Capture::deriveDetectionsFromMask(const cv::Mat &mask) const
 {
     std::vector<cv::Rect> detections;
-    if (mask.empty()) return detections;
+    if (mask.empty() || mask.rows <= 0 || mask.cols <= 0) {
+        return detections;
+    }
 
     std::vector<std::vector<cv::Point>> contours;
-    cv::findContours(mask, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+    try {
+        cv::findContours(mask, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+    } catch (const cv::Exception& e) {
+        qWarning() << "Exception in findContours:" << e.what();
+        return detections;
+    } catch (...) {
+        qWarning() << "Unknown exception in findContours";
+        return detections;
+    }
 
     // GPU MEMORY PROTECTION: Maximum detection size to prevent GPU memory overflow
     const int MAX_DETECTION_WIDTH = std::min(1920, mask.cols);

@@ -188,12 +188,7 @@ public:
     bool isGPUAvailable() const;
     bool isOpenCLAvailable() const;
     
-    // Green-screen segmentation controls
-    void setGreenScreenEnabled(bool enabled);
-    bool isGreenScreenEnabled() const;
-    void setGreenHueRange(int hueMin, int hueMax);
-    void setGreenSaturationMin(int sMin);
-    void setGreenValueMin(int vMin);
+    // Watershed segmentation is always enabled when segmentation is active
 
 protected:
     void resizeEvent(QResizeEvent *event) override;
@@ -466,17 +461,9 @@ private:
     // Lightweight temporal smoothing of detections
     std::vector<cv::Rect> smoothDetections(const std::vector<cv::Rect> &current);
     
-    // Green-screen helpers
-    cv::Mat createGreenScreenPersonMask(const cv::Mat &frame) const;
-    cv::UMat createGreenScreenPersonMaskGPU(const cv::UMat &gpuFrame) const;
-    cv::UMat removeGreenSpillGPU(const cv::UMat &gpuFrame, const cv::UMat &gpuMask) const;
-    cv::Mat refineGreenScreenMaskWithContours(const cv::Mat &mask, int minArea = 5000) const;
-    cv::Mat applyTemporalMaskSmoothing(const cv::Mat &currentMask) const;
-    cv::Mat refineWithGrabCut(const cv::Mat &frame, const cv::Mat &initialMask) const;
-    cv::Mat applyDistanceBasedRefinement(const cv::Mat &frame, const cv::Mat &mask) const;
-    cv::Mat createTrimap(const cv::Mat &mask, int erodeSize = 5, int dilateSize = 10) const;
-    cv::Mat customGuidedFilter(const cv::Mat &guide, const cv::Mat &src, int radius, double eps) const;
-    cv::Mat extractPersonWithAlphaMatting(const cv::Mat &frame, const cv::Mat &trimap) const;
+    // Watershed segmentation helpers
+    cv::Mat createWatershedPersonMask(const cv::Mat &frame) const;
+    cv::UMat createWatershedPersonMaskGPU(const cv::UMat &gpuFrame) const;
     std::vector<cv::Rect> deriveDetectionsFromMask(const cv::Mat &mask) const;
     
     // Helper methods (implemented in .cpp)
@@ -582,71 +569,8 @@ private:
     int m_detectionSkipInterval;
     int m_detectionSkipCounter;
     
-    // Green-screen configuration
-    bool m_greenScreenEnabled;
-    int m_greenHueMin;   // HSV hue min for green
-    int m_greenHueMax;   // HSV hue max for green
-    int m_greenSatMin;   // HSV min saturation to be considered green
-    int m_greenValMin;   // HSV min value to be considered green
-    int m_greenMaskOpen; // morph open kernel size
-    int m_greenMaskClose;// morph close kernel size
-    
-    //  GPU Green Screen Filter Cache (prevent memory allocation on every frame)
-    cv::Mat m_greenScreenMorphKernel; // Morphology kernel (reusable)
-    
-    // Temporal green screen mask smoothing
-    mutable cv::Mat m_lastGreenScreenMask;
-    mutable int m_greenScreenMaskStableCount;
+    // Watershed segmentation configuration (no additional configuration needed)
 
-    struct AdaptiveGreenThresholds {
-        int hueMin = 30;
-        int hueMax = 95;
-        int strictSatMin = 30;
-        int relaxedSatMin = 10;
-        int strictValMin = 30;
-        int relaxedValMin = 10;
-        int darkSatMin = 5;
-        int darkValMax = 80;
-        double cbMin = 60.0;
-        double cbMax = 140.0;
-        double crMax = 150.0;
-        double greenDelta = 8.0;
-        double greenRatioMin = 0.42;
-        double lumaMin = 30.0;
-        double probabilityThreshold = 0.55;
-        int guardValueMax = 140;
-        int guardSatMax = 80;
-        double edgeGuardMin = 45.0;
-        int hueGuardPadding = 6;
-        double invVarB = 1.0 / 400.0;
-        double invVarG = 1.0 / 400.0;
-        double invVarR = 1.0 / 400.0;
-        double colorDistanceThreshold = 3.2;
-        double colorGuardThreshold = 4.8;
-    };
-
-    void updateGreenBackgroundModel(const cv::Mat &frame) const;
-    AdaptiveGreenThresholds computeAdaptiveGreenThresholds() const;
-
-    mutable bool m_bgModelInitialized;
-    mutable double m_bgHueMean;
-    mutable double m_bgHueStd;
-    mutable double m_bgSatMean;
-    mutable double m_bgSatStd;
-    mutable double m_bgValMean;
-    mutable double m_bgValStd;
-    mutable double m_bgCbMean;
-    mutable double m_bgCbStd;
-    mutable double m_bgCrMean;
-    mutable double m_bgCrStd;
-    mutable double m_bgRedMean;
-    mutable double m_bgGreenMean;
-    mutable double m_bgBlueMean;
-    mutable double m_bgRedStd;
-    mutable double m_bgGreenStd;
-    mutable double m_bgBlueStd;
-    mutable cv::Matx33d m_bgColorInvCov;
-    mutable bool m_bgColorInvCovReady;
 };
 
 #endif // CAPTURE_H
