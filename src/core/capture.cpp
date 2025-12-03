@@ -222,6 +222,7 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     , m_segmentationEnabledInCapture(false)
     , m_selectedBackgroundTemplate()
     , m_useBackgroundTemplate(false)
+    , m_showBoundingBox(false)
     , m_useDynamicVideoBackground(false)
     , m_dynamicVideoPath()
     , m_dynamicVideoCap()
@@ -272,25 +273,13 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     , m_hasLightingComparison(false)
     , m_hasVideoLightingComparison(false)
     , m_recordedPersonScaleFactor(1.0) // Initialize to default scale (100%)
-    , m_bgModelInitialized(false)
-    , m_bgHueMean(60.0)
-    , m_bgHueStd(10.0)
-    , m_bgSatMean(120.0)
-    , m_bgSatStd(20.0)
-    , m_bgValMean(120.0)
-    , m_bgValStd(20.0)
-    , m_bgCbMean(90.0)
-    , m_bgCbStd(10.0)
-    , m_bgCrMean(120.0)
-    , m_bgCrStd(10.0)
-    , m_bgRedMean(60.0)
-    , m_bgGreenMean(150.0)
-    , m_bgBlueMean(60.0)
-    , m_bgRedStd(20.0)
-    , m_bgGreenStd(20.0)
-    , m_bgBlueStd(20.0)
-    , m_bgColorInvCov(cv::Matx33d::eye())
-    , m_bgColorInvCovReady(false)
+    // YOLO model initialization
+    , m_yoloModelLoaded(false)
+    , m_yoloModelPath("models/yolov8n-seg.onnx")  // Default path - user should place model here
+    , m_yoloConfidenceThreshold(0.25f)  // Lowered from 0.5 to improve detection sensitivity
+    , m_yoloNMSThreshold(0.4f)
+    , m_yoloInputWidth(640)
+    , m_yoloInputHeight(640)
 
 {
     ui->setupUi(this);
@@ -355,18 +344,107 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     overlayImageLabel->resize(this->size());
     overlayImageLabel->hide();
 
-    // Green-screen defaults (robust to both ring/ceiling light scenarios)
-    m_greenScreenEnabled = true;  // ENABLED BY DEFAULT - pure green removal only
-    // Typical green in OpenCV HSV: H=[35, 85], allow wider tolerance for lighting shifts
-    m_greenHueMin = 30;  // Target true greens, not dark teals
-    m_greenHueMax = 95;  // Limit to avoid catching person's dark teal/greenish colors
-    m_greenSatMin = 30;  // Higher saturation to target actual green screen, not person's dark colors
-    m_greenValMin = 40;  // Higher brightness to avoid dark greenish colors on person
-    // Morphological cleanup sizes (pixels)
-    m_greenMaskOpen = 3;
-    m_greenMaskClose = 7;
-    // Temporal mask smoothing
-    m_greenScreenMaskStableCount = 0;
+    // Initialize YOLO model (required for person segmentation - green screen removed)
+    qDebug() << "========================================";
+    qDebug() << "INITIALIZING YOLO MODEL...";
+    qDebug() << "Current directory:" << QDir::currentPath();
+    qDebug() << "Application directory:" << QCoreApplication::applicationDirPath();
+    qDebug() << "========================================";
+    
+    // Find project root by looking for qt-brbooth.pro file (same approach as dynamic.cpp)
+    QString projectRoot;
+    QStringList searchDirs;
+    searchDirs << QDir::currentPath()
+               << QCoreApplication::applicationDirPath()
+               << QCoreApplication::applicationDirPath() + "/.."
+               << QCoreApplication::applicationDirPath() + "/../.."
+               << QCoreApplication::applicationDirPath() + "/../../.."
+               << "../"
+               << "../../"
+               << "../../../";
+    
+    for (const QString& searchDir : searchDirs) {
+        if (QFile::exists(searchDir + "/qt-brbooth.pro")) {
+            projectRoot = QDir(searchDir).absolutePath();
+            qDebug() << "Found project root at:" << projectRoot;
+            break;
+        }
+    }
+    
+    if (projectRoot.isEmpty()) {
+        projectRoot = QDir::currentPath();
+        qWarning() << "Project root not found, using current directory:" << projectRoot;
+    }
+    
+    // Try multiple possible paths - prioritize project root
+    QStringList possiblePaths;
+    if (!projectRoot.isEmpty()) {
+        possiblePaths << projectRoot + "/models/yolov8n-seg.onnx"
+                      << projectRoot + "\\models\\yolov8n-seg.onnx";
+    }
+    possiblePaths << QDir::currentPath() + "/models/yolov8n-seg.onnx"
+                  << QDir::currentPath() + "\\models\\yolov8n-seg.onnx"
+                  << QCoreApplication::applicationDirPath() + "/models/yolov8n-seg.onnx"
+                  << QCoreApplication::applicationDirPath() + "\\models\\yolov8n-seg.onnx"
+                  << QCoreApplication::applicationDirPath() + "/../models/yolov8n-seg.onnx"
+                  << QCoreApplication::applicationDirPath() + "/../../models/yolov8n-seg.onnx"
+                  << QCoreApplication::applicationDirPath() + "/../../../models/yolov8n-seg.onnx"
+                  << "../models/yolov8n-seg.onnx"
+                  << "../../models/yolov8n-seg.onnx"
+                  << "../../../models/yolov8n-seg.onnx"
+                  << "models/yolov8n-seg.onnx"
+                  << "models\\yolov8n-seg.onnx";
+    
+    QString yoloPath;
+    bool found = false;
+    for (const QString &path : possiblePaths) {
+        if (QFileInfo::exists(path)) {
+            yoloPath = QDir(path).absolutePath();  // Use absolute path
+            found = true;
+            qDebug() << "Found YOLO model at:" << yoloPath;
+            break;
+        }
+    }
+    
+    if (!found) {
+        qCritical() << "========================================";
+        qCritical() << "=== YOLO MODEL NOT FOUND ===";
+        qCritical() << "========================================";
+        qCritical() << "Searched in the following locations:";
+        for (const QString &path : possiblePaths) {
+            bool exists = QFileInfo::exists(path);
+            qCritical() << "  -" << path << (exists ? "(EXISTS)" : "(NOT FOUND)");
+        }
+        qCritical() << "Current working directory:" << QDir::currentPath();
+        qCritical() << "Application directory:" << QCoreApplication::applicationDirPath();
+        qCritical() << "Please download YOLOv8-seg model and place it in the models/ directory";
+        qCritical() << "See YOLO_SETUP.md for instructions";
+        qCritical() << "========================================";
+        m_yoloModelLoaded = false;
+    } else {
+        qDebug() << "Model file found, attempting to load...";
+        if (initializeYOLOModel(yoloPath)) {
+            qDebug() << "========================================";
+            qDebug() << "=== YOLO MODEL LOADED SUCCESSFULLY ===";
+            qDebug() << "Model path:" << yoloPath;
+            qDebug() << "========================================";
+        } else {
+            qCritical() << "========================================";
+            qCritical() << "=== FAILED TO LOAD YOLO MODEL ===";
+            qCritical() << "========================================";
+            qCritical() << "Model file exists but failed to load:" << yoloPath;
+            qCritical() << "Possible causes:";
+            qCritical() << "  1. ONNX file is corrupted";
+            qCritical() << "  2. OpenCV DNN module not properly built";
+            qCritical() << "  3. File permissions issue";
+            qCritical() << "Please verify the model file is valid";
+            qCritical() << "========================================";
+            m_yoloModelLoaded = false;
+        }
+    }
+    
+    qDebug() << "YOLO initialization complete. Model loaded:" << m_yoloModelLoaded;
+    qDebug() << "========================================";
 
     // Initialize status overlay
     statusOverlay = new QLabel(this);
@@ -1645,6 +1723,50 @@ void Capture::keyPressEvent(QKeyEvent *event)
             // Hand detection removed - 'H' key disabled
             updateDebugDisplay();
             break;
+        case Qt::Key_B:
+            // Toggle bounding box display and enable background template
+            m_showBoundingBox = !m_showBoundingBox;
+            
+            // Always enable background template when 'B' is pressed (if not already enabled)
+            if (m_showBoundingBox) {
+                // Enable background template if not already enabled or if no template selected
+                if (!m_useBackgroundTemplate || m_selectedBackgroundTemplate.isEmpty()) {
+                    // Use first available background template (bg1.png)
+                    QString defaultTemplate = "templates/background/bg1.png";
+                    setSelectedBackgroundTemplate(defaultTemplate);
+                    qDebug() << "B key: Enabled background template with default:" << defaultTemplate;
+                }
+                
+                // Ensure segmentation is enabled when showing bounding boxes
+                if (!m_segmentationEnabledInCapture) {
+                    m_segmentationEnabledInCapture = true;
+                    qDebug() << "B key: Enabled segmentation for bounding box display";
+                }
+            }
+            
+            qDebug() << "Bounding boxes:" << (m_showBoundingBox ? "ENABLED" : "DISABLED");
+            qDebug() << "Background template:" << (m_useBackgroundTemplate ? "ENABLED" : "DISABLED") << "Path:" << m_selectedBackgroundTemplate;
+            
+            // Show status overlay
+            if (statusOverlay) {
+                QString statusText = m_showBoundingBox ? 
+                    "BOUNDING BOXES: ON" : "BOUNDING BOXES: OFF";
+                statusOverlay->setText(statusText);
+                statusOverlay->resize(statusOverlay->sizeHint());
+                int x = (width() - statusOverlay->width()) / 2;
+                int y = (height() - statusOverlay->height()) / 2;
+                statusOverlay->move(x, y);
+                statusOverlay->show();
+                statusOverlay->raise();
+                QTimer::singleShot(2000, [this]() {
+                    if (statusOverlay) {
+                        statusOverlay->hide();
+                    }
+                });
+            }
+            
+            updateDebugDisplay();
+            break;
         case Qt::Key_F12:
             // Temporarily disabled debug frame save
             qDebug() << "Debug frame save disabled";
@@ -2625,7 +2747,6 @@ cv::Mat Capture::processFrameWithGPUOnlyPipeline(const cv::Mat &frame)
         return cv::Mat();
     }
 
-    updateGreenBackgroundModel(frame);
     m_personDetectionTimer.start();
 
     try {
@@ -2634,75 +2755,86 @@ cv::Mat Capture::processFrameWithGPUOnlyPipeline(const cv::Mat &frame)
         // Upload frame to GPU (OpenCL) - single transfer
         frame.copyTo(m_gpuVideoFrame);
 
-        // GREEN SCREEN MODE: Use GPU-accelerated green screen masking
-        if (m_greenScreenEnabled && m_segmentationEnabledInCapture) {
-            qDebug() << "Processing green screen with GPU acceleration";
+        // YOLO/SEGMENTATION MODE: Use YOLO for person detection and segmentation
+        if (m_segmentationEnabledInCapture) {
+            cv::UMat gpuPersonMask;
+            std::vector<cv::Rect> detections;
+            cv::Mat cleanedFrame = frame.clone();
             
             // VALIDATION: Ensure GPU frame is valid
             if (m_gpuVideoFrame.empty() || m_gpuVideoFrame.cols == 0 || m_gpuVideoFrame.rows == 0) {
-                qWarning() << "GPU video frame is invalid for green screen, falling back to CPU";
+                qWarning() << "GPU video frame is invalid, falling back to CPU";
                 return processFrameWithUnifiedDetection(frame);
             }
             
-            // Create GPU-accelerated green screen mask with crash protection
-            cv::UMat gpuPersonMask;
+            if (!m_yoloModelLoaded) {
+                qWarning() << "YOLO model not loaded - cannot perform GPU segmentation";
+                return processFrameWithUnifiedDetection(frame);
+            }
+            
+            // Use YOLO for person segmentation (green screen removed)
+            qDebug() << "Processing with YOLO using GPU acceleration";
+            
             try {
-                gpuPersonMask = createGreenScreenPersonMaskGPU(m_gpuVideoFrame);
+                // Create a local copy of the GPU frame to avoid refcount issues
+                // This ensures the UMat handle is properly managed
+                cv::UMat localGpuFrame;
+                m_gpuVideoFrame.copyTo(localGpuFrame);
+                gpuPersonMask = createYOLOPersonMaskGPU(localGpuFrame);
+                localGpuFrame.release(); // Explicitly release after use
+                detections = detectPeopleWithYOLO(frame);
+                
+                // If YOLO didn't find detections, try deriving from mask
+                if (detections.empty() && !gpuPersonMask.empty()) {
+                    cv::Mat personMask;
+                    gpuPersonMask.copyTo(personMask);
+                    detections = deriveDetectionsFromMask(personMask);
+                    personMask.release(); // Explicitly release to avoid refcount issues
+                }
+                
+                // Store YOLO mask for use in createSegmentedFrame
+                {
+                    QMutexLocker locker(&m_personDetectionMutex);
+                    if (!gpuPersonMask.empty()) {
+                        cv::Mat personMask;
+                        gpuPersonMask.copyTo(personMask);
+                        m_lastRawPersonMask = personMask.clone();
+                        personMask.release(); // Explicitly release to avoid refcount issues
+                    }
+                }
             } catch (const cv::Exception &e) {
-                qWarning() << "GPU green screen mask creation failed:" << e.what() << "- falling back to CPU";
+                qWarning() << "GPU YOLO mask creation failed:" << e.what() << "- falling back to CPU";
+                gpuPersonMask.release(); // Ensure cleanup on error
                 return processFrameWithUnifiedDetection(frame);
             } catch (const std::exception &e) {
-                qWarning() << "Exception in GPU green screen:" << e.what() << "- falling back to CPU";
+                qWarning() << "Exception in GPU YOLO:" << e.what() << "- falling back to CPU";
+                gpuPersonMask.release(); // Ensure cleanup on error
                 return processFrameWithUnifiedDetection(frame);
             }
             
             // VALIDATION: Ensure mask is valid
             if (gpuPersonMask.empty()) {
-                qWarning() << "GPU green screen mask is empty, falling back to CPU";
+                qWarning() << "GPU person mask is empty, falling back to CPU";
                 return processFrameWithUnifiedDetection(frame);
             }
             
-            // REMOVE GREEN SPILL: Desaturate green tint from person pixels (OpenCL)
-            cv::UMat gpuCleanedFrame;
-            cv::Mat cleanedFrame;
-            try {
-                gpuCleanedFrame = removeGreenSpillGPU(m_gpuVideoFrame, gpuPersonMask);
-                if (!gpuCleanedFrame.empty()) {
-                    gpuCleanedFrame.copyTo(cleanedFrame);
-                    qDebug() << "Green spill removal applied to person pixels";
-                } else {
-                    cleanedFrame = frame.clone();
-                }
-            } catch (const cv::Exception &e) {
-                qWarning() << "Green spill removal failed:" << e.what() << "- using original frame";
-                cleanedFrame = frame.clone();
-            }
+            // Release gpuPersonMask after validation but before segmentation
+            // (segmentation uses detections, not the mask directly)
+            gpuPersonMask.release();
             
-            // Download mask to derive detections on CPU (for bounding boxes)
-            cv::Mat personMask;
-            try {
-                gpuPersonMask.copyTo(personMask);
-            } catch (const cv::Exception &e) {
-                qWarning() << "Failed to download GPU mask:" << e.what() << "- falling back to CPU";
+            if (detections.empty()) {
+                qDebug() << "No detections found, falling back to CPU";
                 return processFrameWithUnifiedDetection(frame);
             }
             
-            if (personMask.empty()) {
-                qWarning() << "Downloaded mask is empty, falling back to CPU";
-                return processFrameWithUnifiedDetection(frame);
-            }
-            
-            std::vector<cv::Rect> detections = deriveDetectionsFromMask(personMask);
             m_lastDetections = detections;
+            qDebug() << "Found" << detections.size() << "person detections";
             
-            qDebug() << "Derived" << detections.size() << "detections from green screen mask";
-            
-            // Use cleaned frame (with green spill removed) for GPU-only segmentation
+            // Use original frame for GPU-only segmentation (no green spill removal needed with YOLO)
             cv::Mat segmentedFrame;
             try {
-                // Upload cleaned frame to GPU for segmentation
-                cleanedFrame.copyTo(m_gpuVideoFrame);
-                segmentedFrame = createSegmentedFrameGPUOnly(cleanedFrame, detections);
+                // Use original frame (YOLO doesn't need green spill removal)
+                segmentedFrame = createSegmentedFrameGPUOnly(frame, detections);
             } catch (const cv::Exception &e) {
                 qWarning() << "GPU segmentation failed:" << e.what() << "- falling back to CPU";
                 return processFrameWithUnifiedDetection(frame);
@@ -2720,15 +2852,18 @@ cv::Mat Capture::processFrameWithGPUOnlyPipeline(const cv::Mat &frame)
             m_lastPersonDetectionTime = m_personDetectionTimer.elapsed() / 1000.0;
             m_personDetectionFPS = (m_lastPersonDetectionTime > 0) ? 1.0 / m_lastPersonDetectionTime : 0;
             
-            qDebug() << "GPU green screen processing completed successfully";
+            qDebug() << "GPU YOLO segmentation processing completed successfully";
             return segmentedFrame;
         }
 
         // Optimized processing for 30 FPS with GPU (OpenCL)
-        cv::UMat processFrame = m_gpuVideoFrame;
+        // Create a proper copy to avoid refcount issues
+        cv::UMat processFrame;
         if (frame.cols > 640) {
             double scale = 640.0 / frame.cols;
             cv::resize(m_gpuVideoFrame, processFrame, cv::Size(), scale, scale, cv::INTER_LINEAR);
+        } else {
+            m_gpuVideoFrame.copyTo(processFrame);
         }
 
         // Use a fixed, bounded segmentation rectangle instead of person detection
@@ -3045,10 +3180,43 @@ cv::Mat Capture::processFrameWithUnifiedDetection(const cv::Mat &frame)
     //  PERFORMANCE OPTIMIZATION: NEVER apply lighting during real-time processing
     // Lighting is ONLY applied in post-processing after recording, just like static mode
 
-    // If green-screen is enabled, bypass HOG and derive mask directly
-    if (m_greenScreenEnabled && m_segmentationEnabledInCapture) {
-        cv::Mat personMask = createGreenScreenPersonMask(frame);
-        std::vector<cv::Rect> detections = deriveDetectionsFromMask(personMask);
+    // Use YOLO for person segmentation (green screen removed)
+    if (m_segmentationEnabledInCapture) {
+        if (!m_yoloModelLoaded) {
+            qWarning() << "YOLO model not loaded - cannot perform segmentation";
+            return frame;  // Return original frame if YOLO not available
+        }
+        
+        // Use YOLO for person detection and segmentation
+        if (!m_yoloModelLoaded) {
+            qWarning() << "YOLO model not loaded! Cannot perform segmentation.";
+            return frame;
+        }
+        
+        qDebug() << "Using YOLO for person segmentation - model loaded:" << m_yoloModelLoaded;
+        cv::Mat personMask = createYOLOPersonMask(frame);
+        int maskPixels = cv::countNonZero(personMask);
+        qDebug() << "YOLO mask created - non-zero pixels:" << maskPixels << "out of" << (frame.rows * frame.cols);
+        
+        std::vector<cv::Rect> detections = detectPeopleWithYOLO(frame);
+        qDebug() << "YOLO direct detections:" << detections.size();
+        
+        // If YOLO didn't find detections, try deriving from mask
+        if (detections.empty() && !personMask.empty() && maskPixels > 100) {
+            detections = deriveDetectionsFromMask(personMask);
+            qDebug() << "Derived" << detections.size() << "detections from YOLO mask (mask had" << maskPixels << "pixels)";
+        } else if (detections.empty()) {
+            qDebug() << "No detections found - mask empty or too small (pixels:" << maskPixels << ")";
+        }
+        
+        // Store YOLO mask for use in createSegmentedFrame
+        {
+            QMutexLocker locker(&m_personDetectionMutex);
+            m_lastRawPersonMask = personMask.clone();
+        }
+        
+        // Always create segmented frame when segmentation is enabled, even if detections are empty
+        // This ensures background template is applied
         m_lastDetections = detections;
         cv::Mat segmentedFrame = createSegmentedFrame(frame, detections);
         m_lastPersonDetectionTime = m_personDetectionTimer.elapsed() / 1000.0;
@@ -3213,8 +3381,10 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
                 segmentedFrame = cv::Mat::zeros(frame.size(), frame.type());
             }
         } else {
-            // Not using dynamic video background - use template or black background
+            // Not using dynamic video background - initialize segmentedFrame for template or black background
             qDebug() << "Dynamic video background not enabled - using template or black background";
+            // Initialize segmentedFrame - will be set to template or black below
+            segmentedFrame = cv::Mat();
         }
         
         // Only process background templates if we're not using dynamic video background
@@ -3276,16 +3446,43 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
 
             // Use cached background template
             segmentedFrame = cachedBackgroundTemplate.clone();
+            qDebug() << "Using background template:" << m_selectedBackgroundTemplate;
         } else if (!m_useDynamicVideoBackground) {
             // Only use black background if we're not using dynamic video background
-            segmentedFrame = cv::Mat::zeros(frame.size(), frame.type());
-            qDebug() << "Using black background (no template selected)";
+            if (segmentedFrame.empty()) {
+                segmentedFrame = cv::Mat::zeros(frame.size(), frame.type());
+                qDebug() << "Using black background (no template selected)";
+            }
         }
         // If m_useDynamicVideoBackground is true, segmentedFrame should already be set with video frame
+        
+        // Ensure segmentedFrame is initialized
+        if (segmentedFrame.empty()) {
+            segmentedFrame = cv::Mat::zeros(frame.size(), frame.type());
+            qDebug() << "Segmented frame was empty, initialized to black";
+        }
 
         {
-            // ALWAYS use green-screen removal (pure green-only detection)
-            cv::Mat personMask = createGreenScreenPersonMask(frame);
+            // Use YOLO mask (green screen removed)
+            cv::Mat personMask;
+            {
+                QMutexLocker locker(&m_personDetectionMutex);
+                if (!m_lastRawPersonMask.empty() && m_yoloModelLoaded) {
+                    // Use YOLO mask that was already created
+                    personMask = m_lastRawPersonMask.clone();
+                    qDebug() << "Using stored YOLO mask for segmentation";
+                } else {
+                    // If YOLO mask not available, create it now
+                    if (m_yoloModelLoaded) {
+                        personMask = createYOLOPersonMask(frame);
+                        m_lastRawPersonMask = personMask.clone();
+                        qDebug() << "Created YOLO mask for segmentation";
+                    } else {
+                        qWarning() << "YOLO model not loaded - cannot create person mask";
+                        personMask = cv::Mat::zeros(frame.size(), CV_8UC1);
+                    }
+                }
+            }
 
             int nonZeroPixels = cv::countNonZero(personMask);
             qDebug() << "Green-screen person mask non-zero:" << nonZeroPixels;
@@ -3412,6 +3609,28 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
         if (segmentedFrame.empty() && m_useDynamicVideoBackground && !m_dynamicVideoFrame.empty()) {
             qDebug() << "Segmented frame is empty, using video frame directly";
             cv::resize(m_dynamicVideoFrame, segmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
+        }
+        
+        // Draw bounding boxes on detected persons if enabled
+        if (m_showBoundingBox) {
+            // Use detections parameter if available, otherwise fall back to stored detections
+            std::vector<cv::Rect> boxesToDraw = detections.empty() ? m_lastDetections : detections;
+            
+            if (!boxesToDraw.empty()) {
+                for (const auto& detection : boxesToDraw) {
+                    // Adjust detection rectangle to match frame bounds
+                    cv::Rect adjustedRect = detection;
+                    adjustRect(adjustedRect);
+                    
+                    // Ensure rectangle is within frame bounds
+                    if (adjustedRect.x >= 0 && adjustedRect.y >= 0 &&
+                        adjustedRect.x + adjustedRect.width <= segmentedFrame.cols &&
+                        adjustedRect.y + adjustedRect.height <= segmentedFrame.rows) {
+                        // Draw bounding box with thick green lines
+                        cv::rectangle(segmentedFrame, adjustedRect.tl(), adjustedRect.br(), cv::Scalar(0, 255, 0), 3);
+                    }
+                }
+            }
         }
         
         qDebug() << "Segmentation complete, returning segmented frame - size:" << segmentedFrame.cols << "x" << segmentedFrame.rows << "empty:" << segmentedFrame.empty();
@@ -4406,31 +4625,7 @@ bool Capture::isOpenCLAvailable() const
 }
 
 // --- Green-screen configuration API ---
-void Capture::setGreenScreenEnabled(bool enabled)
-{
-    m_greenScreenEnabled = enabled;
-}
 
-bool Capture::isGreenScreenEnabled() const
-{
-    return m_greenScreenEnabled;
-}
-
-void Capture::setGreenHueRange(int hueMin, int hueMax)
-{
-    m_greenHueMin = std::max(0, std::min(179, hueMin));
-    m_greenHueMax = std::max(0, std::min(179, hueMax));
-}
-
-void Capture::setGreenSaturationMin(int sMin)
-{
-    m_greenSatMin = std::max(0, std::min(255, sMin));
-}
-
-void Capture::setGreenValueMin(int vMin)
-{
-    m_greenValMin = std::max(0, std::min(255, vMin));
-}
 
 cv::Mat Capture::getMotionMask(const cv::Mat &frame)
 {
@@ -4593,834 +4788,668 @@ cv::Mat Capture::getMotionMask(const cv::Mat &frame)
     return fgMask;
 }
 
-void Capture::updateGreenBackgroundModel(const cv::Mat &frame) const
+
+// ============================================================================
+// YOLO-BASED PERSON SEGMENTATION (REPLACES GREEN SCREEN)
+// ============================================================================
+
+bool Capture::initializeYOLOModel(const QString &modelPath)
 {
-    if (frame.empty() || frame.channels() != 3) {
-        return;
-    }
-
-    const int rawBorderX = std::max(6, frame.cols / 24);
-    const int rawBorderY = std::max(6, frame.rows / 24);
-    const int borderX = std::min(rawBorderX, frame.cols);
-    const int borderY = std::min(rawBorderY, frame.rows);
-
-    if (borderX <= 0 || borderY <= 0) {
-        return;
-    }
-
-    cv::Mat sampleMask = cv::Mat::zeros(frame.size(), CV_8UC1);
-    const cv::Rect topRect(0, 0, frame.cols, borderY);
-    const cv::Rect bottomRect(0, std::max(0, frame.rows - borderY), frame.cols, borderY);
-    const cv::Rect leftRect(0, 0, borderX, frame.rows);
-    const cv::Rect rightRect(std::max(0, frame.cols - borderX), 0, borderX, frame.rows);
-
-    cv::rectangle(sampleMask, topRect, cv::Scalar(255), cv::FILLED);
-    cv::rectangle(sampleMask, bottomRect, cv::Scalar(255), cv::FILLED);
-    cv::rectangle(sampleMask, leftRect, cv::Scalar(255), cv::FILLED);
-    cv::rectangle(sampleMask, rightRect, cv::Scalar(255), cv::FILLED);
-
-    const int samplePixels = cv::countNonZero(sampleMask);
-    if (samplePixels < (frame.rows + frame.cols)) {
-        return;
-    }
-
-    cv::Mat hsv, ycrcb;
-    cv::cvtColor(frame, hsv, cv::COLOR_BGR2HSV);
-    cv::cvtColor(frame, ycrcb, cv::COLOR_BGR2YCrCb);
-
-    cv::Scalar hsvMean, hsvStd;
-    cv::Scalar ycrcbMean, ycrcbStd;
-    cv::Scalar bgrMean, bgrStd;
-
-    cv::meanStdDev(hsv, hsvMean, hsvStd, sampleMask);
-    cv::meanStdDev(ycrcb, ycrcbMean, ycrcbStd, sampleMask);
-    cv::meanStdDev(frame, bgrMean, bgrStd, sampleMask);
-
-    cv::Mat sampleData(samplePixels, 3, CV_32F);
-    int idx = 0;
-    for (int y = 0; y < frame.rows; ++y) {
-        const uchar *maskPtr = sampleMask.ptr<uchar>(y);
-        const cv::Vec3b *pixPtr = frame.ptr<cv::Vec3b>(y);
-        for (int x = 0; x < frame.cols; ++x) {
-            if (!maskPtr[x]) continue;
-            float *row = sampleData.ptr<float>(idx++);
-            row[0] = static_cast<float>(pixPtr[x][0]);
-            row[1] = static_cast<float>(pixPtr[x][1]);
-            row[2] = static_cast<float>(pixPtr[x][2]);
-        }
-    }
-    if (idx > 3) {
-        cv::Mat cropped = sampleData.rowRange(0, idx);
-        cv::Mat cov, meanRow;
-        cv::calcCovarMatrix(cropped, cov, meanRow,
-                            cv::COVAR_NORMAL | cv::COVAR_ROWS | cv::COVAR_SCALE);
-        cv::Mat covDouble;
-        cov.convertTo(covDouble, CV_64F);
-        covDouble += cv::Mat::eye(3, 3, CV_64F) * 1e-3;
-        cv::Mat invCov;
-        if (cv::invert(covDouble, invCov, cv::DECOMP_SVD)) {
-            m_bgColorInvCov(0, 0) = invCov.at<double>(0, 0);
-            m_bgColorInvCov(0, 1) = invCov.at<double>(0, 1);
-            m_bgColorInvCov(0, 2) = invCov.at<double>(0, 2);
-            m_bgColorInvCov(1, 0) = invCov.at<double>(1, 0);
-            m_bgColorInvCov(1, 1) = invCov.at<double>(1, 1);
-            m_bgColorInvCov(1, 2) = invCov.at<double>(1, 2);
-            m_bgColorInvCov(2, 0) = invCov.at<double>(2, 0);
-            m_bgColorInvCov(2, 1) = invCov.at<double>(2, 1);
-            m_bgColorInvCov(2, 2) = invCov.at<double>(2, 2);
-            m_bgColorInvCovReady = true;
-        }
-    }
-
-    const bool alreadyInitialized = m_bgModelInitialized;
-    auto blendValue = [alreadyInitialized](double current, double measurement) {
-        if (!alreadyInitialized) return measurement;
-        return 0.85 * current + 0.15 * measurement;
-    };
-
-    m_bgHueMean = blendValue(m_bgHueMean, hsvMean[0]);
-    m_bgHueStd = blendValue(m_bgHueStd, std::max(1.0, hsvStd[0]));
-    m_bgSatMean = blendValue(m_bgSatMean, hsvMean[1]);
-    m_bgSatStd = blendValue(m_bgSatStd, std::max(1.0, hsvStd[1]));
-    m_bgValMean = blendValue(m_bgValMean, hsvMean[2]);
-    m_bgValStd = blendValue(m_bgValStd, std::max(1.0, hsvStd[2]));
-
-    m_bgCbMean = blendValue(m_bgCbMean, ycrcbMean[2]);
-    m_bgCbStd = blendValue(m_bgCbStd, std::max(1.0, ycrcbStd[2]));
-    m_bgCrMean = blendValue(m_bgCrMean, ycrcbMean[1]);
-    m_bgCrStd = blendValue(m_bgCrStd, std::max(1.0, ycrcbStd[1]));
-
-    m_bgBlueMean = blendValue(m_bgBlueMean, bgrMean[0]);
-    m_bgGreenMean = blendValue(m_bgGreenMean, bgrMean[1]);
-    m_bgRedMean = blendValue(m_bgRedMean, bgrMean[2]);
-    m_bgBlueStd = blendValue(m_bgBlueStd, std::max(4.0, bgrStd[0]));
-    m_bgGreenStd = blendValue(m_bgGreenStd, std::max(4.0, bgrStd[1]));
-    m_bgRedStd = blendValue(m_bgRedStd, std::max(4.0, bgrStd[2]));
-
-    m_bgModelInitialized = true;
-}
-
-Capture::AdaptiveGreenThresholds Capture::computeAdaptiveGreenThresholds() const
-{
-    AdaptiveGreenThresholds thresholds;
-
-    auto clampHue = [](int value) {
-        return std::max(0, std::min(179, value));
-    };
-    auto clampByte = [](int value) {
-        return std::max(0, std::min(255, value));
-    };
-
-    if (!m_bgModelInitialized) {
-        thresholds.hueMin = clampHue(m_greenHueMin);
-        thresholds.hueMax = clampHue(m_greenHueMax);
-        thresholds.strictSatMin = clampByte(m_greenSatMin);
-        thresholds.relaxedSatMin = clampByte(std::max(10, m_greenSatMin - 10));
-        thresholds.strictValMin = clampByte(m_greenValMin);
-        thresholds.relaxedValMin = clampByte(std::max(10, m_greenValMin - 10));
-        thresholds.darkSatMin = clampByte(std::max(5, m_greenSatMin - 10));
-        thresholds.darkValMax = clampByte(m_greenValMin + 50);
-        thresholds.cbMin = 50.0;
-        thresholds.cbMax = 150.0;
-        thresholds.crMax = 150.0;
-        thresholds.greenDelta = 8.0;
-        thresholds.greenRatioMin = 0.45;
-        thresholds.lumaMin = 45.0;
-        thresholds.probabilityThreshold = 0.55;
-        thresholds.guardValueMax = 150;
-        thresholds.guardSatMax = 90;
-        thresholds.edgeGuardMin = 45.0;
-        thresholds.hueGuardPadding = 6;
-        return thresholds;
-    }
-
-    const double hueStd = std::max(4.0, m_bgHueStd);
-    const double satStd = std::max(4.0, m_bgSatStd);
-    const double valStd = std::max(4.0, m_bgValStd);
-    const double cbStd = std::max(2.5, m_bgCbStd);
-    const double crStd = std::max(2.5, m_bgCrStd);
-
-    const int huePadding = static_cast<int>(std::round(2.5 * hueStd)) + 4;
-    const int relaxedSatAmount = static_cast<int>(std::round(1.9 * satStd)) + 5;
-    const int relaxedValAmount = static_cast<int>(std::round(1.6 * valStd)) + 5;
-
-    thresholds.hueMin = clampHue(static_cast<int>(std::round(m_bgHueMean)) - huePadding);
-    thresholds.hueMax = clampHue(static_cast<int>(std::round(m_bgHueMean)) + huePadding);
-    thresholds.strictSatMin = clampByte(static_cast<int>(std::round(m_bgSatMean - 0.6 * satStd)));
-    thresholds.relaxedSatMin = clampByte(std::max(18, static_cast<int>(std::round(m_bgSatMean - relaxedSatAmount))));
-    thresholds.strictValMin = clampByte(static_cast<int>(std::round(m_bgValMean - 0.6 * valStd)));
-    thresholds.relaxedValMin = clampByte(std::max(18, static_cast<int>(std::round(m_bgValMean - relaxedValAmount))));
-    thresholds.darkSatMin = clampByte(std::max(5, static_cast<int>(std::round(m_bgSatMean - 0.8 * satStd))));
-    thresholds.darkValMax = clampByte(static_cast<int>(std::round(m_bgValMean + 2.2 * valStd)));
-
-    const double cbRange = 2.2 * cbStd + 6.0;
-    thresholds.cbMin = std::max(0.0, m_bgCbMean - cbRange);
-    thresholds.cbMax = std::min(255.0, m_bgCbMean + cbRange);
-    thresholds.crMax = std::min(255.0, m_bgCrMean + 2.4 * crStd + 6.0);
-
-    const double greenDominance = m_bgGreenMean - std::max(m_bgRedMean, m_bgBlueMean);
-    thresholds.greenDelta = std::max(4.0, greenDominance * 0.35 + 6.0);
-    const double sumRGB = std::max(1.0, m_bgRedMean + m_bgGreenMean + m_bgBlueMean);
-    const double bgRatio = m_bgGreenMean / sumRGB;
-    thresholds.greenRatioMin = std::clamp(bgRatio - 0.05, 0.35, 0.8);
-    thresholds.lumaMin = std::max(25.0, m_bgValMean - 1.2 * valStd);
-    thresholds.probabilityThreshold = 0.58;
-    thresholds.guardValueMax = clampByte(static_cast<int>(std::round(std::min(200.0, thresholds.lumaMin + 70.0))));
-    thresholds.guardSatMax = clampByte(std::max(25, static_cast<int>(std::round(m_bgSatMean - 0.3 * satStd))));
-    thresholds.edgeGuardMin = std::max(35.0, 55.0 - 0.25 * valStd);
-    thresholds.hueGuardPadding = 8;
-    auto invVariance = [](double stdVal) {
-        const double boundedStd = std::max(5.0, stdVal);
-        return 1.0 / (boundedStd * boundedStd + 50.0);
-    };
-    thresholds.invVarB = invVariance(m_bgBlueStd);
-    thresholds.invVarG = invVariance(m_bgGreenStd);
-    thresholds.invVarR = invVariance(m_bgRedStd);
-    const double avgStd = (m_bgBlueStd + m_bgGreenStd + m_bgRedStd) / 3.0;
-    thresholds.colorDistanceThreshold = std::max(2.5, std::min(4.5, 1.2 + avgStd * 0.08));
-    thresholds.colorGuardThreshold = thresholds.colorDistanceThreshold + 1.6;
-
-    return thresholds;
-}
-
-// AGGRESSIVE GREEN REMOVAL: Remove all green pixels including boundary pixels
-// FAST & ACCURATE: Works for both green AND teal/cyan backdrops
-cv::Mat Capture::createGreenScreenPersonMask(const cv::Mat &frame) const
-{
-    if (frame.empty()) return cv::Mat();
-
     try {
-        // Split BGR channels
-        std::vector<cv::Mat> channels;
-        cv::split(frame, channels);
-        cv::Mat green = channels[1];
-        cv::Mat red = channels[2];
-
-        // FIXED: Properly detect green/cyan/teal while preserving blue colors
-        // Green: G > R, G > B  
-        // Cyan/Teal: G > R, B > R, G ≈ B
-        // Blue: B > R, B > G (should NOT be removed)
-        cv::Mat blue = channels[0];
-        cv::Mat greenDominantR;
-        cv::subtract(green, red, greenDominantR);  // G - R
+        if (!QFileInfo::exists(modelPath)) {
+            qCritical() << "YOLO model file not found:" << modelPath;
+            qCritical() << "File exists check failed - path might be incorrect";
+            return false;
+        }
         
-        cv::Mat greenDominantB;
-        cv::subtract(green, blue, greenDominantB);  // G - B
-        
-        // Green/cyan/teal: G > R AND (G > B OR G ≈ B)
-        // This excludes pure blue colors where B > G
-        cv::Mat greenOrTeal;
-        cv::threshold(greenDominantR, greenOrTeal, 15, 255, cv::THRESH_BINARY);  // G > R
-        
-        cv::Mat greenDominatesBlue;
-        cv::threshold(greenDominantB, greenDominatesBlue, -10, 255, cv::THRESH_BINARY);  // G > B - 10 (allows G ≈ B)
-        
-        // Combine: green/teal = (G > R) AND (G > B - 10)
-        cv::Mat greenMask;
-        cv::bitwise_and(greenOrTeal, greenDominatesBlue, greenMask);
+        qDebug() << "Attempting to load YOLO model from:" << modelPath;
+        qDebug() << "File size:" << QFileInfo(modelPath).size() << "bytes";
+        qDebug() << "File is readable:" << QFileInfo(modelPath).isReadable();
 
-        // Invert: NOT green/teal = person (preserves blue colors)
-        cv::Mat personMask;
-        cv::bitwise_not(greenMask, personMask);
-
-        return personMask;
+        // Load YOLO model using OpenCV DNN
+        std::string modelPathStr = modelPath.toStdString();
+        qDebug() << "Calling cv::dnn::readNetFromONNX...";
         
-    } catch (const cv::Exception& e) {
-        qWarning() << "Error in createGreenScreenPersonMask:" << e.what();
-        return cv::Mat();
-    }
-}
-
-//  GPU-ACCELERATED GREEN SCREEN MASKING with Optimized Memory Management
-cv::UMat Capture::createGreenScreenPersonMaskGPU(const cv::UMat &gpuFrame) const
-{
-    cv::UMat emptyMask;
-    if (gpuFrame.empty()) {
-        qWarning() << "GPU frame is empty, cannot create green screen mask";
-        return emptyMask;
-    }
-
-    if (!m_bgModelInitialized) {
         try {
-            cv::Mat fallbackFrame;
-            gpuFrame.copyTo(fallbackFrame);
-            updateGreenBackgroundModel(fallbackFrame);
-        } catch (const cv::Exception &) {
-            // Ignore download errors; thresholds fallback to defaults
+            m_yoloNet = cv::dnn::readNetFromONNX(modelPathStr);
+        } catch (const cv::Exception &e) {
+            qCritical() << "OpenCV exception while reading ONNX file:";
+            qCritical() << "  Error:" << e.what();
+            qCritical() << "  Code:" << e.code;
+            qCritical() << "  File:" << e.file.c_str() << "Line:" << e.line;
+            return false;
         }
-    }
+        
+        if (m_yoloNet.empty()) {
+            qCritical() << "Failed to load YOLO model - network is empty";
+            qCritical() << "This usually means:";
+            qCritical() << "  1. ONNX file format is invalid";
+            qCritical() << "  2. OpenCV DNN module doesn't support this ONNX version";
+            qCritical() << "  3. Model file is corrupted";
+            return false;
+        }
+        
+        qDebug() << "YOLO network loaded successfully (not empty)";
 
-    try {
-        //  INITIALIZE CACHED FILTERS (once only, reused for all frames)
-        static bool filtersInitialized = false;
-        if (!filtersInitialized && cv::ocl::useOpenCL()) {
-            try {
-                // Cache filters removed - OpenCL uses direct operations
-                // Canny and GaussianBlur work directly with UMat
-                filtersInitialized = true;
-                qDebug() << "GPU green screen filters initialized and cached";
-            } catch (const cv::Exception &e) {
-                qWarning() << "Failed to initialize GPU green screen filters:" << e.what();
-                filtersInitialized = false;
+        // Set backend and target (prefer GPU if available)
+        try {
+            m_yoloNet.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
+            if (cv::ocl::useOpenCL()) {
+                m_yoloNet.setPreferableTarget(cv::dnn::DNN_TARGET_OPENCL);
+                qDebug() << "YOLO model using OpenCL backend";
+            } else {
+                m_yoloNet.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
+                qDebug() << "YOLO model using CPU backend";
             }
+        } catch (const cv::Exception &e) {
+            qWarning() << "Failed to set YOLO backend, using CPU:" << e.what();
+            m_yoloNet.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
         }
 
-        // GPU: FAST & ACCURATE - Works for both green AND teal/cyan backdrops
-        // Split BGR channels
-        std::vector<cv::UMat> channels(3);
-        cv::split(gpuFrame, channels);
-        cv::UMat green = channels[1];
-        cv::UMat red = channels[2];
-
-        // FIXED: Properly detect green/cyan/teal while preserving blue colors
-        // Green: G > R, G > B  |  Cyan/Teal: G > R, B > R, G ≈ B
-        // Blue: B > R, B > G (should NOT be removed)
-        cv::UMat blue = channels[0];
-        cv::UMat greenDominantR;
-        cv::subtract(green, red, greenDominantR);  // G - R
+        // Get output layer names (for YOLOv8-seg)
+        m_yoloOutputLayerNames = m_yoloNet.getUnconnectedOutLayersNames();
         
-        cv::UMat greenDominantB;
-        cv::subtract(green, blue, greenDominantB);  // G - B
+        qDebug() << "YOLO output layer names:" << m_yoloOutputLayerNames.size();
+        for (size_t i = 0; i < m_yoloOutputLayerNames.size(); ++i) {
+            qDebug() << "  Layer" << i << ":" << QString::fromStdString(m_yoloOutputLayerNames[i]);
+        }
         
-        // Green/cyan/teal: G > R AND (G > B OR G ≈ B)
-        // This excludes pure blue colors where B > G
-        cv::UMat greenOrTeal;
-        cv::threshold(greenDominantR, greenOrTeal, 15, 255, cv::THRESH_BINARY);  // G > R
+        // Get input layer info
+        std::vector<cv::String> inputLayerNames = m_yoloNet.getLayerNames();
+        qDebug() << "YOLO total layers:" << inputLayerNames.size();
         
-        cv::UMat greenDominatesBlue;
-        cv::threshold(greenDominantB, greenDominatesBlue, -10, 255, cv::THRESH_BINARY);  // G > B - 10 (allows G ≈ B)
+        m_yoloModelPath = modelPath;
+        m_yoloModelLoaded = true;
         
-        // Combine: green/teal = (G > R) AND (G > B - 10)
-        cv::UMat greenMask;
-        cv::bitwise_and(greenOrTeal, greenDominatesBlue, greenMask);
-
-        // Invert: NOT green/teal = person (preserves blue colors)
-        cv::UMat gpuPersonMask;
-        cv::bitwise_not(greenMask, gpuPersonMask);
-
-        return gpuPersonMask;
-
+        qDebug() << "=== YOLO MODEL INITIALIZED SUCCESSFULLY ===";
+        qDebug() << "Model path:" << modelPath;
+        qDebug() << "Model input size:" << m_yoloInputWidth << "x" << m_yoloInputHeight;
+        qDebug() << "Confidence threshold:" << m_yoloConfidenceThreshold;
+        qDebug() << "NMS threshold:" << m_yoloNMSThreshold;
+        qDebug() << "Output layers:" << m_yoloOutputLayerNames.size();
+        
+        return true;
     } catch (const cv::Exception &e) {
-        qWarning() << "GPU green screen masking failed:" << e.what() << "- returning empty mask";
-        return emptyMask;
+        qWarning() << "OpenCV exception while loading YOLO model:" << e.what();
+        return false;
     } catch (const std::exception &e) {
-        qWarning() << "Exception in GPU green screen masking:" << e.what();
-        return emptyMask;
-    } catch (...) {
-        qWarning() << "Unknown exception in GPU green screen masking";
-        return emptyMask;
+        qWarning() << "Exception while loading YOLO model:" << e.what();
+        return false;
     }
 }
 
-// CONTOUR-BASED MASK REFINEMENT - Remove all fragments, keep only person
-cv::Mat Capture::refineGreenScreenMaskWithContours(const cv::Mat &mask, int minArea) const
+std::vector<cv::Rect> Capture::detectPeopleWithYOLO(const cv::Mat &frame)
 {
-    if (mask.empty()) return cv::Mat();
+    std::vector<cv::Rect> detections;
+    
+    if (!m_yoloModelLoaded || frame.empty()) {
+        qDebug() << "YOLO detection skipped - model loaded:" << m_yoloModelLoaded << "frame empty:" << frame.empty();
+        return detections;
+    }
 
     try {
-        cv::Mat refinedMask = cv::Mat::zeros(mask.size(), CV_8UC1);
+        // Prepare input blob
+        cv::Mat blob;
+        cv::dnn::blobFromImage(frame, blob, 1.0 / 255.0, 
+                               cv::Size(m_yoloInputWidth, m_yoloInputHeight), 
+                               cv::Scalar(0, 0, 0), true, false, CV_32F);
         
-        // Find all contours in the mask
-        std::vector<std::vector<cv::Point>> contours;
-        std::vector<cv::Vec4i> hierarchy;
-        cv::Mat maskCopy = mask.clone();
-        cv::findContours(maskCopy, contours, hierarchy, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+        // Set input
+        m_yoloNet.setInput(blob);
         
-        if (contours.empty()) {
-            qDebug() << "No contours found in green screen mask";
-            return refinedMask;
-        }
+        // Run inference
+        std::vector<cv::Mat> outputs;
         
-        // Sort contours by area (largest first)
-        std::vector<std::pair<int, double>> contourAreas;
-        for (size_t i = 0; i < contours.size(); i++) {
-            double area = cv::contourArea(contours[i]);
-            contourAreas.push_back({static_cast<int>(i), area});
-        }
-        std::sort(contourAreas.begin(), contourAreas.end(), 
-                  [](const std::pair<int, double>& a, const std::pair<int, double>& b) {
-                      return a.second > b.second;
-                  });
-        
-        // Keep only the largest contours (person) that meet minimum area
-        int keptContours = 0;
-        const int MAX_PERSONS = 3; // Support up to 3 people
-        
-        for (size_t i = 0; i < std::min(contourAreas.size(), (size_t)MAX_PERSONS); i++) {
-            int idx = contourAreas[i].first;
-            double area = contourAreas[i].second;
-            
-            if (area >= minArea) {
-                // STRATEGY 1: Draw filled contour (aggressive - includes all pixels)
-                cv::drawContours(refinedMask, contours, idx, cv::Scalar(255), cv::FILLED);
-                keptContours++;
-                qDebug() << "Kept contour" << i << "with area:" << area;
-            } else {
-                qDebug() << "Rejected contour" << i << "with area:" << area << "(too small)";
+        // Try forward pass with output layer names first
+        bool forwardSuccess = false;
+        if (!m_yoloOutputLayerNames.empty()) {
+            try {
+                m_yoloNet.forward(outputs, m_yoloOutputLayerNames);
+                forwardSuccess = true;
+                if (frameCount < 3) {
+                    qDebug() << "YOLO forward pass with layer names successful";
+                }
+            } catch (const cv::Exception &e) {
+                qWarning() << "YOLO forward pass with layer names failed:" << e.what();
+                qWarning() << "Trying forward pass without layer names...";
             }
         }
         
-        if (keptContours == 0) {
-            qWarning() << "No valid contours found - all below minimum area" << minArea;
-            return refinedMask;
+        // Fallback: try forward pass without specifying layer names
+        if (!forwardSuccess) {
+            try {
+                outputs.clear();
+                m_yoloNet.forward(outputs);
+                forwardSuccess = true;
+                if (frameCount < 3) {
+                    qDebug() << "YOLO forward pass without layer names successful";
+                }
+            } catch (const cv::Exception &e) {
+                qCritical() << "YOLO forward pass FAILED completely:" << e.what();
+                qCritical() << "Error code:" << e.code;
+                return detections;
+            }
         }
         
-        // STRATEGY 2: Apply convex hull to smooth boundaries and remove concave artifacts
-        // ENHANCED: Less aggressive - use union instead of intersection to preserve black regions
-        cv::Mat hullMask = cv::Mat::zeros(mask.size(), CV_8UC1);
-        for (size_t i = 0; i < std::min(contourAreas.size(), (size_t)MAX_PERSONS); i++) {
-            int idx = contourAreas[i].first;
-            double area = contourAreas[i].second;
-            
-            if (area >= minArea) {
-                std::vector<cv::Point> hull;
-                cv::convexHull(contours[idx], hull);
-                
-                // Only apply convex hull if it doesn't expand area too much (< 30% increase)
-                // Increased threshold to be less aggressive with black clothing
-                double hullArea = cv::contourArea(hull);
-                if (hullArea < area * 1.3) {
-                    std::vector<std::vector<cv::Point>> hullContours = {hull};
-                    cv::drawContours(hullMask, hullContours, 0, cv::Scalar(255), cv::FILLED);
+        if (outputs.empty()) {
+            qWarning() << "YOLO forward pass returned empty outputs";
+            qWarning() << "Expected" << m_yoloOutputLayerNames.size() << "outputs";
+            return detections;
+        }
+        
+        if (frameCount < 3) {
+            qDebug() << "YOLO forward pass successful - got" << outputs.size() << "outputs";
+        }
+
+        // YOLOv8-seg output format: Find the actual detection output
+        // The detection output is typically the largest 2D/3D output (not proto which is 4D)
+        cv::Mat output;
+        for (size_t i = 0; i < outputs.size(); ++i) {
+            const cv::Mat& out = outputs[i];
+            // Detection output is typically 2D or 3D with many features
+            // Proto is 4D with shape [1, 32, H, W]
+            if (out.dims >= 2 && out.dims <= 3) {
+                // Check if last dimension has enough features (should be > 80 for class scores)
+                int lastDimIdx = out.dims - 1;
+                if (lastDimIdx >= 0 && lastDimIdx < CV_MAX_DIM && out.size[lastDimIdx] > 80) {
+                    if (output.empty() || (out.total() > output.total())) {
+                        output = out;
+                        if (frameCount < 3) {
+                            qDebug() << "Using output" << i << "as detection output, shape:" << out.size;
+                        }
+                    }
                 }
             }
         }
         
-        // ENHANCED: Use union instead of intersection to preserve black regions with holes
-        // This prevents removal of valid person pixels in black clothing areas
-        if (!hullMask.empty() && cv::countNonZero(hullMask) > 0) {
-            cv::bitwise_or(refinedMask, hullMask, refinedMask);
+        if (output.empty() && !outputs.empty()) {
+            // Fallback: use first output
+            output = outputs[0];
+            if (frameCount < 3) {
+                qWarning() << "Could not identify detection output, using outputs[0]";
+            }
         }
         
-        // STRATEGY 3: Final morphological cleanup with larger kernel to fill holes in black regions
-        // ENHANCED: Use larger kernel to fill larger holes that may appear in black clothing
-        cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(7, 7));
-        cv::morphologyEx(refinedMask, refinedMask, cv::MORPH_CLOSE, kernel); // Fill small/medium holes
-        cv::morphologyEx(refinedMask, refinedMask, cv::MORPH_OPEN, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5)));  // Remove small protrusions
-        
-        // Additional pass with even larger kernel for very large holes (e.g., in black clothing)
-        cv::Mat largeKernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(15, 15));
-        cv::morphologyEx(refinedMask, refinedMask, cv::MORPH_CLOSE, largeKernel);
-        
-        qDebug() << "Contour refinement complete - kept" << keptContours << "contours";
-        return refinedMask;
-        
-    } catch (const cv::Exception &e) {
-        qWarning() << "Contour refinement failed:" << e.what();
-        return mask.clone();
-    } catch (const std::exception &e) {
-        qWarning() << "Exception in contour refinement:" << e.what();
-        return mask.clone();
-    }
-}
-
-// TEMPORAL MASK SMOOTHING - Ensure consistency across frames
-cv::Mat Capture::applyTemporalMaskSmoothing(const cv::Mat &currentMask) const
-{
-    if (currentMask.empty()) return cv::Mat();
-
-    // First frame or after reset
-    if (m_lastGreenScreenMask.empty() || m_lastGreenScreenMask.size() != currentMask.size()) {
-        m_lastGreenScreenMask = currentMask.clone();
-        m_greenScreenMaskStableCount = 0;
-        return currentMask.clone();
-    }
-
-    try {
-        // Calculate difference between current and last mask
-        cv::Mat diff;
-        cv::absdiff(currentMask, m_lastGreenScreenMask, diff);
-        int diffPixels = cv::countNonZero(diff);
-        double diffRatio = (double)diffPixels / (currentMask.rows * currentMask.cols);
-        
-        // If masks are very similar (< 5% difference), blend them
-        cv::Mat smoothedMask;
-        if (diffRatio < 0.05) {
-            // Blend current with last mask (70% current, 30% last) for stability
-            cv::addWeighted(currentMask, 0.7, m_lastGreenScreenMask, 0.3, 0, smoothedMask, CV_8U);
-            cv::threshold(smoothedMask, smoothedMask, 127, 255, cv::THRESH_BINARY);
-            m_greenScreenMaskStableCount++;
-        } else if (diffRatio < 0.15) {
-            // Medium change - blend with more weight to current (80% current, 20% last)
-            cv::addWeighted(currentMask, 0.8, m_lastGreenScreenMask, 0.2, 0, smoothedMask, CV_8U);
-            cv::threshold(smoothedMask, smoothedMask, 127, 255, cv::THRESH_BINARY);
-            m_greenScreenMaskStableCount = std::max(0, m_greenScreenMaskStableCount - 1);
-        } else {
-            // Large change - use current mask directly (new person or movement)
-            smoothedMask = currentMask.clone();
-            m_greenScreenMaskStableCount = 0;
+        if (output.empty()) {
+            qWarning() << "No valid detection output found";
+            return detections;
         }
         
-        // Update last mask for next frame
-        m_lastGreenScreenMask = smoothedMask.clone();
-        
-        return smoothedMask;
-        
-    } catch (const cv::Exception &e) {
-        qWarning() << "Temporal smoothing failed:" << e.what();
-        m_lastGreenScreenMask = currentMask.clone();
-        return currentMask.clone();
-    } catch (const std::exception &e) {
-        qWarning() << "Exception in temporal smoothing:" << e.what();
-        m_lastGreenScreenMask = currentMask.clone();
-        return currentMask.clone();
-    }
-}
-
-// GRABCUT REFINEMENT - Advanced foreground/background separation
-cv::Mat Capture::refineWithGrabCut(const cv::Mat &frame, const cv::Mat &initialMask) const
-{
-    if (frame.empty() || initialMask.empty()) {
-        qWarning() << "GrabCut: Empty input";
-        return initialMask.clone();
-    }
-
-    // VALIDATION: Check frame and mask dimensions match
-    if (frame.size() != initialMask.size()) {
-        qWarning() << "GrabCut: Size mismatch - frame:" << frame.cols << "x" << frame.rows 
-                   << "mask:" << initialMask.cols << "x" << initialMask.rows;
-        return initialMask.clone();
-    }
-
-    // VALIDATION: Check mask has sufficient non-zero pixels
-    int nonZeroCount = cv::countNonZero(initialMask);
-    if (nonZeroCount < 1000) {
-        qWarning() << "GrabCut: Insufficient mask pixels:" << nonZeroCount;
-        return initialMask.clone();
-    }
-
-    try {
-        qDebug() << "Applying GrabCut refinement for precise segmentation";
-        
-        // Create GrabCut mask from initial mask
-        // GC_BGD=0 (definite background), GC_FGD=1 (definite foreground)
-        // GC_PR_BGD=2 (probably background), GC_PR_FGD=3 (probably foreground)
-        cv::Mat grabCutMask = cv::Mat::zeros(frame.size(), CV_8UC1);
-        
-        // SAFE EROSION: Check if mask is large enough before eroding
-        cv::Mat definiteFG;
-        cv::Rect maskBounds = cv::boundingRect(initialMask);
-        if (maskBounds.width > 30 && maskBounds.height > 30) {
-            cv::erode(initialMask, definiteFG, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(15, 15)));
-        } else {
-            // Mask too small for erosion, use smaller kernel
-            cv::erode(initialMask, definiteFG, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5)));
+        // Debug: Print output shape every frame for first few frames
+        static int frameCount = 0;
+        static bool shapeLogged = false;
+        if (!shapeLogged || frameCount < 5) {
+            qDebug() << "=== YOLO DETECTION DEBUG ===";
+            qDebug() << "Output dims:" << output.dims;
+            for (int d = 0; d < output.dims; d++) {
+                qDebug() << "  Dimension" << d << "size:" << output.size[d];
+            }
+            qDebug() << "Total elements:" << output.total();
+            qDebug() << "Type:" << output.type() << "(CV_32F=" << CV_32F << ")";
+            if (frameCount >= 5) shapeLogged = true;
+            frameCount++;
         }
         
-        // VALIDATION: Ensure we still have some foreground pixels
-        if (cv::countNonZero(definiteFG) < 100) {
-            qWarning() << "GrabCut: Eroded mask too small, using original";
-            return initialMask.clone();
-        }
+        // Handle different output shapes: [1, num_detections, features] or [num_detections, features]
+        // YOLOv8-seg typically outputs: [1, num_detections, 116] or [num_detections, 116]
+        // But might also be transposed: [features, num_detections] or [1, features, num_detections]
+        int numDetections = 0;
+        int featuresPerDetection = 0;
+        bool isTransposed = false;
         
-        grabCutMask.setTo(cv::GC_FGD, definiteFG);
-        
-        // Dilate mask to get probable foreground region
-        cv::Mat probableFG;
-        cv::dilate(initialMask, probableFG, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(25, 25)));
-        cv::Mat unknownRegion = probableFG - definiteFG;
-        grabCutMask.setTo(cv::GC_PR_FGD, unknownRegion);
-        
-        // Everything else is definite background
-        cv::Mat bgMask = (grabCutMask == cv::GC_BGD);
-        grabCutMask.setTo(cv::GC_BGD, bgMask);
-        
-        // Apply GrabCut algorithm (ONLY 1 iteration for speed and stability)
-        cv::Mat bgModel, fgModel;
-        cv::Rect roi = cv::boundingRect(initialMask);
-        
-        // VALIDATION: Ensure ROI is valid and reasonable
-        roi.x = std::max(0, roi.x - 10);
-        roi.y = std::max(0, roi.y - 10);
-        roi.width = std::min(frame.cols - roi.x, roi.width + 20);
-        roi.height = std::min(frame.rows - roi.y, roi.height + 20);
-        
-        if (roi.width > 50 && roi.height > 50 && 
-            roi.x >= 0 && roi.y >= 0 && 
-            roi.x + roi.width <= frame.cols && 
-            roi.y + roi.height <= frame.rows) {
-            
-            // CRITICAL: Use only 1 iteration to prevent crashes
-            cv::grabCut(frame, grabCutMask, roi, bgModel, fgModel, 1, cv::GC_INIT_WITH_MASK);
-            
-            // Extract foreground
-            cv::Mat refinedMask = (grabCutMask == cv::GC_FGD) | (grabCutMask == cv::GC_PR_FGD);
-            refinedMask.convertTo(refinedMask, CV_8U, 255);
-            
-            // VALIDATION: Ensure output is reasonable
-            int refinedCount = cv::countNonZero(refinedMask);
-            if (refinedCount > 500 && refinedCount < frame.rows * frame.cols * 0.9) {
-                qDebug() << "GrabCut refinement complete";
-                return refinedMask;
+        if (output.dims == 3) {
+            // Shape: [batch, dim1, dim2]
+            if (output.size[0] == 1) {
+                // Could be [1, num_detections, features] or [1, features, num_detections]
+                if (output.size[2] >= 84) {  // features >= 84 (4 bbox + 80 classes)
+                    // [1, num_detections, features]
+                    numDetections = output.size[1];
+                    featuresPerDetection = output.size[2];
+                } else {
+                    // Likely [1, features, num_detections] - transposed
+                    numDetections = output.size[2];
+                    featuresPerDetection = output.size[1];
+                    isTransposed = true;
+                }
             } else {
-                qWarning() << "GrabCut produced invalid result, using original";
-                return initialMask.clone();
+                // [batch, num_detections, features] or [batch, features, num_detections]
+                if (output.size[2] >= 84) {
+                    numDetections = output.size[1];
+                    featuresPerDetection = output.size[2];
+                } else {
+                    numDetections = output.size[2];
+                    featuresPerDetection = output.size[1];
+                    isTransposed = true;
+                }
+            }
+        } else if (output.dims == 2) {
+            // Shape: [dim1, dim2]
+            if (output.size[1] >= 84) {
+                // [num_detections, features]
+                numDetections = output.size[0];
+                featuresPerDetection = output.size[1];
+            } else {
+                // Likely [features, num_detections] - transposed
+                numDetections = output.size[1];
+                featuresPerDetection = output.size[0];
+                isTransposed = true;
             }
         } else {
-            qWarning() << "Invalid ROI for GrabCut:" << roi.x << roi.y << roi.width << roi.height;
-            return initialMask.clone();
+            qWarning() << "Unexpected YOLO output dimensions:" << output.dims;
+            return detections;
+        }
+        
+        if (!shapeLogged || frameCount < 5) {
+            qDebug() << "Parsed: numDetections=" << numDetections << "featuresPerDetection=" << featuresPerDetection << "transposed=" << isTransposed;
+            if (featuresPerDetection < 84) {
+                qWarning() << "WARNING: featuresPerDetection < 84, output format might be wrong!";
+            }
+        }
+        
+        // Get frame dimensions for scaling
+        float scaleX = static_cast<float>(frame.cols) / m_yoloInputWidth;
+        float scaleY = static_cast<float>(frame.rows) / m_yoloInputHeight;
+        
+        // Parse detections - use same logic as createYOLOPersonMask
+        int validDetections = 0;
+        for (int i = 0; i < numDetections && i < 1000; ++i) {  // Limit to 1000 to avoid infinite loops
+            const float* data;
+            if (isTransposed) {
+                // Transposed format: access by column instead of row
+                if (output.dims == 3) {
+                    // [1, features, num_detections] -> access column i
+                    data = output.ptr<float>(0) + i * featuresPerDetection;
+                } else {
+                    // [features, num_detections] -> access column i
+                    data = output.ptr<float>(0) + i * featuresPerDetection;
+                }
+            } else {
+                // Normal format
+                if (output.dims == 3) {
+                    // Shape: [batch, num_detections, features]
+                    data = output.ptr<float>(0, i);
+                } else {
+                    // Shape: [num_detections, features]
+                    data = output.ptr<float>(i);
+                }
+            }
+            
+            // Check if this detection has valid data (not all zeros)
+            bool hasValidData = false;
+            for (int j = 0; j < std::min(10, featuresPerDetection); ++j) {
+                if (std::abs(data[j]) > 0.001f) {
+                    hasValidData = true;
+                    break;
+                }
+            }
+            
+            if (!hasValidData && i < 5) {
+                // Skip empty detections but log first few
+                if (frameCount < 5) {
+                    qDebug() << "Detection" << i << "appears empty (all zeros)";
+                }
+                continue;
+            }
+            
+            // Extract bounding box (center_x, center_y, width, height)
+            float centerX = data[0] * scaleX;
+            float centerY = data[1] * scaleY;
+            float width = data[2] * scaleX;
+            float height = data[3] * scaleY;
+            
+            // Extract confidence - YOLOv8 uses class probabilities directly (no objectness score)
+            // Find class with highest confidence (person is class 0 in COCO)
+            // data[4] = class 0, data[5] = class 1, ..., data[83] = class 79
+            int bestClass = 0;
+            float bestConf = data[4];  // First class confidence (class 0 = person)
+            for (int j = 5; j < 5 + 80; ++j) {  // COCO has 80 classes (indices 4-83)
+                if (data[j] > bestConf) {
+                    bestConf = data[j];
+                    bestClass = j - 4;  // j=5 -> class 1, j=6 -> class 2, etc.
+                }
+            }
+            
+            // Filter for person class (class 0) and confidence threshold
+            if (frameCount < 5 && i < 3) {
+                qDebug() << "Detection" << i << "- bbox:" << centerX << centerY << width << "x" << height 
+                         << "class:" << bestClass << "conf:" << bestConf << "threshold:" << m_yoloConfidenceThreshold;
+            }
+            
+            if (bestClass == 0 && bestConf >= m_yoloConfidenceThreshold) {
+                validDetections++;
+                // Convert center-based to top-left based rectangle
+                int x = static_cast<int>(centerX - width / 2.0f);
+                int y = static_cast<int>(centerY - height / 2.0f);
+                int w = static_cast<int>(width);
+                int h = static_cast<int>(height);
+                
+                // Clamp to frame bounds
+                x = std::max(0, std::min(x, frame.cols - 1));
+                y = std::max(0, std::min(y, frame.rows - 1));
+                w = std::min(w, frame.cols - x);
+                h = std::min(h, frame.rows - y);
+                
+                if (w > 0 && h > 0 && w < frame.cols && h < frame.rows) {
+                    detections.push_back(cv::Rect(x, y, w, h));
+                    if (frameCount < 5) {
+                        qDebug() << "  -> Added detection:" << x << y << w << "x" << h << "confidence:" << bestConf;
+                    }
+                }
+            }
+        }
+        
+        if (frameCount < 5) {
+            qDebug() << "Total valid person detections found:" << validDetections << "out of" << numDetections << "total detections";
+        }
+        
+        // Apply Non-Maximum Suppression
+        if (!detections.empty()) {
+            std::vector<float> confidences;
+            for (const auto& det : detections) {
+                confidences.push_back(m_yoloConfidenceThreshold);  // Use threshold as confidence
+            }
+            std::vector<int> indices;
+            cv::dnn::NMSBoxes(detections, confidences, m_yoloConfidenceThreshold, 
+                            m_yoloNMSThreshold, indices);
+            
+            std::vector<cv::Rect> filteredDetections;
+            for (int idx : indices) {
+                filteredDetections.push_back(detections[idx]);
+            }
+            detections = filteredDetections;
+            
+            // Debug output (reduced frequency)
+            if (frameCount < 5 || frameCount % 30 == 0) {
+                qDebug() << "YOLO found" << detections.size() << "person detections after NMS";
+            }
         }
         
     } catch (const cv::Exception &e) {
-        qWarning() << "GrabCut OpenCV exception:" << e.what();
-        return initialMask.clone();
+        qWarning() << "OpenCV exception in YOLO detection:" << e.what();
     } catch (const std::exception &e) {
-        qWarning() << "GrabCut std exception:" << e.what();
-        return initialMask.clone();
-    } catch (...) {
-        qWarning() << "GrabCut unknown exception";
-        return initialMask.clone();
+        qWarning() << "Exception in YOLO detection:" << e.what();
     }
+    
+    return detections;
 }
 
-// DISTANCE-BASED REFINEMENT - Ensure no green pixels near person edges
-cv::Mat Capture::applyDistanceBasedRefinement(const cv::Mat &frame, const cv::Mat &mask) const
+cv::Mat Capture::createYOLOPersonMask(const cv::Mat &frame)
 {
-    if (frame.empty() || mask.empty()) {
-        return mask.clone();
+    cv::Mat personMask = cv::Mat::zeros(frame.size(), CV_8UC1);
+    
+    if (!m_yoloModelLoaded || frame.empty()) {
+        return personMask;
     }
 
     try {
-        qDebug() << "Applying distance-based refinement to remove edge artifacts";
+        // Prepare input blob
+        cv::Mat blob;
+        cv::dnn::blobFromImage(frame, blob, 1.0 / 255.0, 
+                               cv::Size(m_yoloInputWidth, m_yoloInputHeight), 
+                               cv::Scalar(0, 0, 0), true, false, CV_32F);
         
-        // Convert to HSV for green detection
-        cv::Mat hsv;
-        cv::cvtColor(frame, hsv, cv::COLOR_BGR2HSV);
+        // Set input
+        m_yoloNet.setInput(blob);
         
-        // Create strict green mask (more aggressive than chroma key)
-        cv::Scalar lowerGreen(m_greenHueMin, m_greenSatMin + 40, m_greenValMin + 30);  // Much stricter: only bright, saturated greens
-        cv::Scalar upperGreen(m_greenHueMax, 255, 255);
-        cv::Mat strictGreenMask;
-        cv::inRange(hsv, lowerGreen, upperGreen, strictGreenMask);
+        // Run inference
+        std::vector<cv::Mat> outputs;
+        m_yoloNet.forward(outputs, m_yoloOutputLayerNames);
         
-        // Calculate distance transform from green pixels
-        cv::Mat greenDist;
-        cv::distanceTransform(~strictGreenMask, greenDist, cv::DIST_L2, 5);
-        
-        // Normalize distance to [0, 1]
-        cv::Mat normalizedDist;
-        cv::normalize(greenDist, normalizedDist, 0, 1.0, cv::NORM_MINMAX, CV_32F);
-        
-        // Create safety buffer: pixels must be at least 10 pixels away from green
-        cv::Mat safetyMask;
-        cv::threshold(normalizedDist, safetyMask, 0.05, 1.0, cv::THRESH_BINARY);
-        safetyMask.convertTo(safetyMask, CV_8U, 255);
-        
-        // Apply safety mask to person mask
-        cv::Mat refinedMask;
-        cv::bitwise_and(mask, safetyMask, refinedMask);
-        
-        // Fill any holes created by the safety buffer
-        cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(7, 7));
-        cv::morphologyEx(refinedMask, refinedMask, cv::MORPH_CLOSE, kernel);
-        
-        qDebug() << "Distance-based refinement complete";
-        return refinedMask;
-        
-    } catch (const cv::Exception &e) {
-        qWarning() << "Distance refinement failed:" << e.what();
-        return mask.clone();
-    } catch (const std::exception &e) {
-        qWarning() << "Exception in distance refinement:" << e.what();
-        return mask.clone();
-    }
-}
+        if (outputs.empty()) {
+            qWarning() << "YOLO forward pass returned empty outputs";
+            return personMask;
+        }
 
-// CREATE TRIMAP - Three-zone map for alpha matting
-cv::Mat Capture::createTrimap(const cv::Mat &mask, int erodeSize, int dilateSize) const
-{
-    if (mask.empty()) {
-        return cv::Mat();
-    }
+        // Debug: Log output shapes (first few frames only)
+        static int debugFrameCount = 0;
+        if (debugFrameCount < 3) {
+            qDebug() << "YOLO outputs count:" << outputs.size();
+            for (size_t i = 0; i < outputs.size(); ++i) {
+                qDebug() << "  Output" << i << "shape:" << outputs[i].size << "dims:" << outputs[i].dims;
+            }
+            debugFrameCount++;
+        }
 
-    try {
-        cv::Mat trimap = cv::Mat::zeros(mask.size(), CV_8UC1);
+        // YOLOv8-seg outputs: Find the detection output (usually the last one or named "output1")
+        // Detection output shape: [1, num_detections, features] or [num_detections, features]
+        // Proto output shape: [1, 32, 160, 160] or similar
+        cv::Mat detections;
+        cv::Mat proto;
         
-        // Definite foreground (eroded mask) = 255
-        cv::Mat definiteFG;
-        cv::Mat erodeKernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(erodeSize, erodeSize));
-        cv::erode(mask, definiteFG, erodeKernel);
-        trimap.setTo(255, definiteFG);
-        
-        // Definite background (inverse of dilated mask) = 0
-        cv::Mat dilateKernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(dilateSize, dilateSize));
-        cv::Mat dilatedMask;
-        cv::dilate(mask, dilatedMask, dilateKernel);
-        cv::Mat definiteBG = (dilatedMask == 0);
-        trimap.setTo(0, definiteBG);
-        
-        // Unknown region (between eroded and dilated) = 128
-        cv::Mat unknownRegion = (trimap != 0) & (trimap != 255);
-        trimap.setTo(128, unknownRegion);
-        
-        return trimap;
-        
-    } catch (const cv::Exception &e) {
-        qWarning() << "Trimap creation failed:" << e.what();
-        return mask.clone();
-    }
-}
-
-// CUSTOM GUIDED FILTER IMPLEMENTATION - Edge-preserving smoothing without ximgproc
-cv::Mat Capture::customGuidedFilter(const cv::Mat &guide, const cv::Mat &src, int radius, double eps) const
-{
-    // Convert to float
-    cv::Mat guideFloat, srcFloat;
-    guide.convertTo(guideFloat, CV_32F);
-    src.convertTo(srcFloat, CV_32F);
-    
-    // Mean of guide and source
-    cv::Mat meanI, meanP;
-    cv::boxFilter(guideFloat, meanI, CV_32F, cv::Size(radius, radius));
-    cv::boxFilter(srcFloat, meanP, CV_32F, cv::Size(radius, radius));
-    
-    // Correlation and variance
-    cv::Mat corrI, corrIp;
-    cv::boxFilter(guideFloat.mul(guideFloat), corrI, CV_32F, cv::Size(radius, radius));
-    cv::boxFilter(guideFloat.mul(srcFloat), corrIp, CV_32F, cv::Size(radius, radius));
-    
-    cv::Mat varI = corrI - meanI.mul(meanI);
-    cv::Mat covIp = corrIp - meanI.mul(meanP);
-    
-    // Linear coefficients a and b
-    cv::Mat a = covIp / (varI + eps);
-    cv::Mat b = meanP - a.mul(meanI);
-    
-    // Mean of a and b
-    cv::Mat meanA, meanB;
-    cv::boxFilter(a, meanA, CV_32F, cv::Size(radius, radius));
-    cv::boxFilter(b, meanB, CV_32F, cv::Size(radius, radius));
-    
-    // Output
-    return meanA.mul(guideFloat) + meanB;
-}
-
-// ALPHA MATTING - Extract precise alpha channel for natural edges
-cv::Mat Capture::extractPersonWithAlphaMatting(const cv::Mat &frame, const cv::Mat &trimap) const
-{
-    if (frame.empty() || trimap.empty()) {
-        return cv::Mat();
-    }
-
-    try {
-        qDebug() << "Applying alpha matting for natural edge extraction";
-        
-        // Simple but effective alpha matting using custom guided filter
-        cv::Mat alpha = trimap.clone();
-        alpha.convertTo(alpha, CV_32F, 1.0/255.0);
-        
-        // Convert frame to grayscale for guidance
-        cv::Mat frameGray;
-        if (frame.channels() == 3) {
-            cv::cvtColor(frame, frameGray, cv::COLOR_BGR2GRAY);
-        } else {
-            frameGray = frame.clone();
+        // Find detection output (largest 2D or 3D output that's not proto)
+        for (size_t i = 0; i < outputs.size(); ++i) {
+            const cv::Mat& out = outputs[i];
+            // Proto is typically 4D with shape [1, 32, H, W]
+            if (out.dims == 4 && out.size[1] == 32) {
+                proto = out;
+                if (debugFrameCount <= 3) {
+                    qDebug() << "Found proto at output" << i;
+                }
+            } else if (out.dims >= 2) {
+                // Detection output is typically 2D or 3D with many features
+                if (detections.empty() || (out.total() > detections.total())) {
+                    detections = out;
+                    if (debugFrameCount <= 3) {
+                        qDebug() << "Found detection output at" << i << "shape:" << out.size;
+                    }
+                }
+            }
         }
         
-        // Apply custom guided filter for smooth alpha matte
-        cv::Mat guidedAlpha = customGuidedFilter(frameGray, alpha, 8, 1e-6);
+        if (detections.empty()) {
+            qWarning() << "Could not find detection output in YOLO results";
+            return personMask;
+        }
         
-        // Threshold to get clean binary mask
-        cv::Mat refinedMask;
-        cv::threshold(guidedAlpha, refinedMask, 0.5, 1.0, cv::THRESH_BINARY);
-        refinedMask.convertTo(refinedMask, CV_8U, 255);
+        // Handle different output shapes: [1, num_detections, features] or [num_detections, features]
+        // Add bounds checking
+        if (detections.dims < 2) {
+            qWarning() << "Invalid detection output dimensions:" << detections.dims;
+            return personMask;
+        }
         
-        // Additional cleanup with morphology
-        cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
-        cv::morphologyEx(refinedMask, refinedMask, cv::MORPH_OPEN, kernel);
+        int numDetections = detections.size[0] == 1 ? detections.size[1] : detections.size[0];
+        int featuresPerDetection = detections.size[0] == 1 ? detections.size[2] : detections.size[1];
         
-        qDebug() << "Alpha matting complete";
-        return refinedMask;
+        // Validate dimensions
+        if (numDetections <= 0 || featuresPerDetection < 5) {
+            qWarning() << "Invalid detection dimensions - numDetections:" << numDetections 
+                       << "featuresPerDetection:" << featuresPerDetection;
+            return personMask;
+        }
+        
+        // Get frame dimensions for scaling
+        float scaleX = static_cast<float>(frame.cols) / m_yoloInputWidth;
+        float scaleY = static_cast<float>(frame.rows) / m_yoloInputHeight;
+        
+        // Parse detections and create masks
+        for (int i = 0; i < numDetections && i < 1000; ++i) {  // Limit to prevent infinite loops
+            const float* data;
+            if (detections.dims == 3 && detections.size[0] == 1) {
+                // Shape: [1, num_detections, features]
+                if (i >= detections.size[1]) {
+                    continue;  // Skip invalid index
+                }
+                data = detections.ptr<float>(0, i);
+            } else if (detections.dims == 2) {
+                // Shape: [num_detections, features]
+                if (i >= detections.size[0]) {
+                    continue;  // Skip invalid index
+                }
+                data = detections.ptr<float>(i);
+            } else {
+                continue;  // Skip invalid dimensions
+            }
+            
+            // Validate we have enough features
+            if (featuresPerDetection < 5) {
+                continue;
+            }
+            
+            // Extract bounding box (with bounds checking)
+            float centerX = data[0] * scaleX;
+            float centerY = data[1] * scaleY;
+            float width = data[2] * scaleX;
+            float height = data[3] * scaleY;
+            
+            // Extract confidence
+            float confidence = data[4];
+            
+            // Find best class (with bounds checking)
+            int bestClass = 0;
+            float bestConf = confidence;
+            int maxClassIndex = std::min(5 + 80, featuresPerDetection);
+            for (int j = 5; j < maxClassIndex; ++j) {
+                if (data[j] > bestConf) {
+                    bestConf = data[j];
+                    bestClass = j - 5;
+                }
+            }
+            
+            // Filter for person class (class 0)
+            if (bestClass == 0 && bestConf >= m_yoloConfidenceThreshold) {
+                // Extract mask coefficients (32 values starting at index 84)
+                if (featuresPerDetection >= 116) {  // 4 bbox + 1 conf + 80 classes + 32 mask coeffs = 117
+                    cv::Mat maskCoeffs(32, 1, CV_32F);
+                    for (int j = 0; j < 32; ++j) {
+                        int idx = 84 + j;
+                        if (idx < featuresPerDetection) {
+                            maskCoeffs.at<float>(j) = data[idx];
+                        } else {
+                            maskCoeffs.at<float>(j) = 0.0f;
+                        }
+                    }
+                    
+                    // Combine mask coefficients with proto to get instance mask
+                    if (!proto.empty() && proto.dims == 4 && proto.size[0] > 0 && proto.size[1] == 32) {
+                        // Reshape proto: [1, 32, H, W] -> [32, H*W]
+                        int protoH = proto.size[2];
+                        int protoW = proto.size[3];
+                        if (protoH > 0 && protoW > 0) {
+                            try {
+                                cv::Mat protoReshaped = proto.reshape(0, {32, protoH * protoW});
+                        
+                                // Matrix multiplication: mask = coeffs^T * proto
+                                cv::Mat mask1d = maskCoeffs.t() * protoReshaped;  // [1, H*W]
+                                
+                                // Reshape to 2D mask
+                                cv::Mat mask2d = mask1d.reshape(1, {protoH, protoW});
+                        
+                                // Apply sigmoid activation
+                                cv::Mat maskSigmoid;
+                                cv::exp(-mask2d, maskSigmoid);
+                                maskSigmoid = 1.0 / (1.0 + maskSigmoid);
+                                
+                                // Threshold mask
+                                cv::Mat maskBinary;
+                                cv::threshold(maskSigmoid, maskBinary, 0.5, 255, cv::THRESH_BINARY);
+                                maskBinary.convertTo(maskBinary, CV_8UC1);
+                                
+                                // Resize mask to bounding box size
+                                int x = static_cast<int>(centerX - width / 2.0f);
+                                int y = static_cast<int>(centerY - height / 2.0f);
+                                int w = static_cast<int>(width);
+                                int h = static_cast<int>(height);
+                                
+                                // Clamp to frame bounds
+                                x = std::max(0, std::min(x, frame.cols - 1));
+                                y = std::max(0, std::min(y, frame.rows - 1));
+                                w = std::min(w, frame.cols - x);
+                                h = std::min(h, frame.rows - y);
+                                
+                                if (w > 0 && h > 0 && maskBinary.cols > 0 && maskBinary.rows > 0) {
+                                    cv::Rect bbox(x, y, w, h);
+                                    cv::Mat maskResized;
+                                    cv::resize(maskBinary, maskResized, cv::Size(w, h), 0, 0, cv::INTER_LINEAR);
+                                    
+                                    // Place mask in full frame
+                                    if (bbox.x + bbox.width <= personMask.cols && 
+                                        bbox.y + bbox.height <= personMask.rows) {
+                                        cv::Mat roi = personMask(bbox);
+                                        maskResized.copyTo(roi, maskResized > 128);
+                                    }
+                                }
+                            } catch (const cv::Exception &e) {
+                                qWarning() << "Error processing proto mask:" << e.what();
+                            }
+                        }
+                    } else {
+                        // Fallback: use bounding box as mask if proto not available
+                        int x = static_cast<int>(centerX - width / 2.0f);
+                        int y = static_cast<int>(centerY - height / 2.0f);
+                        int w = static_cast<int>(width);
+                        int h = static_cast<int>(height);
+                        
+                        x = std::max(0, std::min(x, frame.cols - 1));
+                        y = std::max(0, std::min(y, frame.rows - 1));
+                        w = std::min(w, frame.cols - x);
+                        h = std::min(h, frame.rows - y);
+                        
+                        if (w > 0 && h > 0) {
+                            cv::rectangle(personMask, cv::Rect(x, y, w, h), cv::Scalar(255), -1);
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Apply morphological operations to clean up mask
+        if (cv::countNonZero(personMask) > 0) {
+            cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
+            cv::morphologyEx(personMask, personMask, cv::MORPH_CLOSE, kernel);
+            cv::morphologyEx(personMask, personMask, cv::MORPH_OPEN, kernel);
+        }
         
     } catch (const cv::Exception &e) {
-        qWarning() << "Alpha matting failed:" << e.what();
-        // Fallback: convert trimap to binary mask
-        cv::Mat fallback;
-        cv::threshold(trimap, fallback, 127, 255, cv::THRESH_BINARY);
-        return fallback;
+        qWarning() << "OpenCV exception in YOLO mask creation:" << e.what();
     } catch (const std::exception &e) {
-        qWarning() << "Exception in alpha matting:" << e.what();
-        cv::Mat fallback;
-        cv::threshold(trimap, fallback, 127, 255, cv::THRESH_BINARY);
-        return fallback;
+        qWarning() << "Exception in YOLO mask creation:" << e.what();
     }
+    
+    return personMask;
 }
 
-// GPU-ACCELERATED GREEN SPILL REMOVAL - Remove green tint from person pixels
-cv::UMat Capture::removeGreenSpillGPU(const cv::UMat &gpuFrame, const cv::UMat &gpuMask) const
+cv::UMat Capture::createYOLOPersonMaskGPU(const cv::UMat &gpuFrame)
 {
-    cv::UMat result;
-    if (gpuFrame.empty() || gpuMask.empty()) {
-        return gpuFrame.clone();
+    cv::UMat gpuMask;
+    
+    if (!m_yoloModelLoaded || gpuFrame.empty()) {
+        return gpuMask;
     }
 
     try {
-        // Convert to HSV for color correction
-        cv::UMat gpuHSV;
-        cv::cvtColor(gpuFrame, gpuHSV, cv::COLOR_BGR2HSV);
-
-        // Split HSV channels
-        std::vector<cv::UMat> hsvChannels(3);
-        cv::split(gpuHSV, hsvChannels);
-
-        // Create a desaturation map based on green hue proximity
-        // Pixels closer to green hue will be more desaturated
-        cv::UMat hueChannel = hsvChannels[0].clone();
+        // Download frame to CPU for YOLO processing (YOLO DNN works better on CPU)
+        // Use copyTo() to create an independent Mat copy to avoid UMat refcount issues
+        cv::Mat frame;
+        gpuFrame.copyTo(frame);
         
-        // Create desaturation mask for greenish pixels (narrower range to preserve person's colors)
-        cv::UMat greenishMask1, greenishMask2;
-        cv::threshold(hueChannel, greenishMask1, m_greenHueMin, 255, cv::THRESH_BINARY);  // No extra margin
-        cv::threshold(hueChannel, greenishMask2, m_greenHueMax, 255, cv::THRESH_BINARY_INV);  // No extra margin
-        cv::UMat greenishRange;
-        cv::bitwise_and(greenishMask1, greenishMask2, greenishRange);
+        // Validate frame before processing
+        if (frame.empty() || frame.cols == 0 || frame.rows == 0) {
+            qWarning() << "Invalid frame downloaded from GPU for YOLO processing";
+            return gpuMask;
+        }
         
-        // Desaturate pixels in green hue range
-        cv::UMat satChannel = hsvChannels[1].clone();
-        cv::UMat desaturated;
-        cv::multiply(satChannel, cv::Scalar(0.3), desaturated, 1.0, satChannel.type()); // Reduce saturation to 30%
+        // Create mask on CPU
+        cv::Mat mask = createYOLOPersonMask(frame);
         
-        // Apply desaturation only to greenish pixels within person mask
-        cv::UMat spillMask;
-        cv::bitwise_and(greenishRange, gpuMask, spillMask);
-        desaturated.copyTo(satChannel, spillMask);
+        // Explicitly release the frame Mat to ensure proper cleanup before mask processing
+        frame.release();
         
-        // Merge back
-        hsvChannels[1] = satChannel;
-        cv::merge(hsvChannels, gpuHSV);
+        // Upload mask back to GPU - use explicit copy to avoid refcount issues
+        if (!mask.empty()) {
+            mask.copyTo(gpuMask);
+            mask.release(); // Explicitly release CPU mask after GPU upload
+        }
         
-        // Convert back to BGR
-        cv::cvtColor(gpuHSV, result, cv::COLOR_HSV2BGR);
-        
-        // Also apply color correction in BGR space to remove green channel dominance
-        std::vector<cv::UMat> bgrChannels(3);
-        cv::split(result, bgrChannels);
-        
-        // Reduce green channel where spill is detected
-        cv::UMat reducedGreen;
-        cv::multiply(bgrChannels[1], cv::Scalar(0.85), reducedGreen, 1.0, bgrChannels[1].type());
-        reducedGreen.copyTo(bgrChannels[1], spillMask);
-        
-        // Slightly boost blue and red to compensate
-        cv::UMat boostedBlue, boostedRed;
-        cv::multiply(bgrChannels[0], cv::Scalar(1.08), boostedBlue, 1.0, bgrChannels[0].type());
-        cv::multiply(bgrChannels[2], cv::Scalar(1.08), boostedRed, 1.0, bgrChannels[2].type());
-        boostedBlue.copyTo(bgrChannels[0], spillMask);
-        boostedRed.copyTo(bgrChannels[2], spillMask);
-        
-        cv::merge(bgrChannels, result);
-        
-        // Synchronize
-        // OpenCL synchronization is automatic
-        
-        return result;
-
     } catch (const cv::Exception &e) {
-        qWarning() << "GPU green spill removal failed:" << e.what();
-        return gpuFrame.clone();
+        qWarning() << "OpenCV exception in YOLO GPU mask creation:" << e.what();
+        gpuMask.release(); // Ensure cleanup on error
     } catch (const std::exception &e) {
-        qWarning() << "Exception in GPU green spill removal:" << e.what();
-        return gpuFrame.clone();
+        qWarning() << "Exception in YOLO GPU mask creation:" << e.what();
+        gpuMask.release(); // Ensure cleanup on error
     }
+    
+    return gpuMask;
 }
 
 // Derive bounding boxes from a binary person mask
