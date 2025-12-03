@@ -118,7 +118,7 @@ DEPENDPATH += $$OPENCV_INSTALL_DIR/include
 # Found libraries at: C:\opencv\build\x64\vc16\lib (Visual Studio 2019)
 # OpenCV version: 4.12.0
 LIBS += -L$$OPENCV_INSTALL_DIR/x64/vc16/lib \
-        -lopencv_world4120d
+        -lopencv_world4110d
 
 # Note: If your OpenCV is built with separate modules instead of world library,
 # you may need to link individual modules like:

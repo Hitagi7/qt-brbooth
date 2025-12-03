@@ -803,8 +803,20 @@ void Capture::updateCameraFeed(const QImage &image)
     if (elapsedMs >= 800) {
         double fpsDuration = elapsedMs / 1000.0;
         if (fpsDuration > 0 && m_processingFrameCount > 0) {
-            // Calculate raw FPS
-            double rawFPS = m_processingFrameCount / fpsDuration;
+            // Calculate raw display FPS (how many frames are shown per second)
+            double rawDisplayFPS = m_processingFrameCount / fpsDuration;
+            
+            // FIX: Account for processing interval to get effective processing FPS
+            // Dynamic mode processes every 6th frame, static mode every 3rd frame
+            // Apply a penalty factor based on processing interval to reflect actual processing load
+            // Static mode (interval 3) is the baseline, dynamic mode (interval 6) gets penalized
+            int processInterval = (m_useDynamicVideoBackground && m_segmentationEnabledInCapture) ? 6 : 3;
+            const int baselineInterval = 3; // Static mode baseline
+            double processingPenaltyFactor = static_cast<double>(baselineInterval) / static_cast<double>(processInterval);
+            
+            // Apply penalty: dynamic mode (interval 6) gets 0.5x multiplier, static (interval 3) gets 1.0x
+            // This makes dynamic mode show lower FPS to reflect heavier processing workload
+            double rawFPS = rawDisplayFPS * processingPenaltyFactor;
             
             // Clamp to reasonable range first (0-120 FPS) to handle timer anomalies
             rawFPS = qBound(0.0, rawFPS, 120.0);
