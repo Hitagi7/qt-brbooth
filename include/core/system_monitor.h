@@ -28,11 +28,31 @@ public:
 
     // Statistics retrieval
     struct Statistics {
+        // CPU Metrics (System-wide)
         double cpuUsage;          // CPU usage (%)
+        
+        // GPU Metrics (System-wide)
         double gpuUsage;          // GPU usage (%)
-        double peakMemoryGB;      // Peak memory usage (GB)
+        double gpuMemoryUsedGB;   // GPU memory used (GB)
+        double gpuMemoryTotalGB;  // GPU memory total (GB)
+        double gpuMemoryUsage;    // GPU memory usage (%)
+        double gpuTemperature;    // GPU temperature (Celsius)
+        
+        // System Memory Metrics (System-wide)
+        double systemMemoryUsedGB;   // System RAM used (GB)
+        double systemMemoryTotalGB;  // System RAM total (GB)
+        double systemMemoryUsage;    // System memory usage (%)
+        
+        // Process Memory Metrics (Application-specific)
+        double processMemoryGB;      // Process memory usage (GB)
+        double peakProcessMemoryGB;  // Peak process memory usage (GB)
+        
+        // Performance Metrics
         double averageFPS;        // Average FPS (frames per second)
+        
+        // Metadata
         QDateTime timestamp;      // When these stats were collected
+        bool gpuMetricsAvailable; // Whether GPU metrics are available
     };
 
     Statistics getCurrentStatistics() const;
@@ -55,8 +75,17 @@ private:
     // Windows-specific monitoring functions
     double getCpuUsage();
     double getGpuUsage();
-    double getMemoryUsage();
+    double getGpuMemoryUsedGB();
+    double getGpuMemoryTotalGB();
+    double getGpuTemperature();
+    double getSystemMemoryUsedGB();
+    double getSystemMemoryTotalGB();
+    double getProcessMemoryUsage();
     void updatePeakMemory();
+    
+    // NVML initialization
+    bool initializeNVML();
+    void shutdownNVML();
 
     // Internal state
     QTimer* m_timer;
@@ -85,6 +114,10 @@ private:
     
     // Memory tracking
     double m_peakMemoryGB;
+    
+    // NVML state
+    bool m_nvmlInitialized;
+    void* m_nvmlDevice;  // nvmlDevice_t stored as void* to avoid header dependency
     
     // Initialization flag
     bool m_initialized;
