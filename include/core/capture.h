@@ -449,6 +449,7 @@ private:
     // Helper methods (implemented in .cpp)
     void updateDebugDisplay();
     void setupDebugDisplay();
+    void updateFPSLabelPosition();
 
     // --- PERFORMANCE MONITORING ---
     void printPerformanceStats();

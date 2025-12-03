@@ -152,6 +152,7 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     , m_recordingMutex()
     , debugWidget(nullptr)
     , debugLabel(nullptr)
+    , fpsLabel(nullptr)
     , m_recordingThreadActive(false)
     , m_recordingFrameQueue()
     , m_recordingStream()
@@ -237,6 +238,31 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     // Setup Debug Display
     setupDebugDisplay();
 
+    // Setup FPS display label for system monitor
+    // Parent it to overlayWidget so it's always visible above the video feed
+    fpsLabel = new QLabel(ui->overlayWidget);
+    fpsLabel->setText("FPS: --");
+    fpsLabel->setStyleSheet(
+        "QLabel { "
+        "color: white; "
+        "font-size: 18px; "
+        "font-weight: bold; "
+        "background-color: rgba(0, 0, 0, 0.7); "
+        "border-radius: 5px; "
+        "padding: 8px 16px; "
+        "}");
+    fpsLabel->setAlignment(Qt::AlignCenter);
+    fpsLabel->setAttribute(Qt::WA_TranslucentBackground, false);
+    fpsLabel->setAttribute(Qt::WA_NoSystemBackground, true);
+    fpsLabel->adjustSize(); // Size to content
+    fpsLabel->raise(); // Ensure it's on top
+    fpsLabel->setVisible(true); // Explicitly make it visible
+    fpsLabel->show();
+    
+    // Position FPS label in top-left corner
+    updateFPSLabelPosition();
+    
+    qDebug() << "FPS label created and positioned at:" << fpsLabel->pos() << "size:" << fpsLabel->size();
 
     // Ensure video label fills the entire window
     if (ui->videoLabel) {
@@ -500,6 +526,7 @@ Capture::~Capture()
     // Clean up debug widgets
     if (debugWidget){ delete debugWidget; debugWidget = nullptr; }
     if (debugLabel){ delete debugLabel; debugLabel = nullptr; }
+    if (fpsLabel){ delete fpsLabel; fpsLabel = nullptr; }
     
     // Clean up lighting corrector
     if (m_lightingCorrector){ 
@@ -1444,6 +1471,11 @@ void Capture::resizeEvent(QResizeEvent *event)
         flashOverlayLabel->move(0, 0);
     }
     
+    // Update FPS label position (it's parented to overlayWidget, so use overlayWidget size)
+    if (fpsLabel && ui->overlayWidget) {
+        updateFPSLabelPosition();
+    }
+    
     // Position recording timer label in top right corner
     if (recordingTimerLabel) {
         recordingTimerLabel->adjustSize();
@@ -1617,6 +1649,20 @@ void Capture::updateDebugDisplay()
 
 
 }
+
+void Capture::updateFPSLabelPosition()
+{
+    if (fpsLabel && ui->overlayWidget) {
+        fpsLabel->adjustSize(); // Ensure label is sized to content
+        // Position in top-left corner of live feed
+        // Since fpsLabel is parented to overlayWidget, coordinates are relative to overlayWidget
+        int x = 20; // 20px margin from left edge
+        int y = 20; // 20px margin from top edge
+        fpsLabel->move(x, y);
+        fpsLabel->raise(); // Ensure it's always on top
+    }
+}
+
 void Capture::startRecording()
 {
     if (!cameraWorker->isCameraOpen()) {
@@ -2777,6 +2823,17 @@ void Capture::setSystemMonitor(SystemMonitor* monitor)
 {
     qDebug() << "Capture::setSystemMonitor() called with pointer:" << (void*)monitor;
     m_systemMonitor = monitor;
+    
+    // Connect system monitor statisticsUpdated signal to update FPS display
+    if (m_systemMonitor && fpsLabel) {
+        connect(m_systemMonitor, &SystemMonitor::statisticsUpdated, this, [this](const SystemMonitor::Statistics& stats) {
+            if (fpsLabel) {
+                QString fpsText = QString("FPS: %1").arg(QString::number(stats.averageFPS, 'f', 1));
+                fpsLabel->setText(fpsText);
+            }
+        });
+        qDebug() << "SystemMonitor statisticsUpdated signal connected to FPS label";
+    }
 }
 
 void Capture::togglePersonDetection()
