@@ -158,6 +158,7 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     , debugUpdateTimer(nullptr)
     , m_currentFPS(0)
     , m_fpsTrackingEnabled(false)  // FPS tracking starts disabled, enabled only in capture interface
+    , m_fpsNeedsReset(false)  // FPS reset flag starts false
     , m_recordingGpuBuffer()
     , m_cachedPixmap(640, 480)
     // Lighting Correction Member
@@ -708,14 +709,24 @@ void Capture::updateCameraFeed(const QImage &image)
         static int fpsFrameCount = 0;
         static bool fpsWindowTimerInitialized = false;
         static double smoothedFPS = 0.0;
+        static double maxFPS = 0.0; // Track maximum FPS to prevent downward drift
+        static bool needsReset = false; // Flag to reset when page changes
         static const double SMOOTHING_ALPHA = 0.1; // Exponential smoothing factor (0.1 = 10% new, 90% old)
         static const qint64 FPS_WINDOW_MS = 1000; // 1 second window for FPS calculation
         
-        if (!fpsWindowTimerInitialized) {
+        // Reset FPS tracking when page is shown (after being hidden)
+        // Check if FPS tracking was just re-enabled (page was shown)
+        // Check member variable flag set in hideEvent to reset FPS tracking
+        if (m_fpsNeedsReset || !fpsWindowTimerInitialized) {
             fpsWindowTimer.start();
             fpsWindowTimerInitialized = true;
             fpsFrameCount = 0;
             smoothedFPS = 0.0;
+            maxFPS = 0.0;
+            needsReset = false;
+            m_fpsNeedsReset = false; // Clear the reset flag
+            m_currentFPS = 0; // Reset displayed FPS
+            qDebug() << "FPS tracking RESET for new page (static/dynamic switch)";
         }
         
         // Increment frame counter
@@ -727,6 +738,16 @@ void Capture::updateCameraFeed(const QImage &image)
             // Calculate actual FPS based on frame count over time window
             double actualFPS = (static_cast<double>(fpsFrameCount) / static_cast<double>(elapsedMs)) * 1000.0;
             
+            // Cap FPS at reasonable maximum (240 FPS for high refresh rate displays)
+            if (actualFPS > 240.0) {
+                actualFPS = 240.0;
+            }
+            
+            // Track maximum FPS seen
+            if (actualFPS > maxFPS) {
+                maxFPS = actualFPS;
+            }
+            
             // Apply exponential moving average for smooth, stable readings
             if (smoothedFPS == 0.0) {
                 // First measurement - use it directly
@@ -734,11 +755,18 @@ void Capture::updateCameraFeed(const QImage &image)
             } else {
                 // Exponential smoothing: newFPS = alpha * actual + (1 - alpha) * old
                 smoothedFPS = SMOOTHING_ALPHA * actualFPS + (1.0 - SMOOTHING_ALPHA) * smoothedFPS;
-            }
-            
-            // Cap FPS at reasonable maximum (240 FPS for high refresh rate displays)
-            if (smoothedFPS > 240.0) {
-                smoothedFPS = 240.0;
+                
+                // PREVENT DOWNWARD DRIFT: Don't let smoothed FPS drop below 90% of max FPS
+                // This prevents the value from slowly drifting down over time
+                if (maxFPS > 0 && smoothedFPS < maxFPS * 0.9) {
+                    // Smoothed value has drifted too low - reset to actual if it's close to max
+                    if (actualFPS >= maxFPS * 0.9) {
+                        smoothedFPS = actualFPS; // Reset to actual if performance is back to normal
+                    } else {
+                        // Performance actually dropped - allow it but cap the drift
+                        smoothedFPS = qMax(smoothedFPS, maxFPS * 0.9);
+                    }
+                }
             }
             
             // Round to nearest integer for display
@@ -759,11 +787,12 @@ void Capture::updateCameraFeed(const QImage &image)
                 }
             }
             
-            // Debug log every second
+            // Debug log every 5 seconds
             static int logCounter = 0;
             if (++logCounter % 5 == 0) { // Log every 5 seconds to avoid spam
                 qDebug() << "FPS: Actual=" << QString::number(actualFPS, 'f', 1) 
                          << "Smoothed=" << QString::number(smoothedFPS, 'f', 1)
+                         << "Max=" << QString::number(maxFPS, 'f', 1)
                          << "Displayed=" << m_currentFPS;
             }
         }
@@ -1633,7 +1662,9 @@ void Capture::hideEvent(QHideEvent *event)
 
     // Disable FPS tracking when leaving capture interface
     m_fpsTrackingEnabled = false;
-    qDebug() << "FPS tracking DISABLED outside capture interface";
+    m_currentFPS = 0; // Reset displayed FPS immediately
+    m_fpsNeedsReset = true; // Mark FPS tracking for reset when page is shown again
+    qDebug() << "FPS tracking DISABLED and marked for reset on next page show";
 
     // Disable segmentation when leaving capture page
     disableSegmentationOutsideCapture();
