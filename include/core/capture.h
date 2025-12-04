@@ -352,6 +352,7 @@ private:
     QPushButton *personSegmentationButton;
     QTimer *debugUpdateTimer;
     int m_currentFPS;
+    bool m_fpsTrackingEnabled;  // Track if FPS monitoring is active (only when in capture interface)
 
     // Capture Mode State
     bool m_captureReady;

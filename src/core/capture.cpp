@@ -157,6 +157,7 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     , m_recordingStream()
     , debugUpdateTimer(nullptr)
     , m_currentFPS(0)
+    , m_fpsTrackingEnabled(false)  // FPS tracking starts disabled, enabled only in capture interface
     , m_recordingGpuBuffer()
     , m_cachedPixmap(640, 480)
     // Lighting Correction Member
@@ -698,76 +699,45 @@ void Capture::updateCameraFeed(const QImage &image)
     totalTime += currentLoopTime;
     frameCount++;
 
-    // Calculate current FPS using frame-to-frame timing method (MOST ACCURATE)
-    // Only measure when a new unique frame is displayed
-    if (shouldMeasureFPS) {
+    // Simplified FPS measurement: Use only instant FPS (no rolling window)
+    // Only measure when FPS tracking is enabled (in capture interface) and a new unique frame is displayed
+    if (m_fpsTrackingEnabled && shouldMeasureFPS) {
         // Frame-to-frame timing measurement
         static QElapsedTimer lastFrameTimer;
         static bool lastFrameTimerInitialized = false;
+        static bool firstFrameMeasured = false;
         
         if (!lastFrameTimerInitialized) {
             lastFrameTimer.start();
             lastFrameTimerInitialized = true;
-        }
-        
-        // Get time since last unique frame was displayed
-        qint64 frameTimeMs = lastFrameTimer.restart(); // Get time since last frame, then restart
-        
-        // Skip first frame measurement (it's inaccurate - measures time since timer start, not frame-to-frame)
-        static bool firstFrameMeasured = false;
-        if (!firstFrameMeasured) {
+            firstFrameMeasured = false;
+        } else if (!firstFrameMeasured) {
+            // Skip first frame measurement (it's inaccurate - measures time since timer start, not frame-to-frame)
             firstFrameMeasured = true;
-            // Don't return - continue to initialize the buffer, just skip this measurement
-        } else if (frameTimeMs > 0) {
+        } else {
+            // Get time since last unique frame was displayed
+            qint64 frameTimeMs = lastFrameTimer.restart();
+            
             // Only process valid frame times (between 5ms and 1000ms to avoid outliers)
-            // 5ms minimum = 200 FPS max (reasonable cap)
-            // 1000ms maximum = 1 FPS min (prevents division by zero and handles slow frames)
-            if (frameTimeMs >= 5 && frameTimeMs <= 1000) {
-                // Convert milliseconds to instant FPS
-                double currentInstantFPS = 1000.0 / static_cast<double>(frameTimeMs);
+            if (frameTimeMs > 0 && frameTimeMs >= 5 && frameTimeMs <= 1000) {
+                // Convert milliseconds to instant FPS (single measurement, no averaging)
+                double instantFPS = 1000.0 / static_cast<double>(frameTimeMs);
                 
-                // Rolling window storage (circular buffer of 30 values)
-                static const int FPS_WINDOW_SIZE = 30;
-                static double fpsHistory[FPS_WINDOW_SIZE] = {0.0};
-                static int fpsHistoryIndex = 0;
-                
-                // Store instant FPS measurement in circular buffer
-                fpsHistory[fpsHistoryIndex] = currentInstantFPS;
-                fpsHistoryIndex = (fpsHistoryIndex + 1) % FPS_WINDOW_SIZE;
-                
-                // Calculate average of last 30 FPS measurements for smooth reading
-                // Filter outliers: only include FPS values between 1 and 200
-                double sum = 0.0;
-                int validFrames = 0;
-                for (int i = 0; i < FPS_WINDOW_SIZE; ++i) {
-                    if (fpsHistory[i] > 0.0 && fpsHistory[i] >= 1.0 && fpsHistory[i] <= 200.0) {
-                        sum += fpsHistory[i];
-                        validFrames++;
-                    }
+                // Cap FPS at reasonable maximum (200 FPS)
+                if (instantFPS > 200.0) {
+                    instantFPS = 200.0;
                 }
                 
-                if (validFrames > 0) {
-                    double currentAverageFPS = sum / static_cast<double>(validFrames);
-                    m_currentFPS = static_cast<int>(std::round(currentAverageFPS));
-                    
-                    // Update system monitor with accurate frame-to-frame FPS
-        if (m_systemMonitor) {
-                        qDebug() << "Capture: Updating SystemMonitor with Frame-to-Frame FPS:" << m_currentFPS 
-                                 << "instant=" << QString::number(currentInstantFPS, 'f', 1)
-                                 << "avg=" << QString::number(currentAverageFPS, 'f', 1)
-                                 << "frameTime=" << frameTimeMs << "ms"
-                                 << "segmentationActive=" << m_segmentationEnabledInCapture
-                                 << "Pointer:" << (void*)m_systemMonitor;
-                        try {
-                            m_systemMonitor->updateFPS(static_cast<double>(m_currentFPS));
-                qDebug() << "Capture: SystemMonitor FPS update completed successfully";
-            } catch (const std::exception& e) {
-                qDebug() << "Capture: Exception during FPS update:" << e.what();
-            } catch (...) {
-                qDebug() << "Capture: Unknown exception during FPS update";
-            }
-        } else {
-            qDebug() << "Capture: SystemMonitor is NULL, cannot update FPS:" << m_currentFPS;
+                m_currentFPS = static_cast<int>(std::round(instantFPS));
+                
+                // Update system monitor with instant FPS
+                if (m_systemMonitor) {
+                    try {
+                        m_systemMonitor->updateFPS(instantFPS);
+                    } catch (const std::exception& e) {
+                        qDebug() << "Capture: Exception during FPS update:" << e.what();
+                    } catch (...) {
+                        qDebug() << "Capture: Unknown exception during FPS update";
                     }
                 }
             }
@@ -1562,6 +1532,10 @@ void Capture::showEvent(QShowEvent *event)
     QWidget::showEvent(event);
     qDebug() << "Capture widget shown - camera should already be running continuously";
 
+    // Enable FPS tracking when entering capture interface
+    m_fpsTrackingEnabled = true;
+    qDebug() << "FPS tracking ENABLED for capture interface";
+
     // Camera is now managed continuously by brbooth.cpp, no need to start it here
     // Just enable segmentation after a short delay
     QTimer::singleShot(100, [this]() {
@@ -1580,6 +1554,10 @@ void Capture::hideEvent(QHideEvent *event)
 {
     QWidget::hideEvent(event);
     qDebug() << "Capture widget hidden - OPTIMIZED camera shutdown";
+
+    // Disable FPS tracking when leaving capture interface
+    m_fpsTrackingEnabled = false;
+    qDebug() << "FPS tracking DISABLED outside capture interface";
 
     // Disable segmentation when leaving capture page
     disableSegmentationOutsideCapture();
