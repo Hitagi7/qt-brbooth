@@ -1,6 +1,6 @@
 #include "ui/dynamic.h"
 
-#include "../../build/Desktop_Qt_6_9_1_MSVC2022_64bit-Debug/ui_dynamic.h"  // Full definition of Ui::Dynamic class
+#include "../../build/Desktop_Qt_6_9_2_MSVC2022_64bit-Debug/ui_dynamic.h"  // Full definition of Ui::Dynamic class
 #include "ui/iconhover.h"  // Assuming this is a local class for hover effects
 #include <QStyle>       // For QStyle::polish
 #include <QDebug>
@@ -249,19 +249,32 @@ Dynamic::~Dynamic()
 
 void Dynamic::setupVideoPlayers()
 {
-    // Get the application directory and navigate to build directory
-    QString appDir = QCoreApplication::applicationDirPath();
-    // Go up one level from debug/ to the build directory
-    QString buildDir = QDir(appDir).absoluteFilePath("..");
+    // Try to find project root by looking for qt-brbooth.pro file
+    QString projectRoot;
+    QStringList searchDirs;
+    searchDirs << QDir::currentPath()
+               << QCoreApplication::applicationDirPath()
+               << QCoreApplication::applicationDirPath() + "/.."
+               << QCoreApplication::applicationDirPath() + "/../.."
+               << "../"
+               << "../../"
+               << "../../../";
     
-    // Template videos for both preview and capture interface
-    // Use the correct build directory path: build/Desktop_Qt_6_9_2_MSVC2022_64bit-Debug/templates/dynamic/
-    QStringList actualVideoPaths;
-    actualVideoPaths << buildDir + "/templates/dynamic/vidtemplate1.mp4"
-                     << buildDir + "/templates/dynamic/vidtemplate2.mp4"
-                     << buildDir + "/templates/dynamic/vidtemplate3.mp4"
-                     << buildDir + "/templates/dynamic/vidtemplate4.mp4"
-                     << buildDir + "/templates/dynamic/vidtemplate5.mp4";
+    for (const QString& searchDir : searchDirs) {
+        if (QFile::exists(searchDir + "/qt-brbooth.pro")) {
+            projectRoot = searchDir;
+            qDebug() << "Dynamic::setupVideoPlayers - Found project root at:" << projectRoot;
+            break;
+        }
+    }
+    
+    // Define video template file names
+    QStringList videoTemplateNames;
+    videoTemplateNames << "vidtemplate1.mp4"
+                       << "vidtemplate2.mp4"
+                       << "vidtemplate3.mp4"
+                       << "vidtemplate4.mp4"
+                       << "vidtemplate5.mp4";
 
     // Define GIF paths for thumbnails
     QStringList gifPaths;
@@ -285,16 +298,54 @@ void Dynamic::setupVideoPlayers()
 
         qDebug() << "Dynamic::setupVideoPlayers - Processing button:" << button->objectName();
 
-        // Store the actual video path as a property on the button
-        QString videoPath = actualVideoPaths.at(i);
-        button->setProperty("actualVideoPath", videoPath);
+        // Find the video file in various possible locations
+        QString videoTemplateName = videoTemplateNames.at(i);
+        QStringList possibleVideoPaths;
         
-        // Verify the video file exists
-        if (QFile::exists(videoPath)) {
-            qDebug() << "Dynamic::setupVideoPlayers - Video file exists:" << videoPath;
-        } else {
-            qWarning() << "Dynamic::setupVideoPlayers - Video file NOT found:" << videoPath;
+        // Add project root path if found
+        if (!projectRoot.isEmpty()) {
+            possibleVideoPaths << projectRoot + "/templates/dynamic/" + videoTemplateName;
         }
+        
+        // Add other possible locations
+        possibleVideoPaths << "templates/dynamic/" + videoTemplateName
+                           << QDir::currentPath() + "/templates/dynamic/" + videoTemplateName
+                           << QCoreApplication::applicationDirPath() + "/templates/dynamic/" + videoTemplateName
+                           << QCoreApplication::applicationDirPath() + "/../templates/dynamic/" + videoTemplateName
+                           << QCoreApplication::applicationDirPath() + "/../../templates/dynamic/" + videoTemplateName
+                           << "../templates/dynamic/" + videoTemplateName
+                           << "../../templates/dynamic/" + videoTemplateName
+                           << "../../../templates/dynamic/" + videoTemplateName;
+        
+        // Add user's specific path as fallback
+        QString userPath = QString("C:/Users/Smoll/Documents/qt-brbooth/templates/dynamic/%1").arg(videoTemplateName);
+        possibleVideoPaths << userPath;
+        
+        qDebug() << "Dynamic::setupVideoPlayers - Searching for video" << (i + 1) << "in possible locations:";
+        for (int j = 0; j < possibleVideoPaths.size(); ++j) {
+            qDebug() << "  " << j << ":" << possibleVideoPaths[j] << "(exists:" << QFile::exists(possibleVideoPaths[j]) << ")";
+        }
+        
+        QString validVideoPath;
+        for (const QString& path : possibleVideoPaths) {
+            if (QFile::exists(path)) {
+                validVideoPath = QDir(path).absolutePath(); // Convert to absolute path
+                qDebug() << "Dynamic::setupVideoPlayers - Found video at:" << validVideoPath;
+                break;
+            }
+        }
+        
+        // Store the actual video path as a property on the button
+        if (validVideoPath.isEmpty()) {
+            qWarning() << "Dynamic::setupVideoPlayers - Video file NOT found for" << button->objectName() << "in any location:";
+            for (const QString& path : possibleVideoPaths) {
+                qWarning() << "  -" << path;
+            }
+        } else {
+            qDebug() << "Dynamic::setupVideoPlayers - Video file found:" << validVideoPath;
+        }
+        
+        button->setProperty("actualVideoPath", validVideoPath);
 
         // Connect the button's clicked signal
         connect(button, &QPushButton::clicked, this, [this, button]() {

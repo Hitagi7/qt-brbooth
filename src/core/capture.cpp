@@ -700,46 +700,71 @@ void Capture::updateCameraFeed(const QImage &image)
     frameCount++;
 
     // Simplified FPS measurement: Use only instant FPS (no rolling window)
-    // Only measure when FPS tracking is enabled (in capture interface) and a new unique frame is displayed
+    // IMPROVED FPS CALCULATION: Use time-based frame counting with exponential smoothing
+    // This provides much more accurate FPS than instant frame-to-frame measurements
     if (m_fpsTrackingEnabled && shouldMeasureFPS) {
-        // Frame-to-frame timing measurement
-        static QElapsedTimer lastFrameTimer;
-        static bool lastFrameTimerInitialized = false;
-        static bool firstFrameMeasured = false;
+        // Time-based FPS measurement using frame counting over a 1-second window
+        static QElapsedTimer fpsWindowTimer;
+        static int fpsFrameCount = 0;
+        static bool fpsWindowTimerInitialized = false;
+        static double smoothedFPS = 0.0;
+        static const double SMOOTHING_ALPHA = 0.1; // Exponential smoothing factor (0.1 = 10% new, 90% old)
+        static const qint64 FPS_WINDOW_MS = 1000; // 1 second window for FPS calculation
         
-        if (!lastFrameTimerInitialized) {
-            lastFrameTimer.start();
-            lastFrameTimerInitialized = true;
-            firstFrameMeasured = false;
-        } else if (!firstFrameMeasured) {
-            // Skip first frame measurement (it's inaccurate - measures time since timer start, not frame-to-frame)
-            firstFrameMeasured = true;
-        } else {
-            // Get time since last unique frame was displayed
-            qint64 frameTimeMs = lastFrameTimer.restart();
+        if (!fpsWindowTimerInitialized) {
+            fpsWindowTimer.start();
+            fpsWindowTimerInitialized = true;
+            fpsFrameCount = 0;
+            smoothedFPS = 0.0;
+        }
+        
+        // Increment frame counter
+        fpsFrameCount++;
+        
+        // Calculate FPS every second (or when window expires)
+        qint64 elapsedMs = fpsWindowTimer.elapsed();
+        if (elapsedMs >= FPS_WINDOW_MS) {
+            // Calculate actual FPS based on frame count over time window
+            double actualFPS = (static_cast<double>(fpsFrameCount) / static_cast<double>(elapsedMs)) * 1000.0;
             
-            // Only process valid frame times (between 5ms and 1000ms to avoid outliers)
-            if (frameTimeMs > 0 && frameTimeMs >= 5 && frameTimeMs <= 1000) {
-                // Convert milliseconds to instant FPS (single measurement, no averaging)
-                double instantFPS = 1000.0 / static_cast<double>(frameTimeMs);
-                
-                // Cap FPS at reasonable maximum (200 FPS)
-                if (instantFPS > 200.0) {
-                    instantFPS = 200.0;
+            // Apply exponential moving average for smooth, stable readings
+            if (smoothedFPS == 0.0) {
+                // First measurement - use it directly
+                smoothedFPS = actualFPS;
+            } else {
+                // Exponential smoothing: newFPS = alpha * actual + (1 - alpha) * old
+                smoothedFPS = SMOOTHING_ALPHA * actualFPS + (1.0 - SMOOTHING_ALPHA) * smoothedFPS;
+            }
+            
+            // Cap FPS at reasonable maximum (240 FPS for high refresh rate displays)
+            if (smoothedFPS > 240.0) {
+                smoothedFPS = 240.0;
+            }
+            
+            // Round to nearest integer for display
+            m_currentFPS = static_cast<int>(std::round(smoothedFPS));
+            
+            // Reset for next measurement window
+            fpsWindowTimer.restart();
+            fpsFrameCount = 0;
+            
+            // Update system monitor with smoothed FPS
+            if (m_systemMonitor) {
+                try {
+                    m_systemMonitor->updateFPS(smoothedFPS);
+                } catch (const std::exception& e) {
+                    qDebug() << "Capture: Exception during FPS update:" << e.what();
+                } catch (...) {
+                    qDebug() << "Capture: Unknown exception during FPS update";
                 }
-                
-                m_currentFPS = static_cast<int>(std::round(instantFPS));
-                
-                // Update system monitor with instant FPS
-                if (m_systemMonitor) {
-                    try {
-                        m_systemMonitor->updateFPS(instantFPS);
-                    } catch (const std::exception& e) {
-                        qDebug() << "Capture: Exception during FPS update:" << e.what();
-                    } catch (...) {
-                        qDebug() << "Capture: Unknown exception during FPS update";
-                    }
-                }
+            }
+            
+            // Debug log every second
+            static int logCounter = 0;
+            if (++logCounter % 5 == 0) { // Log every 5 seconds to avoid spam
+                qDebug() << "FPS: Actual=" << QString::number(actualFPS, 'f', 1) 
+                         << "Smoothed=" << QString::number(smoothedFPS, 'f', 1)
+                         << "Displayed=" << m_currentFPS;
             }
         }
     }
@@ -1547,6 +1572,57 @@ void Capture::showEvent(QShowEvent *event)
             qDebug() << "Restoring dynamic video background:" << m_dynamicVideoPath;
             enableDynamicVideoBackground(m_dynamicVideoPath);
         }
+        
+        // CRITICAL FIX: Ensure video playback timer is running if dynamic video is enabled
+        // This fixes the issue where the video appears static on the capture page
+        if (m_useDynamicVideoBackground && m_videoPlaybackTimer) {
+            // Verify video reader is still open, reopen if needed
+            bool needsReopen = false;
+            if (m_dynamicGpuReader.empty() && !m_dynamicVideoCap.isOpened()) {
+                qDebug() << "Video reader is not open, will reopen";
+                needsReopen = true;
+            }
+            
+            // Reset video to beginning to ensure it starts from the start
+            if (!m_dynamicVideoPath.isEmpty()) {
+                if (needsReopen) {
+                    qDebug() << "Reopening dynamic video for capture page";
+                    enableDynamicVideoBackground(m_dynamicVideoPath);
+                } else {
+                    qDebug() << "Resetting dynamic video to start for capture page";
+                    resetDynamicVideoToStart();
+                }
+            }
+            
+            if (!m_videoPlaybackActive || !m_videoPlaybackTimer->isActive()) {
+                qDebug() << "Restarting video playback timer for dynamic video background";
+                if (m_videoFrameInterval > 0) {
+                    m_videoPlaybackTimer->setInterval(m_videoFrameInterval);
+                    m_videoPlaybackTimer->start();
+                    m_videoPlaybackActive = true;
+                    qDebug() << "Video playback timer restarted with interval:" << m_videoFrameInterval << "ms";
+                    
+                    // Force read first frame immediately to ensure video is not static
+                    QTimer::singleShot(50, [this]() {
+                        if (m_useDynamicVideoBackground && m_videoPlaybackActive) {
+                            onVideoPlaybackTimer(); // Manually trigger frame read
+                            qDebug() << "Manually triggered first video frame read";
+                        }
+                    });
+                } else {
+                    qWarning() << "Cannot restart video playback timer - invalid interval:" << m_videoFrameInterval;
+                }
+            } else {
+                qDebug() << "Video playback timer is already active";
+                // Even if timer is active, force a frame read to ensure video updates
+                QTimer::singleShot(50, [this]() {
+                    if (m_useDynamicVideoBackground && m_videoPlaybackActive) {
+                        onVideoPlaybackTimer(); // Manually trigger frame read
+                        qDebug() << "Manually triggered video frame read to ensure updates";
+                    }
+                });
+            }
+        }
     });
 }
 
@@ -1585,8 +1661,9 @@ void Capture::updateDebugDisplay()
         QString segmentationStatus = m_segmentationEnabledInCapture ? "ON" : "OFF";
         QString aiFPS = m_segmentationEnabledInCapture ? QString::number(m_personDetectionFPS, 'f', 1) : "0.0";
         
+        // Display FPS - show as integer (already rounded from smoothed value)
         QString debugInfo = QString("FPS: %1 | People: %2 | Seg: %3 | Person FPS: %4")
-                           .arg(QString::number(m_currentFPS, 'f', 1))
+                           .arg(m_currentFPS)
                            .arg(peopleDetected)
                            .arg(segmentationStatus)
                            .arg(aiFPS);
@@ -2388,6 +2465,7 @@ void Capture::clearDynamicVideoPath()
 void Capture::onVideoPlaybackTimer()
 {
     if (!m_useDynamicVideoBackground || !m_videoPlaybackActive) {
+        qDebug() << "Video playback timer: Skipping - useDynamic:" << m_useDynamicVideoBackground << "active:" << m_videoPlaybackActive;
         return;
     }
 
@@ -2415,8 +2493,13 @@ void Capture::onVideoPlaybackTimer()
                 } else {
                     frameRead = true; // GPU-only path does not require CPU copy
                 }
+                static int frameCount = 0;
+                if (++frameCount % 30 == 0) { // Log every 30 frames to avoid spam
+                    qDebug() << "Video timer: GPU frame read successfully, size:" << (frameRead ? nextFrame.cols : gpu.cols) << "x" << (frameRead ? nextFrame.rows : gpu.rows);
+                }
             } else {
-                // Attempt soft restart of GPU reader
+                // Attempt soft restart of GPU reader - video reached end, loop it
+                qDebug() << "Video timer: GPU reader reached end, restarting from beginning";
                 m_dynamicGpuReader.release();
                 m_dynamicGpuReader = cv::cudacodec::createVideoReader(m_dynamicVideoPath.toStdString());
                 cv::cuda::GpuMat gpuRetry;
@@ -2431,6 +2514,9 @@ void Capture::onVideoPlaybackTimer()
                     } else {
                         frameRead = true;
                     }
+                    qDebug() << "Video timer: GPU reader restarted, frame read successfully";
+                } else {
+                    qWarning() << "Video timer: Failed to restart GPU reader, falling back to CPU";
                 }
             }
         } catch (const cv::Exception &e) {
@@ -2446,10 +2532,16 @@ void Capture::onVideoPlaybackTimer()
     if (!frameRead) {
         if (!m_dynamicVideoCap.isOpened()) {
             // Reopen with preferred backend
+            qDebug() << "Video timer: CPU reader not opened, attempting to reopen";
             if (!m_dynamicVideoPath.isEmpty()) {
                 m_dynamicVideoCap.open(m_dynamicVideoPath.toStdString(), cv::CAP_MSMF);
                 if (!m_dynamicVideoCap.isOpened()) {
                     m_dynamicVideoCap.open(m_dynamicVideoPath.toStdString(), cv::CAP_FFMPEG);
+                }
+                if (m_dynamicVideoCap.isOpened()) {
+                    qDebug() << "Video timer: CPU reader reopened successfully";
+                } else {
+                    qWarning() << "Video timer: Failed to reopen CPU reader";
                 }
             }
         }
@@ -2458,18 +2550,37 @@ void Capture::onVideoPlaybackTimer()
             if (frameRead && !nextFrame.empty()) {
                 double totalFrames = m_dynamicVideoCap.get(cv::CAP_PROP_FRAME_COUNT);
                 double currentFrameIndex = m_dynamicVideoCap.get(cv::CAP_PROP_POS_FRAMES);
+                static int cpuFrameCount = 0;
+                if (++cpuFrameCount % 30 == 0) { // Log every 30 frames
+                    qDebug() << "Video timer: CPU frame read, index:" << currentFrameIndex << "/" << totalFrames;
+                }
                 if (totalFrames > 0 && currentFrameIndex >= totalFrames - 1) {
+                    // Video reached end, loop it
+                    qDebug() << "Video timer: Video reached end, looping from beginning";
                     m_dynamicVideoCap.set(cv::CAP_PROP_POS_FRAMES, 0);
                     if (!m_dynamicVideoCap.read(nextFrame) || nextFrame.empty()) {
                         frameRead = false;
+                        qWarning() << "Video timer: Failed to read first frame after loop";
+                    } else {
+                        qDebug() << "Video timer: Successfully looped to beginning";
                     }
                 }
+            } else {
+                qWarning() << "Video timer: Failed to read frame from CPU reader";
             }
+        } else {
+            qWarning() << "Video timer: CPU reader is not opened and cannot be opened";
         }
     }
 
     if (frameRead && !nextFrame.empty()) {
         m_dynamicVideoFrame = nextFrame.clone();
+        static int updateCount = 0;
+        if (++updateCount % 30 == 0) { // Log every 30 frames
+            qDebug() << "Video timer: Frame updated successfully, size:" << m_dynamicVideoFrame.cols << "x" << m_dynamicVideoFrame.rows;
+        }
+    } else {
+        qWarning() << "Video timer: No valid frame read, video may appear static";
     }
     
     // THREAD SAFETY: Unlock mutex before returning
