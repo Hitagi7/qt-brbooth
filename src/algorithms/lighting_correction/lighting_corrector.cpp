@@ -1,20 +1,17 @@
 #include "algorithms/lighting_correction/lighting_corrector.h"
 #include <QFileInfo>
 #include <cmath>
+#include <vector>
+#include <algorithm>
 
 /**
  * @brief Constructor - Initializes lighting correction parameters
  * 
- * Sets up default values for CLAHE (Contrast Limited Adaptive Histogram Equalization)
- * and gamma correction. These parameters control how aggressively lighting correction
- * is applied to improve image visibility and quality.
+ * Sets up histogram matching system for lighting correction.
  */
 LightingCorrector::LightingCorrector()
     : m_gpuAvailable(false)
     , m_initialized(false)
-    , m_clipLimit(8.0)      // Higher = more contrast boost
-    , m_tileGridSize(8, 8)  // 8x8 grid for adaptive processing
-    , m_gammaValue(1.5)     // Brightens the image (1.0 = no change)
 {
 }
 
@@ -27,9 +24,7 @@ LightingCorrector::~LightingCorrector()
 /**
  * @brief Initialize the lighting correction system
  * 
- * Sets up both GPU and CPU processing pipelines:
- * - GPU: Creates CUDA CLAHE processor if CUDA is available
- * - CPU: Creates CPU CLAHE processor as fallback
+ * Sets up histogram matching system with GPU support if available.
  * 
  * @return true if initialization successful, false otherwise
  */
@@ -39,25 +34,12 @@ bool LightingCorrector::initialize()
         // Check if OpenCL-enabled GPU is available
         if (cv::ocl::useOpenCL()) {
             cv::ocl::setUseOpenCL(true);
-            // Initialize GPU CLAHE (Contrast Limited Adaptive Histogram Equalization)
-            // CLAHE improves local contrast while preventing over-amplification
-            // Regular CLAHE works with UMat (OpenCL) automatically
-            m_gpuCLAHE = cv::createCLAHE();
-            m_gpuCLAHE->setClipLimit(m_clipLimit);
-            m_gpuCLAHE->setTilesGridSize(m_tileGridSize);
-            
             m_gpuAvailable = true;
             qDebug() << "LightingCorrector: OpenCL GPU acceleration enabled";
         } else {
             m_gpuAvailable = false;
             qDebug() << "LightingCorrector: GPU not available, using CPU processing";
         }
-        
-        // Initialize CPU CLAHE as fallback
-        // Uses slightly reduced parameters for better performance on CPU
-        m_cpuCLAHE = cv::createCLAHE();
-        m_cpuCLAHE->setClipLimit(m_clipLimit * 0.8);
-        m_cpuCLAHE->setTilesGridSize(cv::Size(6, 6));
         
         m_initialized = true;
         return true;
@@ -111,15 +93,13 @@ bool LightingCorrector::setReferenceTemplate(const QString &templatePath)
 }
 
 /**
- * @brief Apply lighting correction to entire image
+ * @brief Apply lighting correction to entire image using histogram matching
  * 
- * This method improves image lighting using a two-step process:
- * 1. CLAHE (Contrast Limited Adaptive Histogram Equalization) on the L channel in LAB color space
- *    - Works in LAB color space to preserve color while enhancing brightness/contrast
- *    - Only processes the L (lightness) channel to avoid color shifts
- * 2. Gamma correction to brighten the overall image
+ * This method matches the histogram of the input image to the reference template's histogram.
+ * If no reference template is available, it returns the original image.
  * 
- * The method attempts GPU acceleration first, then falls back to CPU if GPU fails.
+ * The method works in LAB color space, matching only the L (lightness) channel to preserve
+ * color information while adjusting lighting characteristics.
  * 
  * @param inputImage Input image in BGR format
  * @return Corrected image in BGR format, or original image if correction fails
@@ -136,71 +116,21 @@ cv::Mat LightingCorrector::applyGlobalLightingCorrection(const cv::Mat &inputIma
         return cv::Mat();
     }
     
+    // If no reference template, return original image
+    if (m_referenceTemplate.empty()) {
+        qDebug() << "LightingCorrector: No reference template, returning original image";
+        return inputImage.clone();
+    }
+    
     try {
-        cv::Mat result;
-        
-        // Attempt GPU-accelerated processing if available
-        if (m_gpuAvailable) {
-            try {
-                // Upload image to GPU (OpenCL)
-                cv::UMat gpuInput, gpuLab;
-                inputImage.copyTo(gpuInput);
-                
-                // Convert BGR to LAB color space on GPU (OpenCL)
-                // LAB separates lightness (L) from color (A, B channels)
-                cv::cvtColor(gpuInput, gpuLab, cv::COLOR_BGR2Lab);
-                
-                // Split channels so we can work on just the L (lightness) channel
-                std::vector<cv::UMat> labChannels;
-                cv::split(gpuLab, labChannels);
-                
-                // Apply CLAHE to L channel (works with UMat/OpenCL automatically)
-                cv::UMat gpuLChannelCorrected;
-                m_gpuCLAHE->apply(labChannels[0], gpuLChannelCorrected);
-                
-                // Replace L channel with corrected version
-                labChannels[0] = gpuLChannelCorrected;
-                
-                // Merge channels back together
-                cv::merge(labChannels, gpuLab);
-                
-                // Convert back to BGR on GPU (OpenCL)
-                cv::cvtColor(gpuLab, gpuInput, cv::COLOR_Lab2BGR);
-                gpuInput.copyTo(result);
-                
-                // Apply gamma correction on CPU (fast operation, no need for GPU)
-                result = applyGammaCorrection(result, m_gammaValue * 0.8);
-                
-                return result;
-                
-            } catch (const cv::Exception& e) {
-                qWarning() << "LightingCorrector: GPU processing failed, falling back to CPU:" << e.what();
-                // Fall through to CPU processing
-            }
+        // Resize reference template to match input image size
+        cv::Mat reference = m_referenceTemplate.clone();
+        if (reference.size() != inputImage.size()) {
+            cv::resize(reference, reference, inputImage.size());
         }
         
-        // CPU path (either no GPU or GPU failed)
-        cv::Mat labImage;
-        cv::cvtColor(inputImage, labImage, cv::COLOR_BGR2Lab);
-        
-        // Split channels and boost contrast on L channel only
-        std::vector<cv::Mat> labChannels;
-        cv::split(labImage, labChannels);
-        
-        // Apply CLAHE to L (lightness) channel only
-        // This enhances contrast without affecting color
-        m_cpuCLAHE->apply(labChannels[0], labChannels[0]);
-        
-        // Merge channels back together
-        cv::merge(labChannels, labImage);
-        
-        // Convert back to BGR color space
-        cv::cvtColor(labImage, result, cv::COLOR_Lab2BGR);
-        
-        // Apply gamma correction to brighten the image
-        result = applyGammaCorrection(result, m_gammaValue * 0.8);
-        
-        return result;
+        // Apply histogram matching
+        return applyHistogramMatching(inputImage, reference);
         
     } catch (const cv::Exception& e) {
         qWarning() << "LightingCorrector: Lighting correction failed:" << e.what();
@@ -209,42 +139,125 @@ cv::Mat LightingCorrector::applyGlobalLightingCorrection(const cv::Mat &inputIma
 }
 
 /**
- * @brief Apply gamma correction to adjust image brightness
+ * @brief Apply histogram matching to match input histogram to reference histogram
  * 
- * Gamma correction is a non-linear operation that adjusts the brightness of an image.
- * - gamma > 1.0: Brightens the image (makes dark areas lighter)
- * - gamma < 1.0: Darkens the image (makes bright areas darker)
- * - gamma = 1.0: No change
+ * This function matches the histogram of the input image to the reference image's histogram.
+ * It works in LAB color space, matching only the L (lightness) channel to preserve color
+ * while adjusting lighting characteristics.
  * 
- * Uses a lookup table (LUT) for efficient pixel value transformation.
- * 
- * @param input Input image to correct
- * @param gamma Gamma value (typically > 1.0 for brightening)
- * @return Gamma-corrected image
+ * @param input Input image in BGR format
+ * @param reference Reference image in BGR format
+ * @return Histogram-matched image in BGR format
  */
-cv::Mat LightingCorrector::applyGammaCorrection(const cv::Mat &input, double gamma)
+cv::Mat LightingCorrector::applyHistogramMatching(const cv::Mat &input, const cv::Mat &reference)
 {
     try {
+        // Convert both images to LAB color space
+        cv::Mat inputLab, referenceLab;
+        cv::cvtColor(input, inputLab, cv::COLOR_BGR2Lab);
+        cv::cvtColor(reference, referenceLab, cv::COLOR_BGR2Lab);
+        
+        // Split channels
+        std::vector<cv::Mat> inputChannels, referenceChannels;
+        cv::split(inputLab, inputChannels);
+        cv::split(referenceLab, referenceChannels);
+        
+        // Compute histograms for L channel only
+        int histSize = 256;
+        float range[] = {0, 256};
+        const float* histRange = {range};
+        bool uniform = true, accumulate = false;
+        
+        cv::Mat inputHist, referenceHist;
+        cv::calcHist(&inputChannels[0], 1, 0, cv::Mat(), inputHist, 1, &histSize, &histRange, uniform, accumulate);
+        cv::calcHist(&referenceChannels[0], 1, 0, cv::Mat(), referenceHist, 1, &histSize, &histRange, uniform, accumulate);
+        
+        // Normalize histograms
+        cv::normalize(inputHist, inputHist, 0, 1, cv::NORM_MINMAX, -1, cv::Mat());
+        cv::normalize(referenceHist, referenceHist, 0, 1, cv::NORM_MINMAX, -1, cv::Mat());
+        
+        // Compute CDFs
+        std::vector<float> inputCDF = computeCDF(inputHist);
+        std::vector<float> referenceCDF = computeCDF(referenceHist);
+        
+        // Create mapping
+        std::vector<uchar> mapping = createHistogramMapping(inputCDF, referenceCDF);
+        
+        // Apply mapping to L channel
+        cv::Mat matchedL;
+        cv::LUT(inputChannels[0], cv::Mat(1, 256, CV_8UC1, mapping.data()), matchedL);
+        
+        // Replace L channel with matched version
+        inputChannels[0] = matchedL;
+        
+        // Merge channels back
+        cv::Mat resultLab;
+        cv::merge(inputChannels, resultLab);
+        
+        // Convert back to BGR
         cv::Mat result;
-        
-        // Build lookup table once, then apply it to all pixels (much faster)
-        cv::Mat lookupTable(1, 256, CV_8U);
-        uchar* p = lookupTable.ptr();
-        
-        // Fill lookup table with gamma-corrected values
-        // Formula: output = (input/255)^(1/gamma) * 255
-        for (int i = 0; i < 256; ++i) {
-            p[i] = cv::saturate_cast<uchar>(pow(i / 255.0, 1.0 / gamma) * 255.0);
-        }
-        
-        cv::LUT(input, lookupTable, result);
+        cv::cvtColor(resultLab, result, cv::COLOR_Lab2BGR);
         
         return result;
         
     } catch (const cv::Exception& e) {
-        qWarning() << "LightingCorrector: Gamma correction failed:" << e.what();
+        qWarning() << "LightingCorrector: Histogram matching failed:" << e.what();
         return input.clone();
     }
+}
+
+/**
+ * @brief Compute cumulative distribution function from histogram
+ * 
+ * @param hist Input histogram (normalized)
+ * @return CDF as a vector of floats
+ */
+std::vector<float> LightingCorrector::computeCDF(const cv::Mat &hist)
+{
+    std::vector<float> cdf(256, 0.0f);
+    float sum = 0.0f;
+    
+    for (int i = 0; i < 256; ++i) {
+        sum += hist.at<float>(i);
+        cdf[i] = sum;
+    }
+    
+    return cdf;
+}
+
+/**
+ * @brief Create lookup table for histogram matching
+ * 
+ * Maps each source pixel value to a reference pixel value based on matching CDF values.
+ * 
+ * @param sourceCDF CDF of source image
+ * @param referenceCDF CDF of reference image
+ * @return Lookup table mapping source values to reference values
+ */
+std::vector<uchar> LightingCorrector::createHistogramMapping(const std::vector<float> &sourceCDF, 
+                                                              const std::vector<float> &referenceCDF)
+{
+    std::vector<uchar> mapping(256);
+    
+    for (int i = 0; i < 256; ++i) {
+        float sourceValue = sourceCDF[i];
+        
+        // Find the closest reference CDF value
+        int bestMatch = 0;
+        float minDiff = std::abs(sourceValue - referenceCDF[0]);
+        
+        for (int j = 1; j < 256; ++j) {
+            float diff = std::abs(sourceValue - referenceCDF[j]);
+            if (diff < minDiff) {
+                minDiff = diff;
+                bestMatch = j;
+            }
+        }
+        
+        mapping[i] = static_cast<uchar>(bestMatch);
+    }
+    
+    return mapping;
 }
 
 /**
@@ -266,8 +279,6 @@ cv::Mat LightingCorrector::getReferenceTemplate() const
 // Free up GPU memory and reset everything
 void LightingCorrector::cleanup()
 {
-    m_gpuCLAHE.release();
-    m_cpuCLAHE.release();
     m_referenceTemplate.release();
     m_initialized = false;
     m_gpuAvailable = false;

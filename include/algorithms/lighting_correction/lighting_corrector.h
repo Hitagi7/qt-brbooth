@@ -5,6 +5,7 @@
 #include <opencv2/core/ocl.hpp>  // OpenCL support
 #include <QString>
 #include <QDebug>
+#include <vector>
 
 /**
  * @brief Lighting correction system
@@ -28,7 +29,7 @@ public:
     bool initialize();
     
     /**
-     * @brief Apply lighting correction to entire image (fallback method)
+     * @brief Apply lighting correction to entire image using histogram matching
      * @param inputImage Input image to correct
      * @return Corrected image
      */
@@ -47,20 +48,20 @@ public:
     void cleanup();
 
 private:
-    // Adjusts brightness using gamma curve
-    cv::Mat applyGammaCorrection(const cv::Mat &input, double gamma);
+    // Apply histogram matching to match input histogram to reference histogram
+    cv::Mat applyHistogramMatching(const cv::Mat &input, const cv::Mat &reference);
+    
+    // Compute cumulative distribution function from histogram
+    std::vector<float> computeCDF(const cv::Mat &hist);
+    
+    // Create lookup table for histogram matching
+    std::vector<uchar> createHistogramMapping(const std::vector<float> &sourceCDF, 
+                                               const std::vector<float> &referenceCDF);
     
     // Member variables
     bool m_gpuAvailable;
     bool m_initialized;
     cv::Mat m_referenceTemplate;  // Background image we use as lighting reference
-    cv::Ptr<cv::CLAHE> m_gpuCLAHE;  // GPU contrast enhancer (uses OpenCL via UMat)
-    cv::Ptr<cv::CLAHE> m_cpuCLAHE;  // CPU contrast enhancer (fallback)
-    
-    // Tuning parameters - tweak these if results look off
-    double m_clipLimit;  // How much contrast boost (higher = more aggressive)
-    cv::Size m_tileGridSize;  // Grid size for adaptive processing
-    double m_gammaValue;  // Brightness adjustment (1.5 = brighter)
 };
 
 #endif // LIGHTING_CORRECTOR_H
