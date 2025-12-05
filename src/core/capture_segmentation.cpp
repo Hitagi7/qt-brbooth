@@ -277,13 +277,20 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
         //  PERFORMANCE OPTIMIZATION: Always use lightweight processing during recording
         if (m_isRecording) {
             // Use lightweight background during recording
-            // CRASH FIX: Add mutex lock and validation when accessing dynamic video frame
+            // CRITICAL: Minimize lock time - clone frame quickly and release lock immediately
             if (m_useDynamicVideoBackground) {
-                QMutexLocker locker(&m_dynamicVideoMutex);
-                if (!m_dynamicVideoFrame.empty() && m_dynamicVideoFrame.cols > 0 && m_dynamicVideoFrame.rows > 0) {
+                cv::Mat cachedFrame;
+                {
+                    // Minimize lock time - just clone the frame and release lock immediately
+                    QMutexLocker locker(&m_dynamicVideoMutex);
+                    if (!m_dynamicVideoFrame.empty() && m_dynamicVideoFrame.cols > 0 && m_dynamicVideoFrame.rows > 0) {
+                        cachedFrame = m_dynamicVideoFrame.clone();
+                    }
+                }
+                // Do resize OUTSIDE the lock to allow timer to update frames
+                if (!cachedFrame.empty()) {
                     try {
-                        cv::resize(m_dynamicVideoFrame, segmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
-                        qDebug() << " RECORDING: Using dynamic video frame as background";
+                        cv::resize(cachedFrame, segmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
                     } catch (const cv::Exception &e) {
                         qWarning() << " RECORDING: Failed to resize dynamic video frame:" << e.what();
                         segmentedFrame = cv::Mat::zeros(frame.size(), frame.type());
@@ -649,19 +656,32 @@ cv::Mat Capture::createSegmentedFrameGPUOnly(const cv::Mat &frame, const std::ve
         if (m_isRecording && m_useDynamicVideoBackground) {
             qDebug() << "RECORDING MODE: Using lightweight GPU processing";
             try {
-                // THREAD SAFETY: Lock mutex for safe GPU frame access
-                QMutexLocker locker(&m_dynamicVideoMutex);
+                // CRITICAL: Minimize lock time - clone frames quickly and release lock immediately
+                cv::cuda::GpuMat cachedGpuFrame;
+                cv::Mat cachedCpuFrame;
+                bool hasGpuFrame = false;
+                bool hasCpuFrame = false;
                 
-                // CRASH FIX: Validate frames before GPU operations
-                if (!m_dynamicGpuFrame.empty() && m_dynamicGpuFrame.cols > 0 && m_dynamicGpuFrame.rows > 0) {
-                    cv::cuda::resize(m_dynamicGpuFrame, m_gpuSegmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
+                {
+                    // Minimize lock time - just clone frames and release lock immediately
+                    QMutexLocker locker(&m_dynamicVideoMutex);
+                    if (!m_dynamicGpuFrame.empty() && m_dynamicGpuFrame.cols > 0 && m_dynamicGpuFrame.rows > 0) {
+                        cachedGpuFrame = m_dynamicGpuFrame.clone();
+                        hasGpuFrame = true;
+                    } else if (!m_dynamicVideoFrame.empty() && m_dynamicVideoFrame.cols > 0 && m_dynamicVideoFrame.rows > 0) {
+                        cachedCpuFrame = m_dynamicVideoFrame.clone();
+                        hasCpuFrame = true;
+                    }
+                }
+                
+                // Do GPU operations OUTSIDE the lock to allow timer to update frames
+                if (hasGpuFrame) {
+                    cv::cuda::resize(cachedGpuFrame, m_gpuSegmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
                     m_gpuSegmentedFrame.download(segmentedFrame);
-                    qDebug() << "RECORDING: Using GPU frame for background";
-                } else if (!m_dynamicVideoFrame.empty() && m_dynamicVideoFrame.cols > 0 && m_dynamicVideoFrame.rows > 0) {
-                    m_gpuBackgroundFrame.upload(m_dynamicVideoFrame);
+                } else if (hasCpuFrame) {
+                    m_gpuBackgroundFrame.upload(cachedCpuFrame);
                     cv::cuda::resize(m_gpuBackgroundFrame, m_gpuSegmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
                     m_gpuSegmentedFrame.download(segmentedFrame);
-                    qDebug() << "RECORDING: Using CPU frame for background (uploaded to GPU)";
                 } else {
                     qWarning() << "RECORDING: No valid video frame, using black background";
                     segmentedFrame = cv::Mat::zeros(frame.size(), frame.type());

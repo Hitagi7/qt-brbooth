@@ -1099,17 +1099,21 @@ void Capture::captureRecordingFrame()
         }
         // Background reference: use current dynamic frame if enabled, else selected template if available
         if (m_useDynamicVideoBackground) {
-            // THREAD SAFETY: Lock mutex for safe frame access during recording
-            QMutexLocker locker(&m_dynamicVideoMutex);
-            if (!m_dynamicVideoFrame.empty()) {
-                try {
-                    m_recordedBackgroundFrames.append(m_dynamicVideoFrame.clone());
-                } catch (const cv::Exception &e) {
-                    qWarning() << " RECORDING: Failed to clone dynamic video frame:" << e.what();
-                    m_recordedBackgroundFrames.append(cv::Mat());
+            // CRITICAL: Clone frame quickly and release lock immediately to allow timer to update
+            cv::Mat cachedFrame;
+            {
+                // Minimize lock time - just clone the frame and release lock immediately
+                QMutexLocker locker(&m_dynamicVideoMutex);
+                if (!m_dynamicVideoFrame.empty()) {
+                    cachedFrame = m_dynamicVideoFrame.clone();
                 }
+            }
+            // Append OUTSIDE the lock to allow timer to update frames
+            if (!cachedFrame.empty()) {
+                m_recordedBackgroundFrames.append(cachedFrame);
             } else {
                 m_recordedBackgroundFrames.append(cv::Mat());
+                qWarning() << " RECORDING: No video frame available in cache";
             }
         } else if (!m_selectedTemplate.empty()) {
             m_recordedBackgroundFrames.append(m_selectedTemplate.clone());
@@ -1810,9 +1814,21 @@ void Capture::startRecording()
     m_cachedLabelSize = ui->videoLabel->size();
 
     // Reset dynamic video to start when recording begins
-    if (m_useDynamicVideoBackground && m_videoPlaybackActive) {
+    if (m_useDynamicVideoBackground) {
+        qDebug() << "RECORDING START: Video playback active:" << m_videoPlaybackActive << "Timer active:" << (m_videoPlaybackTimer ? m_videoPlaybackTimer->isActive() : false);
         resetDynamicVideoToStart();
-        qDebug() << "Dynamic video reset to start for new recording";
+        qDebug() << "RECORDING START: After reset - Video playback active:" << m_videoPlaybackActive << "Timer active:" << (m_videoPlaybackTimer ? m_videoPlaybackTimer->isActive() : false);
+        
+        // CRITICAL: Ensure timer is running during recording
+        if (m_videoPlaybackTimer && (!m_videoPlaybackActive || !m_videoPlaybackTimer->isActive())) {
+            qWarning() << "RECORDING START: Timer not active, restarting it!";
+            if (m_videoFrameInterval > 0) {
+                m_videoPlaybackTimer->setInterval(m_videoFrameInterval);
+                m_videoPlaybackTimer->start();
+                m_videoPlaybackActive = true;
+                qDebug() << "RECORDING START: Timer restarted with interval:" << m_videoFrameInterval << "ms";
+            }
+        }
     }
 }
 
@@ -2499,11 +2515,35 @@ void Capture::onVideoPlaybackTimer()
         qDebug() << "Video playback timer: Skipping - useDynamic:" << m_useDynamicVideoBackground << "active:" << m_videoPlaybackActive;
         return;
     }
+    
+    // Validate video path is set
+    if (m_dynamicVideoPath.isEmpty()) {
+        qWarning() << "Video timer: Video path is empty! Cannot read frames.";
+        return;
+    }
 
-    // THREAD SAFETY: Use tryLock to avoid blocking if processing is still ongoing
-    if (!m_dynamicVideoMutex.tryLock()) {
-        qDebug() << "Skipping frame advance - previous frame still processing";
-        return; // Skip this frame to maintain timing
+    // CRITICAL: During recording, we MUST update frames to keep video moving
+    // Use tryLock with retry logic during recording to ensure frames advance
+    bool lockAcquired = false;
+    if (m_isRecording) {
+        // During recording, try multiple times to acquire lock (up to 3 attempts)
+        for (int attempt = 0; attempt < 3 && !lockAcquired; attempt++) {
+            lockAcquired = m_dynamicVideoMutex.tryLock();
+            if (!lockAcquired && attempt < 2) {
+                QThread::msleep(1); // Brief wait before retry
+            }
+        }
+        if (!lockAcquired) {
+            qWarning() << "Video timer: Failed to acquire lock during recording after 3 attempts - video may appear frozen";
+            return;
+        }
+    } else {
+        // When not recording, use non-blocking tryLock
+        lockAcquired = m_dynamicVideoMutex.tryLock();
+        if (!lockAcquired) {
+            qDebug() << "Skipping frame advance - previous frame still processing";
+            return;
+        }
     }
 
     cv::Mat nextFrame;
@@ -2513,20 +2553,17 @@ void Capture::onVideoPlaybackTimer()
     if (!m_dynamicGpuReader.empty()) {
         try {
             cv::cuda::GpuMat gpu;
-            if (m_dynamicGpuReader->nextFrame(gpu) && !gpu.empty()) {
+            if (m_dynamicGpuReader->nextFrame(gpu) && !gpu.empty() && gpu.cols > 0 && gpu.rows > 0) {
                 if (gpu.type() == CV_8UC4) {
                     cv::cuda::cvtColor(gpu, gpu, cv::COLOR_BGRA2BGR);
                 }
                 m_dynamicGpuFrame = gpu; // keep latest GPU frame
-                if (!isGPUOnlyProcessingAvailable()) {
-                    gpu.download(nextFrame);
-                    frameRead = !nextFrame.empty();
-                } else {
-                    frameRead = true; // GPU-only path does not require CPU copy
-                }
+                // Always download to CPU frame for m_dynamicVideoFrame storage
+                gpu.download(nextFrame);
+                frameRead = !nextFrame.empty() && nextFrame.cols > 0 && nextFrame.rows > 0;
                 static int frameCount = 0;
                 if (++frameCount % 30 == 0) { // Log every 30 frames to avoid spam
-                    qDebug() << "Video timer: GPU frame read successfully, size:" << (frameRead ? nextFrame.cols : gpu.cols) << "x" << (frameRead ? nextFrame.rows : gpu.rows);
+                    qDebug() << "Video timer: GPU frame read successfully, size:" << nextFrame.cols << "x" << nextFrame.rows;
                 }
             } else {
                 // Attempt soft restart of GPU reader - video reached end, loop it
@@ -2534,18 +2571,15 @@ void Capture::onVideoPlaybackTimer()
                 m_dynamicGpuReader.release();
                 m_dynamicGpuReader = cv::cudacodec::createVideoReader(m_dynamicVideoPath.toStdString());
                 cv::cuda::GpuMat gpuRetry;
-                if (!m_dynamicGpuReader.empty() && m_dynamicGpuReader->nextFrame(gpuRetry) && !gpuRetry.empty()) {
+                if (!m_dynamicGpuReader.empty() && m_dynamicGpuReader->nextFrame(gpuRetry) && !gpuRetry.empty() && gpuRetry.cols > 0 && gpuRetry.rows > 0) {
                     if (gpuRetry.type() == CV_8UC4) {
                         cv::cuda::cvtColor(gpuRetry, gpuRetry, cv::COLOR_BGRA2BGR);
                     }
                     m_dynamicGpuFrame = gpuRetry;
-                    if (!isGPUOnlyProcessingAvailable()) {
-                        gpuRetry.download(nextFrame);
-                        frameRead = !nextFrame.empty();
-                    } else {
-                        frameRead = true;
-                    }
-                    qDebug() << "Video timer: GPU reader restarted, frame read successfully";
+                    // Always download to CPU frame for m_dynamicVideoFrame storage
+                    gpuRetry.download(nextFrame);
+                    frameRead = !nextFrame.empty() && nextFrame.cols > 0 && nextFrame.rows > 0;
+                    qDebug() << "Video timer: GPU reader restarted, frame read successfully, size:" << nextFrame.cols << "x" << nextFrame.rows;
                 } else {
                     qWarning() << "Video timer: Failed to restart GPU reader, falling back to CPU";
                 }
@@ -2572,13 +2606,15 @@ void Capture::onVideoPlaybackTimer()
                 if (m_dynamicVideoCap.isOpened()) {
                     qDebug() << "Video timer: CPU reader reopened successfully";
                 } else {
-                    qWarning() << "Video timer: Failed to reopen CPU reader";
+                    qWarning() << "Video timer: Failed to reopen CPU reader for path:" << m_dynamicVideoPath;
                 }
+            } else {
+                qWarning() << "Video timer: Cannot reopen CPU reader - video path is empty!";
             }
         }
         if (m_dynamicVideoCap.isOpened()) {
             frameRead = m_dynamicVideoCap.read(nextFrame);
-            if (frameRead && !nextFrame.empty()) {
+            if (frameRead && !nextFrame.empty() && nextFrame.cols > 0 && nextFrame.rows > 0) {
                 double totalFrames = m_dynamicVideoCap.get(cv::CAP_PROP_FRAME_COUNT);
                 double currentFrameIndex = m_dynamicVideoCap.get(cv::CAP_PROP_POS_FRAMES);
                 static int cpuFrameCount = 0;
@@ -2604,14 +2640,21 @@ void Capture::onVideoPlaybackTimer()
         }
     }
 
-    if (frameRead && !nextFrame.empty()) {
+    if (frameRead && !nextFrame.empty() && nextFrame.cols > 0 && nextFrame.rows > 0) {
         m_dynamicVideoFrame = nextFrame.clone();
         static int updateCount = 0;
-        if (++updateCount % 30 == 0) { // Log every 30 frames
-            qDebug() << "Video timer: Frame updated successfully, size:" << m_dynamicVideoFrame.cols << "x" << m_dynamicVideoFrame.rows;
+        if (++updateCount % 30 == 0 || m_isRecording) { // Log every 30 frames, or always during recording
+            qDebug() << "Video timer: Frame updated successfully, size:" << m_dynamicVideoFrame.cols << "x" << m_dynamicVideoFrame.rows 
+                     << "Recording:" << m_isRecording << "Frame count:" << updateCount;
         }
     } else {
-        qWarning() << "Video timer: No valid frame read, video may appear static";
+        // Only warn if we actually tried to read but failed
+        if (m_dynamicVideoCap.isOpened() || !m_dynamicGpuReader.empty()) {
+            qWarning() << "Video timer: No valid frame read, video may appear static. Recording:" << m_isRecording
+                       << "GPU reader empty:" << m_dynamicGpuReader.empty()
+                       << "CPU reader opened:" << m_dynamicVideoCap.isOpened()
+                       << "Video path:" << (m_dynamicVideoPath.isEmpty() ? "EMPTY" : m_dynamicVideoPath);
+        }
     }
     
     // THREAD SAFETY: Unlock mutex before returning
@@ -2624,12 +2667,8 @@ void Capture::resetDynamicVideoToStart()
         return;
     }
 
-    // Stop the current video playback timer
-    if (m_videoPlaybackTimer && m_videoPlaybackActive) {
-        m_videoPlaybackTimer->stop();
-        m_videoPlaybackActive = false;
-    }
-
+    qDebug() << "Resetting dynamic video to start for recording";
+    
     // Reset video readers to beginning
     if (!m_dynamicGpuReader.empty()) {
         try {
@@ -2651,7 +2690,9 @@ void Capture::resetDynamicVideoToStart()
     if (!m_dynamicGpuReader.empty()) {
         cv::cuda::GpuMat gpu;
         if (m_dynamicGpuReader->nextFrame(gpu) && !gpu.empty()) {
-            cv::cuda::cvtColor(gpu, gpu, cv::COLOR_BGRA2BGR);
+            if (gpu.type() == CV_8UC4) {
+                cv::cuda::cvtColor(gpu, gpu, cv::COLOR_BGRA2BGR);
+            }
             gpu.download(firstFrame);
             frameRead = true;
         }
@@ -2666,12 +2707,22 @@ void Capture::resetDynamicVideoToStart()
         qDebug() << "Video reset to first frame for re-recording";
     }
 
-    // Restart the video playback timer
+    // Ensure the video playback timer is running during recording
     if (m_videoPlaybackTimer) {
-        m_videoPlaybackTimer->setInterval(m_videoFrameInterval);
-        m_videoPlaybackTimer->start();
-        m_videoPlaybackActive = true;
-        qDebug() << "Video playback timer restarted after reset";
+        if (!m_videoPlaybackActive || !m_videoPlaybackTimer->isActive()) {
+            if (m_videoFrameInterval > 0) {
+                m_videoPlaybackTimer->setInterval(m_videoFrameInterval);
+                m_videoPlaybackTimer->start();
+                m_videoPlaybackActive = true;
+                qDebug() << "Video playback timer started for recording with interval:" << m_videoFrameInterval << "ms";
+            } else {
+                qWarning() << "Cannot start video playback timer - invalid interval:" << m_videoFrameInterval;
+            }
+        } else {
+            qDebug() << "Video playback timer already running";
+        }
+    } else {
+        qWarning() << "Video playback timer is null!";
     }
 }
 
@@ -2991,9 +3042,45 @@ bool Capture::isSegmentationEnabledInCapture() const
 
 void Capture::setSelectedBackgroundTemplate(const QString &path)
 {
+    // Clear cached template background if switching to a different template
+    if (m_selectedBackgroundTemplate != path) {
+        m_lastTemplateBackground = cv::Mat();
+        qDebug() << "Cleared cached template background due to template change";
+    }
+    
     m_selectedBackgroundTemplate = path;
     m_useBackgroundTemplate = !path.isEmpty();
     qDebug() << "Background template set to:" << path << "useBackgroundTemplate:" << m_useBackgroundTemplate;
+    
+    // Update lighting corrector's reference template for post-processing lighting algorithm
+    if (m_useBackgroundTemplate && !path.isEmpty()) {
+        // Skip bg6.png (white background) as it's generated, not a file
+        if (!path.contains("bg6.png")) {
+            QString resolvedPath = resolveTemplatePath(path);
+            if (!resolvedPath.isEmpty()) {
+                setReferenceTemplate(resolvedPath);
+                qDebug() << "Lighting corrector reference template updated to:" << resolvedPath;
+            } else {
+                qWarning() << "Could not resolve template path for lighting corrector:" << path;
+                // Clear reference template if path cannot be resolved
+                if (m_lightingCorrector) {
+                    m_lightingCorrector->setReferenceTemplate(QString());
+                }
+            }
+        } else {
+            // For white background, clear the reference template
+            if (m_lightingCorrector) {
+                m_lightingCorrector->setReferenceTemplate(QString());
+            }
+            qDebug() << "White background (bg6.png) - cleared lighting corrector reference template";
+        }
+    } else {
+        // Clear reference template if no template is selected
+        if (m_lightingCorrector) {
+            m_lightingCorrector->setReferenceTemplate(QString());
+        }
+        qDebug() << "No background template selected - cleared lighting corrector reference template";
+    }
 }
 
 QString Capture::getSelectedBackgroundTemplate() const
@@ -3035,6 +3122,35 @@ void Capture::queueFrameForRecording(const cv::Mat &frame)
 void Capture::onVideoProcessingFinished()
 {
     qDebug() << " Video processing finished in background thread";
+    
+    // Get the processed frames from the future watcher
+    if (!m_lightingWatcher) {
+        qWarning() << "Video processing finished but watcher is null!";
+        // Fallback: send original frames
+        emit videoRecorded(m_recordedFrames, m_adjustedRecordingFPS);
+        emit showFinalOutputPage();
+        return;
+    }
+    
+    QList<QPixmap> processedFrames = m_lightingWatcher->result();
+    
+    if (processedFrames.isEmpty()) {
+        qWarning() << "Video processing returned empty frames - using original frames";
+        // Fallback: send original frames
+        emit videoRecorded(m_recordedFrames, m_adjustedRecordingFPS);
+        emit showFinalOutputPage();
+        return;
+    }
+    
+    qDebug() << "Video processing complete - sending" << processedFrames.size() << "processed frames to final output";
+    
+    // Send processed frames with comparison to final output page
+    emit videoRecordedWithComparison(processedFrames, m_originalRecordedFrames, m_adjustedRecordingFPS);
+    
+    // Show final output page
+    emit showFinalOutputPage();
+    
+    qDebug() << "Final output page navigation triggered";
 }
 
 void Capture::processRecordingFrame()
@@ -3055,6 +3171,18 @@ void Capture::initializeResources()
 void Capture::initializeLightingCorrection()
 {
     qDebug() << "Initializing lighting correction system";
+    
+    // Create lighting corrector if it doesn't exist
+    if (!m_lightingCorrector) {
+        m_lightingCorrector = new LightingCorrector();
+        if (m_lightingCorrector->initialize()) {
+            qDebug() << "Lighting correction system initialized successfully";
+        } else {
+            qWarning() << "Lighting correction system initialization failed";
+        }
+    } else {
+        qDebug() << "Lighting corrector already exists";
+    }
 }
 
 bool Capture::isGPULightingAvailable() const
@@ -3114,7 +3242,9 @@ cv::Mat Capture::applyPostProcessingLighting()
     // Start from a clean background template/dynamic video frame (no person composited yet)
     cv::Mat result;
     cv::Mat cleanBackground;
-    if (!m_lastTemplateBackground.empty()) {
+    // Only use cached template background if we're actually using background templates
+    // This prevents using stale cached backgrounds from previous template selections
+    if (m_useBackgroundTemplate && !m_selectedBackgroundTemplate.isEmpty() && !m_lastTemplateBackground.empty()) {
         cleanBackground = m_lastTemplateBackground.clone();
         qDebug() << "POST-PROCESSING: Using cached template background";
     } else if (m_useBackgroundTemplate && !m_selectedBackgroundTemplate.isEmpty()) {
