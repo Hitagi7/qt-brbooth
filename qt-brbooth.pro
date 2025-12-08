@@ -29,7 +29,6 @@ CONFIG += link_pkgconfig
 
 # Include paths for the new directory structure
 INCLUDEPATH += include \
-               include/algorithms \
                include/core \
                include/ui \
                ui \
@@ -43,7 +42,10 @@ SOURCES += \
     src/core/brbooth.cpp \
     src/core/camera.cpp \
     src/core/capture.cpp \
-    src/core/capture_dynamic.cpp \
+    src/core/capture_video_processing.cpp \
+    src/core/capture_video_lighting.cpp \
+    src/core/capture_dynamic_edge_blending.cpp \
+    src/core/capture_dynamic_compositing.cpp \
     src/core/capture_green_screen.cpp \
     src/core/capture_segmentation.cpp \
     src/core/capture_lighting.cpp \
@@ -58,7 +60,7 @@ SOURCES += \
     src/ui/final.cpp \
     src/ui/idle.cpp \
     src/ui/iconhover.cpp \
-    src/algorithms/lighting_correction/lighting_corrector.cpp
+    src/core/lighting_corrector.cpp
 
 HEADERS += \
     include/core/brbooth.h \
@@ -76,7 +78,7 @@ HEADERS += \
     include/ui/final.h \
     include/ui/idle.h \
     include/ui/iconhover.h \
-    include/algorithms/lighting_correction/lighting_corrector.h
+    include/core/lighting_corrector.h
 
 FORMS += \
     ui/background.ui \

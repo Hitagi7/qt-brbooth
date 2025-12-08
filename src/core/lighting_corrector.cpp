@@ -1,4 +1,4 @@
-#include "algorithms/lighting_correction/lighting_corrector.h"
+#include "core/lighting_corrector.h"
 #include <QFileInfo>
 #include <cmath>
 

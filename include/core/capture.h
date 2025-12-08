@@ -36,7 +36,7 @@
 #include "core/camera.h"          // Your custom Camera class
 #include "ui/foreground.h"        // Foreground class
 #include "core/common_types.h"    // Common data structures
-#include "algorithms/lighting_correction/lighting_corrector.h"
+#include "core/lighting_corrector.h"
 #include <array>
 
 //  GPU Memory Pool for optimized CUDA operations
