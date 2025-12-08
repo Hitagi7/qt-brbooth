@@ -1,6 +1,6 @@
 #include "ui/dynamic.h"
 
-#include "../../build/Desktop_Qt_6_9_2_MSVC2022_64bit-Debug/ui_dynamic.h"  // Full definition of Ui::Dynamic class
+#include "../../build/Desktop_Qt_6_9_1_MSVC2022_64bit-Debug/ui_dynamic.h"  // Full definition of Ui::Dynamic class
 #include "ui/iconhover.h"  // Assuming this is a local class for hover effects
 #include <QStyle>       // For QStyle::polish
 #include <QDebug>

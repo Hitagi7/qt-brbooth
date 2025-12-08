@@ -124,7 +124,7 @@ LIBS += -L$$OPENCV_INSTALL_DIR/x64/vc17/lib \
 
 # cuDNN Configuration
 # Personal Configuration
-CUDNN_INSTALL_DIR = "C:/Program Files/NVIDIA/CUDNN/v9.13"
+CUDNN_INSTALL_DIR = "C:/Program Files/NVIDIA/CUDNN/v9.12"
 # NCR Configuration
 #CUDNN_INSTALL_DIR = "C:/Program Files/NVIDIA/CUDNN/v9.13"
 
