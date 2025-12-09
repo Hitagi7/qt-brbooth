@@ -297,95 +297,127 @@ cv::Mat Capture::createSegmentedFrame(const cv::Mat &frame, const std::vector<cv
                 segmentedFrame = cv::Mat::zeros(frame.size(), frame.type());
             }
         } else if (m_useDynamicVideoBackground) {
-            // CRITICAL FIX: ALWAYS read a NEW frame from video to ensure it's MOVING
-            // Never use cached frames - always advance the video position
+            // PERFORMANCE FIX: Use cached frame from timer to avoid conflicts and improve FPS
+            // The timer updates m_dynamicVideoFrame/m_dynamicGpuFrame, so use those instead of reading directly
             try {
                 cv::Mat nextBg;
                 bool frameRead = false;
                 
-                // ALWAYS read directly from video to advance position
-                if (m_dynamicVideoCap.isOpened()) {
-                    frameRead = m_dynamicVideoCap.read(nextBg);
-                    if (!frameRead || nextBg.empty()) {
-                        // Video reached end, loop it
-                        m_dynamicVideoCap.set(cv::CAP_PROP_POS_FRAMES, 0);
-                        frameRead = m_dynamicVideoCap.read(nextBg);
+                // Try to use cached frame first (updated by timer) - this avoids reader conflicts and improves FPS
+                {
+                    QMutexLocker locker(&m_dynamicVideoMutex);
+                    if (!m_dynamicVideoFrame.empty() && m_dynamicVideoFrame.cols > 0 && m_dynamicVideoFrame.rows > 0) {
+                        nextBg = m_dynamicVideoFrame.clone();
+                        frameRead = true;
+                    } else if (!m_dynamicGpuFrame.empty() && m_dynamicGpuFrame.cols > 0 && m_dynamicGpuFrame.rows > 0) {
+                        // Use cached GPU frame
+                        m_dynamicGpuFrame.download(nextBg);
+                        frameRead = !nextBg.empty();
                     }
-                } else if (!m_dynamicGpuReader.empty()) {
-                    // Try GPU reader
-                    try {
-                        cv::cuda::GpuMat gpu;
-                        if (m_dynamicGpuReader->nextFrame(gpu) && !gpu.empty()) {
-                            if (gpu.type() == CV_8UC4) {
-                                cv::cuda::cvtColor(gpu, gpu, cv::COLOR_BGRA2BGR);
-                            }
-                            gpu.download(nextBg);
-                            frameRead = !nextBg.empty();
-                            // Update cached GPU frame
-                            {
-                                QMutexLocker locker(&m_dynamicVideoMutex);
-                                m_dynamicGpuFrame = gpu;
-                            }
-                        } else {
-                            // GPU reader reached end, restart it
-                            m_dynamicGpuReader.release();
-                            m_dynamicGpuReader = cv::cudacodec::createVideoReader(m_dynamicVideoPath.toStdString());
-                            cv::cuda::GpuMat gpuRetry;
-                            if (!m_dynamicGpuReader.empty() && m_dynamicGpuReader->nextFrame(gpuRetry) && !gpuRetry.empty()) {
-                                if (gpuRetry.type() == CV_8UC4) {
-                                    cv::cuda::cvtColor(gpuRetry, gpuRetry, cv::COLOR_BGRA2BGR);
+                }
+                
+                // Fallback: Only read directly if cached frame is not available
+                if (!frameRead) {
+                    if (!m_dynamicGpuReader.empty()) {
+                        // Try GPU reader
+                        try {
+                            cv::cuda::GpuMat gpu;
+                            if (m_dynamicGpuReader->nextFrame(gpu) && !gpu.empty() && gpu.cols > 0 && gpu.rows > 0) {
+                                if (gpu.type() == CV_8UC4) {
+                                    cv::cuda::cvtColor(gpu, gpu, cv::COLOR_BGRA2BGR);
                                 }
-                                gpuRetry.download(nextBg);
+                                gpu.download(nextBg);
                                 frameRead = !nextBg.empty();
+                                // Update cached frames
                                 {
                                     QMutexLocker locker(&m_dynamicVideoMutex);
-                                    m_dynamicGpuFrame = gpuRetry;
+                                    m_dynamicGpuFrame = gpu;
+                                    if (frameRead) {
+                                        m_dynamicVideoFrame = nextBg.clone();
+                                    }
+                                }
+                            } else {
+                                // GPU reader reached end, restart it
+                                m_dynamicGpuReader.release();
+                                m_dynamicGpuReader = cv::cudacodec::createVideoReader(m_dynamicVideoPath.toStdString());
+                                cv::cuda::GpuMat gpuRetry;
+                                if (!m_dynamicGpuReader.empty() && m_dynamicGpuReader->nextFrame(gpuRetry) && !gpuRetry.empty() && gpuRetry.cols > 0 && gpuRetry.rows > 0) {
+                                    if (gpuRetry.type() == CV_8UC4) {
+                                        cv::cuda::cvtColor(gpuRetry, gpuRetry, cv::COLOR_BGRA2BGR);
+                                    }
+                                    gpuRetry.download(nextBg);
+                                    frameRead = !nextBg.empty();
+                                    {
+                                        QMutexLocker locker(&m_dynamicVideoMutex);
+                                        m_dynamicGpuFrame = gpuRetry;
+                                        if (frameRead) {
+                                            m_dynamicVideoFrame = nextBg.clone();
+                                        }
+                                    }
                                 }
                             }
-                        }
-                    } catch (...) {
-                        // GPU reader failed, try to open CPU reader as fallback
-                        if (!m_dynamicVideoPath.isEmpty()) {
-                            m_dynamicVideoCap.open(m_dynamicVideoPath.toStdString(), cv::CAP_MSMF);
-                            if (!m_dynamicVideoCap.isOpened()) {
-                                m_dynamicVideoCap.open(m_dynamicVideoPath.toStdString(), cv::CAP_FFMPEG);
+                        } catch (...) {
+                            // GPU reader failed, try CPU reader as fallback
+                            if (!m_dynamicVideoPath.isEmpty() && !m_dynamicVideoCap.isOpened()) {
+                                m_dynamicVideoCap.open(m_dynamicVideoPath.toStdString(), cv::CAP_MSMF);
+                                if (!m_dynamicVideoCap.isOpened()) {
+                                    m_dynamicVideoCap.open(m_dynamicVideoPath.toStdString(), cv::CAP_FFMPEG);
+                                }
                             }
                             if (m_dynamicVideoCap.isOpened()) {
                                 frameRead = m_dynamicVideoCap.read(nextBg);
-                                if (!frameRead || nextBg.empty()) {
+                                if (!frameRead || nextBg.empty() || nextBg.cols <= 0 || nextBg.rows <= 0) {
                                     m_dynamicVideoCap.set(cv::CAP_PROP_POS_FRAMES, 0);
-                                    frameRead = m_dynamicVideoCap.read(nextBg);
+                                    frameRead = m_dynamicVideoCap.read(nextBg) && !nextBg.empty() && nextBg.cols > 0 && nextBg.rows > 0;
+                                }
+                                if (frameRead) {
+                                    QMutexLocker locker(&m_dynamicVideoMutex);
+                                    m_dynamicVideoFrame = nextBg.clone();
                                 }
                             }
                         }
-                    }
-                } else {
-                    // No reader open, try to open CPU reader
-                    if (!m_dynamicVideoPath.isEmpty()) {
+                    } else if (m_dynamicVideoCap.isOpened()) {
+                        frameRead = m_dynamicVideoCap.read(nextBg);
+                        if (!frameRead || nextBg.empty() || nextBg.cols <= 0 || nextBg.rows <= 0) {
+                            // Video reached end, loop it
+                            m_dynamicVideoCap.set(cv::CAP_PROP_POS_FRAMES, 0);
+                            frameRead = m_dynamicVideoCap.read(nextBg) && !nextBg.empty() && nextBg.cols > 0 && nextBg.rows > 0;
+                        }
+                        if (frameRead) {
+                            QMutexLocker locker(&m_dynamicVideoMutex);
+                            m_dynamicVideoFrame = nextBg.clone();
+                        }
+                    } else if (!m_dynamicVideoPath.isEmpty()) {
+                        // No reader open, try to open CPU reader
                         m_dynamicVideoCap.open(m_dynamicVideoPath.toStdString(), cv::CAP_MSMF);
                         if (!m_dynamicVideoCap.isOpened()) {
                             m_dynamicVideoCap.open(m_dynamicVideoPath.toStdString(), cv::CAP_FFMPEG);
                         }
                         if (m_dynamicVideoCap.isOpened()) {
                             frameRead = m_dynamicVideoCap.read(nextBg);
-                            if (!frameRead || nextBg.empty()) {
+                            if (!frameRead || nextBg.empty() || nextBg.cols <= 0 || nextBg.rows <= 0) {
                                 m_dynamicVideoCap.set(cv::CAP_PROP_POS_FRAMES, 0);
-                                frameRead = m_dynamicVideoCap.read(nextBg);
+                                frameRead = m_dynamicVideoCap.read(nextBg) && !nextBg.empty() && nextBg.cols > 0 && nextBg.rows > 0;
+                            }
+                            if (frameRead) {
+                                QMutexLocker locker(&m_dynamicVideoMutex);
+                                m_dynamicVideoFrame = nextBg.clone();
                             }
                         }
                     }
                 }
                 
-                if (frameRead && !nextBg.empty()) {
+                if (frameRead && !nextBg.empty() && nextBg.cols > 0 && nextBg.rows > 0) {
                     cv::resize(nextBg, segmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
-                    // Update the cached frame
-                    {
-                        QMutexLocker locker(&m_dynamicVideoMutex);
-                        m_dynamicVideoFrame = nextBg.clone();
-                    }
                 } else {
-                    segmentedFrame = cv::Mat::zeros(frame.size(), frame.type());
-                    qWarning() << "Failed to read video frame from:" << m_dynamicVideoPath;
+                    // Last resort: use cached frame even if empty (better than black)
+                    QMutexLocker locker(&m_dynamicVideoMutex);
+                    if (!m_dynamicVideoFrame.empty() && m_dynamicVideoFrame.cols > 0 && m_dynamicVideoFrame.rows > 0) {
+                        cv::resize(m_dynamicVideoFrame, segmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
+                    } else {
+                        segmentedFrame = cv::Mat::zeros(frame.size(), frame.type());
+                        qWarning() << "Failed to read video frame from:" << m_dynamicVideoPath;
+                    }
                 }
             } catch (const cv::Exception &e) {
                 qWarning() << "CPU segmentation crashed:" << e.what() << "- using black background";
@@ -671,86 +703,102 @@ cv::Mat Capture::createSegmentedFrameGPUOnly(const cv::Mat &frame, const std::ve
                 segmentedFrame = cv::Mat::zeros(frame.size(), frame.type());
             }
         } else if (m_useDynamicVideoBackground) {
-            // CRITICAL FIX: ALWAYS read a NEW frame from video to ensure it's MOVING
-            // Never use cached frames - always advance the video position
+            // PERFORMANCE FIX: Use cached frame from timer to avoid conflicts and improve FPS
+            // The timer updates m_dynamicVideoFrame/m_dynamicGpuFrame, so use those instead of reading directly
             try {
-                cv::Mat nextBg;
                 bool frameRead = false;
                 
-                // ALWAYS read directly from video to advance position
-                if (!m_dynamicGpuReader.empty()) {
-                    // Try GPU reader first
-                    try {
-                        cv::cuda::GpuMat gpu;
-                        if (m_dynamicGpuReader->nextFrame(gpu) && !gpu.empty()) {
-                            if (gpu.type() == CV_8UC4) {
-                                cv::cuda::cvtColor(gpu, gpu, cv::COLOR_BGRA2BGR);
-                            }
-                            cv::cuda::resize(gpu, m_gpuSegmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
-                            m_gpuSegmentedFrame.download(segmentedFrame);
-                            // Update cached GPU frame
-                            {
-                                QMutexLocker locker(&m_dynamicVideoMutex);
-                                m_dynamicGpuFrame = gpu;
-                            }
-                            frameRead = true;
-                        } else {
-                            // GPU reader reached end, restart it
-                            m_dynamicGpuReader.release();
-                            m_dynamicGpuReader = cv::cudacodec::createVideoReader(m_dynamicVideoPath.toStdString());
-                            cv::cuda::GpuMat gpuRetry;
-                            if (!m_dynamicGpuReader.empty() && m_dynamicGpuReader->nextFrame(gpuRetry) && !gpuRetry.empty()) {
-                                if (gpuRetry.type() == CV_8UC4) {
-                                    cv::cuda::cvtColor(gpuRetry, gpuRetry, cv::COLOR_BGRA2BGR);
-                                }
-                                cv::cuda::resize(gpuRetry, m_gpuSegmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
-                                m_gpuSegmentedFrame.download(segmentedFrame);
-                                {
-                                    QMutexLocker locker(&m_dynamicVideoMutex);
-                                    m_dynamicGpuFrame = gpuRetry;
-                                }
-                                frameRead = true;
-                            }
-                        }
-                    } catch (...) {
-                        // GPU reader failed, try CPU below
+                // Try to use cached GPU frame first (updated by timer) - this avoids reader conflicts and improves FPS
+                {
+                    QMutexLocker locker(&m_dynamicVideoMutex);
+                    if (!m_dynamicGpuFrame.empty() && m_dynamicGpuFrame.cols > 0 && m_dynamicGpuFrame.rows > 0) {
+                        cv::cuda::resize(m_dynamicGpuFrame, m_gpuSegmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
+                        m_gpuSegmentedFrame.download(segmentedFrame);
+                        frameRead = true;
+                    } else if (!m_dynamicVideoFrame.empty() && m_dynamicVideoFrame.cols > 0 && m_dynamicVideoFrame.rows > 0) {
+                        // Use cached CPU frame (upload to GPU)
+                        m_gpuBackgroundFrame.upload(m_dynamicVideoFrame);
+                        cv::cuda::resize(m_gpuBackgroundFrame, m_gpuSegmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
+                        m_gpuSegmentedFrame.download(segmentedFrame);
+                        frameRead = true;
                     }
                 }
                 
-                // CPU fallback
+                // Fallback: Only read directly if cached frame is not available
                 if (!frameRead) {
-                    if (m_dynamicVideoCap.isOpened()) {
-                        frameRead = m_dynamicVideoCap.read(nextBg);
-                        if (!frameRead || nextBg.empty()) {
-                            // Video reached end, loop it
-                            m_dynamicVideoCap.set(cv::CAP_PROP_POS_FRAMES, 0);
-                            frameRead = m_dynamicVideoCap.read(nextBg);
-                        }
-                        if (frameRead && !nextBg.empty()) {
-                            // Upload to GPU and resize
-                            m_gpuBackgroundFrame.upload(nextBg);
-                            cv::cuda::resize(m_gpuBackgroundFrame, m_gpuSegmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
-                            m_gpuSegmentedFrame.download(segmentedFrame);
-                            // Update cached frames
-                            {
-                                QMutexLocker locker(&m_dynamicVideoMutex);
-                                m_dynamicVideoFrame = nextBg.clone();
+                    cv::Mat nextBg;
+                    if (!m_dynamicGpuReader.empty()) {
+                        // Try GPU reader first
+                        try {
+                            cv::cuda::GpuMat gpu;
+                            if (m_dynamicGpuReader->nextFrame(gpu) && !gpu.empty() && gpu.cols > 0 && gpu.rows > 0) {
+                                if (gpu.type() == CV_8UC4) {
+                                    cv::cuda::cvtColor(gpu, gpu, cv::COLOR_BGRA2BGR);
+                                }
+                                cv::cuda::resize(gpu, m_gpuSegmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
+                                m_gpuSegmentedFrame.download(segmentedFrame);
+                                // Update cached GPU frame
+                                {
+                                    QMutexLocker locker(&m_dynamicVideoMutex);
+                                    m_dynamicGpuFrame = gpu;
+                                }
+                                frameRead = true;
+                            } else {
+                                // GPU reader reached end, restart it
+                                m_dynamicGpuReader.release();
+                                m_dynamicGpuReader = cv::cudacodec::createVideoReader(m_dynamicVideoPath.toStdString());
+                                cv::cuda::GpuMat gpuRetry;
+                                if (!m_dynamicGpuReader.empty() && m_dynamicGpuReader->nextFrame(gpuRetry) && !gpuRetry.empty() && gpuRetry.cols > 0 && gpuRetry.rows > 0) {
+                                    if (gpuRetry.type() == CV_8UC4) {
+                                        cv::cuda::cvtColor(gpuRetry, gpuRetry, cv::COLOR_BGRA2BGR);
+                                    }
+                                    cv::cuda::resize(gpuRetry, m_gpuSegmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
+                                    m_gpuSegmentedFrame.download(segmentedFrame);
+                                    {
+                                        QMutexLocker locker(&m_dynamicVideoMutex);
+                                        m_dynamicGpuFrame = gpuRetry;
+                                    }
+                                    frameRead = true;
+                                }
                             }
+                        } catch (...) {
+                            // GPU reader failed, try CPU below
                         }
-                    } else {
-                        // No reader open, try to open CPU reader
-                        if (!m_dynamicVideoPath.isEmpty()) {
+                    }
+                    
+                    // CPU fallback
+                    if (!frameRead) {
+                        if (m_dynamicVideoCap.isOpened()) {
+                            frameRead = m_dynamicVideoCap.read(nextBg);
+                            if (!frameRead || nextBg.empty() || nextBg.cols <= 0 || nextBg.rows <= 0) {
+                                // Video reached end, loop it
+                                m_dynamicVideoCap.set(cv::CAP_PROP_POS_FRAMES, 0);
+                                frameRead = m_dynamicVideoCap.read(nextBg) && !nextBg.empty() && nextBg.cols > 0 && nextBg.rows > 0;
+                            }
+                            if (frameRead && !nextBg.empty() && nextBg.cols > 0 && nextBg.rows > 0) {
+                                // Upload to GPU and resize
+                                m_gpuBackgroundFrame.upload(nextBg);
+                                cv::cuda::resize(m_gpuBackgroundFrame, m_gpuSegmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
+                                m_gpuSegmentedFrame.download(segmentedFrame);
+                                // Update cached frames
+                                {
+                                    QMutexLocker locker(&m_dynamicVideoMutex);
+                                    m_dynamicVideoFrame = nextBg.clone();
+                                }
+                            }
+                        } else if (!m_dynamicVideoPath.isEmpty()) {
+                            // No reader open, try to open CPU reader
                             m_dynamicVideoCap.open(m_dynamicVideoPath.toStdString(), cv::CAP_MSMF);
                             if (!m_dynamicVideoCap.isOpened()) {
                                 m_dynamicVideoCap.open(m_dynamicVideoPath.toStdString(), cv::CAP_FFMPEG);
                             }
                             if (m_dynamicVideoCap.isOpened()) {
                                 frameRead = m_dynamicVideoCap.read(nextBg);
-                                if (!frameRead || nextBg.empty()) {
+                                if (!frameRead || nextBg.empty() || nextBg.cols <= 0 || nextBg.rows <= 0) {
                                     m_dynamicVideoCap.set(cv::CAP_PROP_POS_FRAMES, 0);
-                                    frameRead = m_dynamicVideoCap.read(nextBg);
+                                    frameRead = m_dynamicVideoCap.read(nextBg) && !nextBg.empty() && nextBg.cols > 0 && nextBg.rows > 0;
                                 }
-                                if (frameRead && !nextBg.empty()) {
+                                if (frameRead && !nextBg.empty() && nextBg.cols > 0 && nextBg.rows > 0) {
                                     m_gpuBackgroundFrame.upload(nextBg);
                                     cv::cuda::resize(m_gpuBackgroundFrame, m_gpuSegmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
                                     m_gpuSegmentedFrame.download(segmentedFrame);
@@ -765,8 +813,19 @@ cv::Mat Capture::createSegmentedFrameGPUOnly(const cv::Mat &frame, const std::ve
                 }
                 
                 if (!frameRead || segmentedFrame.empty()) {
-                    segmentedFrame = cv::Mat::zeros(frame.size(), frame.type());
-                    qWarning() << "Failed to read video frame for GPU segmentation from:" << m_dynamicVideoPath;
+                    // Last resort: use cached frame even if empty (better than black)
+                    QMutexLocker locker(&m_dynamicVideoMutex);
+                    if (!m_dynamicGpuFrame.empty() && m_dynamicGpuFrame.cols > 0 && m_dynamicGpuFrame.rows > 0) {
+                        cv::cuda::resize(m_dynamicGpuFrame, m_gpuSegmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
+                        m_gpuSegmentedFrame.download(segmentedFrame);
+                    } else if (!m_dynamicVideoFrame.empty() && m_dynamicVideoFrame.cols > 0 && m_dynamicVideoFrame.rows > 0) {
+                        m_gpuBackgroundFrame.upload(m_dynamicVideoFrame);
+                        cv::cuda::resize(m_gpuBackgroundFrame, m_gpuSegmentedFrame, frame.size(), 0, 0, cv::INTER_LINEAR);
+                        m_gpuSegmentedFrame.download(segmentedFrame);
+                    } else {
+                        segmentedFrame = cv::Mat::zeros(frame.size(), frame.type());
+                        qWarning() << "Failed to read video frame for GPU segmentation from:" << m_dynamicVideoPath;
+                    }
                 }
             } catch (const cv::Exception &e) {
                 qWarning() << "GPU segmentation crashed:" << e.what() << "- using black background";
@@ -1544,4 +1603,5 @@ cv::Mat Capture::enhancedSilhouetteSegmentGPUOnly(const cv::cuda::GpuMat &gpuFra
 
     return fullMask;
 }
+
 

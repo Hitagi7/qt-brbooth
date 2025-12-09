@@ -25,7 +25,9 @@ cv::Mat Capture::applyPostProcessingLighting()
     // Start from a clean background template/dynamic video frame (no person composited yet)
     cv::Mat result;
     cv::Mat cleanBackground;
-    if (!m_lastTemplateBackground.empty()) {
+    // Only use cached template background if we're actually using background templates
+    // This prevents using stale cached backgrounds from previous template selections
+    if (m_useBackgroundTemplate && !m_selectedBackgroundTemplate.isEmpty() && !m_lastTemplateBackground.empty()) {
         cleanBackground = m_lastTemplateBackground.clone();
         qDebug() << "POST-PROCESSING: Using cached template background";
     } else if (m_useBackgroundTemplate && !m_selectedBackgroundTemplate.isEmpty()) {
