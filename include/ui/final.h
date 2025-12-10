@@ -37,7 +37,7 @@ signals:
     void backToLandingPage();
 
 private slots:
-    void on_back_clicked();
+    void on_retake_clicked();
     void on_save_clicked();
     void playNextFrame(); // Slot to advance video playback
 

@@ -96,36 +96,8 @@ Final::Final(QWidget *parent)
         overlayImageLabel->raise(); // Foreground template on top
     }
     ui->overlayFinal->raise(); // UI elements (buttons) on top
-    ui->back->raise();         // Ensure back button is clickable
     ui->save->raise();         // Ensure save button is clickable
-
-    // --- Existing setup for buttons and timers ---
-
-    // Setting Up Back Icon
-    ui->back->setIcon(QIcon(":/icons/Icons/normal.svg")); // Adjust path as necessary
-    ui->back->setIconSize(QSize(100, 100));
-
-    Iconhover *backButtonHover = new Iconhover(this); // 'this' as parent for memory management
-    ui->back->installEventFilter(backButtonHover);
-
-    // Set button styles
-    ui->back->setStyleSheet("QPushButton {"
-                            "   background: transparent;"
-                            "   border: none;"
-                            "   color: white;"
-                            "}");
-
-    ui->save->setStyleSheet("QPushButton {"
-                            "   border-radius: 9px;"
-                            "   border-bottom: 3px solid rgba(2, 2, 2, 200);" // Subtle shadow
-                            "   background: rgba(11, 194, 0, 200);" // Your original green color
-                            "   color: white;"
-                            "   font-size: 16px;"
-                            "   font-weight: bold;"
-                            "}"
-                            "QPushButton:hover {"
-                            "   background: rgba(8, 154, 0, 230);" // Your original hover color
-                            "}");
+    ui->retake->raise();       // Ensure retake button is clickable
 
     videoPlaybackTimer = new QTimer(this);
     videoPlaybackTimer->setTimerType(Qt::PreciseTimer); // Use precise timer for better timing accuracy
@@ -208,8 +180,8 @@ void Final::resizeEvent(QResizeEvent *event)
 
     // Ensure buttons remain on top after resize (same as capture interface)
     ui->overlayFinal->raise();
-    ui->back->raise();
     ui->save->raise();
+    ui->retake->raise();
 
     // <== CRITICAL: Re-scale and display the content when the widget resizes
     refreshDisplay();
@@ -389,8 +361,8 @@ void Final::setForegroundOverlay(const QString &foregroundPath)
     
     // Ensure buttons remain on top after setting overlay (same as capture interface)
     ui->overlayFinal->raise();
-    ui->back->raise();
     ui->save->raise();
+    ui->retake->raise();
     
     qDebug() << "Foreground overlay set successfully from:" << foregroundPath;
 }
@@ -424,7 +396,7 @@ void Final::playNextFrame()
 
 // --- STANDARD SLOTS AND HELPER FUNCTIONS (unchanged from your original) ---
 
-void Final::on_back_clicked()
+void Final::on_retake_clicked()
 {
     if (videoPlaybackTimer->isActive()) {
         videoPlaybackTimer->stop();
