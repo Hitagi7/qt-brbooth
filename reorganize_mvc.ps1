@@ -88,3 +88,4 @@ Move-Item -Path "include\core\brbooth.h" -Destination "include\controllers\main\
 
 Write-Host "File reorganization complete!"
 Write-Host "Next: Update include paths in all files and update qt-brbooth.pro"
+
