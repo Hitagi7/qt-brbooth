@@ -123,6 +123,8 @@ OutputPreview::OutputPreview(QWidget *parent)
         "}"
     );
     previewBackButton->setWindowFlags(Qt::WindowStaysOnTopHint | Qt::FramelessWindowHint | Qt::Tool);
+    previewBackButton->setAttribute(Qt::WA_TranslucentBackground, true);
+    previewBackButton->setAttribute(Qt::WA_NoSystemBackground, true);
     previewBackButton->hide();
     
     Iconhover *previewBackButtonHover = new Iconhover(this);
@@ -874,6 +876,8 @@ void OutputPreview::showFullscreenPreview(const QString &filePath)
     QPoint originalBackButtonPos = ui->back->pos();
     QPoint globalPos = this->mapToGlobal(originalBackButtonPos);
     previewBackButton->move(globalPos);
+    previewBackButton->setAttribute(Qt::WA_TranslucentBackground, true);
+    previewBackButton->setAttribute(Qt::WA_NoSystemBackground, true);
     previewBackButton->show();
     previewBackButton->raise();
     previewBackButton->setAttribute(Qt::WA_AlwaysStackOnTop, true);
