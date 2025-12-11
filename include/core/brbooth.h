@@ -19,7 +19,6 @@ class Confirm;
 class Idle;
 class OutputPreview;
 class Camera; // Forward declare Camera worker class
-class SystemMonitor; // Forward declare SystemMonitor class
 class SessionManager; // Forward declare SessionManager class
 
 QT_BEGIN_NAMESPACE
@@ -36,9 +35,6 @@ public:
     
     // CUDA test function
     void testCudaFunctionality();
-    
-    // System monitor access
-    SystemMonitor* getSystemMonitor() const { return m_systemMonitor; }
 
 protected:
     void resizeEvent(QResizeEvent *event) override;
@@ -120,9 +116,6 @@ private:
     int m_pageBeforeIdle;
     bool m_isIdleModeActive;
     bool m_idleTimerEnabled;
-    
-    // System monitoring
-    SystemMonitor *m_systemMonitor;
     
     // Session management
     SessionManager *m_sessionManager;

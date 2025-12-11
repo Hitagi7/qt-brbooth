@@ -25,7 +25,6 @@
 #include <QFile>
 #include <QShortcut>
 #include "core/videotemplate.h"
-#include "core/system_monitor.h"
 #include "core/session_manager.h"
 #include <chrono>
 #include <csignal>
@@ -37,7 +36,6 @@ BRBooth::BRBooth(QWidget *parent)
     , cameraThread(new QThread(this)) // Initialize cameraThread first
     , cameraWorker(new Camera())      // Initialize cameraWorker second
     , lastVisitedPageIndex(0) // Initialize lastVisitedPageIndex (will be overwritten by initial showLandingPage)
-    , m_systemMonitor(nullptr) // Initialize system monitor pointer
     , m_sessionManager(nullptr) // Initialize session manager pointer
 {
     qDebug() << "OpenCV Version: " << CV_VERSION;
@@ -231,18 +229,6 @@ BRBooth::BRBooth(QWidget *parent)
     foregroundPageIndex = ui->stackedWidget->indexOf(foregroundPage);
     dynamicPageIndex = ui->stackedWidget->indexOf(dynamicPage);
 
-    // Initialize system monitor FIRST (before creating Capture page)
-    m_systemMonitor = new SystemMonitor(this);
-    qDebug() << "BRBooth: SystemMonitor created at address:" << (void*)m_systemMonitor;
-    qDebug() << "BRBooth: SystemMonitor pointer alignment check:" << (reinterpret_cast<uintptr_t>(m_systemMonitor) % 8 == 0 ? "VALID" : "INVALID");
-    
-    if (m_systemMonitor->initialize()) {
-        m_systemMonitor->startMonitoring(5000); // 5 seconds interval
-        qDebug() << "SystemMonitor: Started monitoring with 5-second interval";
-    } else {
-        qWarning() << "SystemMonitor: Failed to initialize";
-    }
-
     // Initialize session manager (creates session folder and first user folder)
     m_sessionManager = new SessionManager(this);
     m_sessionManager->initializeSession();
@@ -259,17 +245,6 @@ BRBooth::BRBooth(QWidget *parent)
     ui->stackedWidget->addWidget(capturePage);
     capturePageIndex = ui->stackedWidget->indexOf(capturePage);
     
-    // Connect system monitor to capture page for FPS tracking (NOW it exists!)
-    if (capturePage && m_systemMonitor) {
-        qDebug() << "BRBooth: About to connect SystemMonitor to Capture";
-        qDebug() << "BRBooth: m_systemMonitor pointer:" << (void*)m_systemMonitor;
-        qDebug() << "BRBooth: capturePage pointer:" << (void*)capturePage;
-        capturePage->setSystemMonitor(m_systemMonitor);
-        qDebug() << "SystemMonitor connected to Capture page for FPS tracking";
-    } else {
-        qWarning() << "BRBooth: Cannot connect SystemMonitor - capturePage:" << (void*)capturePage << "m_systemMonitor:" << (void*)m_systemMonitor;
-    }
-
     // Connect session manager to capture page for auto-save
     if (capturePage && m_sessionManager) {
         capturePage->setSessionManager(m_sessionManager);
@@ -635,12 +610,6 @@ BRBooth::BRBooth(QWidget *parent)
 
 BRBooth::~BRBooth()
 {
-    // Save statistics before cleanup
-    if (m_systemMonitor) {
-        qDebug() << "Saving final statistics before shutdown...";
-        m_systemMonitor->saveStatisticsToText();
-    }
-    
     // Clean up camera thread and worker in BRBooth destructor
     emit stopCameraWorker(); // Signal to worker to stop
     cameraThread->quit();    // Tell thread to exit event loop

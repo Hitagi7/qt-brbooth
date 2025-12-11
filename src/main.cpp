@@ -9,25 +9,14 @@
 #include <opencv2/cudaimgproc.hpp>
 #include <opencv2/cudawarping.hpp>
 #include <opencv2/cudafilters.hpp>
-#include "core/system_monitor.h"
 #include <csignal>
 #include <cstdlib>
 #include <windows.h>
-
-// Global pointer to system monitor for crash handler
-static SystemMonitor* g_systemMonitor = nullptr;
 
 // Crash handler function
 void crashHandler(int signal)
 {
     qDebug() << "CRASH DETECTED! Signal:" << signal;
-    qDebug() << "Attempting to save statistics...";
-    
-    if (g_systemMonitor) {
-        g_systemMonitor->saveStatisticsToText();
-        qDebug() << "Statistics saved to text file";
-    }
-    
     // Exit
     std::exit(1);
 }
@@ -36,13 +25,6 @@ void crashHandler(int signal)
 LONG WINAPI exceptionHandler(EXCEPTION_POINTERS* exceptionInfo)
 {
     qDebug() << "WINDOWS EXCEPTION DETECTED! Code:" << exceptionInfo->ExceptionRecord->ExceptionCode;
-    qDebug() << "Attempting to save statistics...";
-    
-    if (g_systemMonitor) {
-        g_systemMonitor->saveStatisticsToText();
-        qDebug() << "Statistics saved to text file";
-    }
-    
     return EXCEPTION_EXECUTE_HANDLER;
 }
 
@@ -171,14 +153,8 @@ int main(int argc, char *argv[])
     
     BRBooth w;
     
-    // Get system monitor from BRBooth for crash handler
-    g_systemMonitor = w.getSystemMonitor();
-    
     w.showFullScreen();
     int result = a.exec();
-    
-    // Clean up
-    g_systemMonitor = nullptr;
     
     return result;
 }

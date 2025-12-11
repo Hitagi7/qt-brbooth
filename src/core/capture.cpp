@@ -44,7 +44,6 @@
 #include <chrono>
 #include <QFutureWatcher>
 #include "core/lighting_corrector.h"
-#include "core/system_monitor.h"
 #include "core/session_manager.h"
 
 // Fixed segmentation rectangle configuration
@@ -120,7 +119,6 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     , m_useGPU(false)
     , m_useCUDA(false)
     , m_gpuUtilized(false)
-    , m_systemMonitor(nullptr)
     , m_sessionManager(nullptr)
     , m_cudaUtilized(false)
     , m_personDetectionWatcher(nullptr)
@@ -793,17 +791,6 @@ void Capture::updateCameraFeed(const QImage &image)
             // Reset for next measurement window
             fpsWindowTimer.restart();
             fpsFrameCount = 0;
-            
-            // Update system monitor with smoothed FPS
-            if (m_systemMonitor) {
-                try {
-                    m_systemMonitor->updateFPS(smoothedFPS);
-                } catch (const std::exception& e) {
-                    qDebug() << "Capture: Exception during FPS update:" << e.what();
-                } catch (...) {
-                    qDebug() << "Capture: Unknown exception during FPS update";
-                }
-            }
             
             // Debug log every 5 seconds
             static int logCounter = 0;
@@ -3148,12 +3135,6 @@ void Capture::setPersonDetectionConfidenceThreshold(double threshold)
 double Capture::getPersonDetectionConfidenceThreshold() const
 {
     return 0.0; // Default threshold
-}
-
-void Capture::setSystemMonitor(SystemMonitor* monitor)
-{
-    qDebug() << "Capture::setSystemMonitor() called with pointer:" << (void*)monitor;
-    m_systemMonitor = monitor;
 }
 
 void Capture::setSessionManager(SessionManager* sessionManager)

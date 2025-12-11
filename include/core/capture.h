@@ -200,8 +200,6 @@ public:
     double getPersonDetectionConfidenceThreshold() const;
     void togglePersonDetection();
     
-    // System monitor integration
-    void setSystemMonitor(class SystemMonitor* monitor);
     void updatePersonDetectionButton();
     double getPersonDetectionProcessingTime() const;
     bool isGPUAvailable() const;
@@ -322,8 +320,6 @@ private:
     // pass foreground
     QLabel* overlayImageLabel = nullptr;
     
-    // System monitor for FPS tracking
-    class SystemMonitor* m_systemMonitor;
     class SessionManager* m_sessionManager;
     
     // Status overlay for key presses

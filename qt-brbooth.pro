@@ -51,7 +51,6 @@ SOURCES += \
     src/core/capture_lighting.cpp \
     src/core/capture_edge_blending.cpp \
     src/core/gpu_memory_pool.cpp \
-    src/core/system_monitor.cpp \
     src/core/session_manager.cpp \
     src/ui/loading.cpp \
     src/ui/confirm.cpp \
@@ -69,7 +68,6 @@ HEADERS += \
     include/core/camera.h \
     include/core/capture.h \
     include/core/capture_edge_blending.h \
-    include/core/system_monitor.h \
     include/core/session_manager.h \
     include/core/videotemplate.h \
     include/core/common_types.h \
