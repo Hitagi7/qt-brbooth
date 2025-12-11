@@ -17,8 +17,10 @@ class Final;
 class Loading;
 class Confirm;
 class Idle;
+class OutputPreview;
 class Camera; // Forward declare Camera worker class
 class SystemMonitor; // Forward declare SystemMonitor class
+class SessionManager; // Forward declare SessionManager class
 
 QT_BEGIN_NAMESPACE
 namespace Ui { class BRBooth; }
@@ -50,6 +52,7 @@ private slots:
     void showBackgroundPage();
     void showCapturePage();
     void showFinalOutputPage();
+    void showOutputPreviewPage();
     void showIdlePage();
     
     // GIF management
@@ -88,6 +91,7 @@ private:
     Final *finalOutputPage;
     Loading *loadingPage;
     Confirm *confirmPage;
+    OutputPreview *outputPreviewPage;
     Idle *idlePage;
 
     // Indices for the stacked widget pages
@@ -99,6 +103,7 @@ private:
     int loadingPageIndex;
     int confirmPageIndex;
     int finalOutputPageIndex;
+    int outputPreviewPageIndex;
     int idlePageIndex;
 
     // To keep track of the page visited before going to Capture or Final, for "back" navigation
@@ -118,5 +123,8 @@ private:
     
     // System monitoring
     SystemMonitor *m_systemMonitor;
+    
+    // Session management
+    SessionManager *m_sessionManager;
 };
 #endif // BRBOOTH_H

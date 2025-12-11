@@ -406,6 +406,14 @@ void Final::on_retake_clicked()
 
 void Final::on_save_clicked()
 {
+    // For now, just emit signal to go to output preview page
+    // Save functionality will be added later
+    qDebug() << "Final: Proceed button clicked - navigating to output preview";
+    emit proceedToOutputPreview();
+    return;
+    
+    // TODO: Re-enable save functionality when needed
+    /*
     if (!m_videoFrames.isEmpty()) {
         // We have video frames, so save as a video
         saveVideoToFile();
@@ -494,6 +502,7 @@ void Final::on_save_clicked()
         }
     }
     emit backToLandingPage();
+    */
 }
 
 // Helper function to convert QImage to cv::Mat

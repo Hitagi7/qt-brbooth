@@ -207,6 +207,9 @@ public:
     bool isGPUAvailable() const;
     bool isCUDAAvailable() const;
     
+    // Session manager integration
+    void setSessionManager(class SessionManager* sessionManager);
+    
     // Green-screen segmentation controls
     void setGreenScreenEnabled(bool enabled);
     bool isGreenScreenEnabled() const;
@@ -233,6 +236,7 @@ signals:
     void showLoadingPage(); // Show loading UI during post-processing
     void showConfirmPage(); // Show confirm page after dynamic recording
     void showFinalOutputPage();
+    void showOutputPreviewPage(); // Show output preview page for selection
     void personDetectedInFrame();
     void foregroundPathChanged(const QString &foregroundPath);
 
@@ -320,6 +324,7 @@ private:
     
     // System monitor for FPS tracking
     class SystemMonitor* m_systemMonitor;
+    class SessionManager* m_sessionManager;
     
     // Status overlay for key presses
     QLabel* statusOverlay = nullptr;
@@ -368,6 +373,9 @@ private:
     // Background Template Members
     QString m_selectedBackgroundTemplate;  // Store the selected background template path
     bool m_useBackgroundTemplate;  // Track if background template should be used in segmentation
+    
+    // Foreground Overlay Members
+    QString m_foregroundOverlayPath;  // Store the selected foreground overlay path
 
     // Dynamic Video Background Members
     bool m_useDynamicVideoBackground; // If true, use video frames as segmentation background

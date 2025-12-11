@@ -35,6 +35,7 @@ public:
 signals:
     void backToCapturePage();
     void backToLandingPage();
+    void proceedToOutputPreview();
 
 private slots:
     void on_retake_clicked();

@@ -52,6 +52,7 @@ SOURCES += \
     src/core/capture_edge_blending.cpp \
     src/core/gpu_memory_pool.cpp \
     src/core/system_monitor.cpp \
+    src/core/session_manager.cpp \
     src/ui/loading.cpp \
     src/ui/confirm.cpp \
     src/ui/background.cpp \
@@ -59,6 +60,7 @@ SOURCES += \
     src/ui/dynamic.cpp \
     src/ui/final.cpp \
     src/ui/idle.cpp \
+    src/ui/outputpreview.cpp \
     src/ui/iconhover.cpp \
     src/core/lighting_corrector.cpp
 
@@ -68,6 +70,7 @@ HEADERS += \
     include/core/capture.h \
     include/core/capture_edge_blending.h \
     include/core/system_monitor.h \
+    include/core/session_manager.h \
     include/core/videotemplate.h \
     include/core/common_types.h \
     include/ui/loading.h \
@@ -77,6 +80,7 @@ HEADERS += \
     include/ui/dynamic.h \
     include/ui/final.h \
     include/ui/idle.h \
+    include/ui/outputpreview.h \
     include/ui/iconhover.h \
     include/core/lighting_corrector.h
 
@@ -89,7 +93,8 @@ FORMS += \
     ui/final.ui \
     ui/idle.ui \
     ui/loading.ui \
-    ui/foreground.ui
+    ui/foreground.ui \
+    ui/outputpreview.ui
 
 # Default rules for deployment.
 qnx: target.path = /tmp/$${TARGET}/bin

@@ -9,6 +9,7 @@
 #include "ui/confirm.h"
 #include "ui/foreground.h"
 #include "ui/idle.h"
+#include "ui/outputpreview.h"
 #include "ui_brbooth.h"
 #include <QThread>
 #include <QDebug>
@@ -25,6 +26,7 @@
 #include <QShortcut>
 #include "core/videotemplate.h"
 #include "core/system_monitor.h"
+#include "core/session_manager.h"
 #include <chrono>
 #include <csignal>
 #include <cstdlib>
@@ -36,6 +38,7 @@ BRBooth::BRBooth(QWidget *parent)
     , cameraWorker(new Camera())      // Initialize cameraWorker second
     , lastVisitedPageIndex(0) // Initialize lastVisitedPageIndex (will be overwritten by initial showLandingPage)
     , m_systemMonitor(nullptr) // Initialize system monitor pointer
+    , m_sessionManager(nullptr) // Initialize session manager pointer
 {
     qDebug() << "OpenCV Version: " << CV_VERSION;
 
@@ -240,6 +243,12 @@ BRBooth::BRBooth(QWidget *parent)
         qWarning() << "SystemMonitor: Failed to initialize";
     }
 
+    // Initialize session manager (creates session folder and first user folder)
+    m_sessionManager = new SessionManager(this);
+    m_sessionManager->initializeSession();
+    qDebug() << "BRBooth: SessionManager initialized - session folder:" << m_sessionManager->getSessionFolderPath();
+    qDebug() << "BRBooth: SessionManager - current user folder:" << m_sessionManager->getCurrentUserFolderPath();
+
     // Create new pages and add them to the stacked widget
     backgroundPage = new Background(this);
     ui->stackedWidget->addWidget(backgroundPage);
@@ -261,6 +270,14 @@ BRBooth::BRBooth(QWidget *parent)
         qWarning() << "BRBooth: Cannot connect SystemMonitor - capturePage:" << (void*)capturePage << "m_systemMonitor:" << (void*)m_systemMonitor;
     }
 
+    // Connect session manager to capture page for auto-save
+    if (capturePage && m_sessionManager) {
+        capturePage->setSessionManager(m_sessionManager);
+        qDebug() << "SessionManager connected to Capture page for auto-save";
+    } else {
+        qWarning() << "BRBooth: Cannot connect SessionManager - capturePage:" << (void*)capturePage << "m_sessionManager:" << (void*)m_sessionManager;
+    }
+
     finalOutputPage = new Final(this);
     ui->stackedWidget->addWidget(finalOutputPage);
     finalOutputPageIndex = ui->stackedWidget->indexOf(finalOutputPage);
@@ -279,6 +296,19 @@ BRBooth::BRBooth(QWidget *parent)
     idlePage = new Idle(this);
     ui->stackedWidget->addWidget(idlePage);
     idlePageIndex = ui->stackedWidget->indexOf(idlePage);
+
+    // Output Preview page (shown when proceeding from final output)
+    outputPreviewPage = new OutputPreview(this);
+    ui->stackedWidget->addWidget(outputPreviewPage);
+    outputPreviewPageIndex = ui->stackedWidget->indexOf(outputPreviewPage);
+    
+    // Connect session manager to output preview page (AFTER creating the page)
+    if (outputPreviewPage && m_sessionManager) {
+        outputPreviewPage->setSessionManager(m_sessionManager);
+        qDebug() << "SessionManager connected to OutputPreview page";
+    } else {
+        qWarning() << "BRBooth: Cannot connect SessionManager to OutputPreview - outputPreviewPage:" << (void*)outputPreviewPage << "m_sessionManager:" << (void*)m_sessionManager;
+    }
 
     // Set initial page
     showLandingPage();
@@ -418,7 +448,7 @@ BRBooth::BRBooth(QWidget *parent)
             ui->stackedWidget->setCurrentIndex(loadingPageIndex);
         });
         
-        // When capture completes, show final output page directly
+        // When capture completes, show final output page
         connect(capturePage, &Capture::showFinalOutputPage, this, [this]() {
             qDebug() << "Post-processing complete - showing final output page";
             ui->stackedWidget->setCurrentIndex(finalOutputPageIndex);
@@ -483,6 +513,12 @@ BRBooth::BRBooth(QWidget *parent)
             showCapturePage();
         });
         connect(finalOutputPage, &Final::backToLandingPage, this, &BRBooth::showLandingPage);
+        connect(finalOutputPage, &Final::proceedToOutputPreview, this, &BRBooth::showOutputPreviewPage);
+    }
+
+    if (outputPreviewPage) {
+        connect(outputPreviewPage, &OutputPreview::backToFinalPage, this, &BRBooth::showFinalOutputPage);
+        connect(outputPreviewPage, &OutputPreview::backToLandingPage, this, &BRBooth::showLandingPage);
     }
 
     // Resets pages when they are loaded (useful for clearing selections etc.)
@@ -498,8 +534,9 @@ BRBooth::BRBooth(QWidget *parent)
         if (index == capturePageIndex || 
             index == confirmPageIndex || 
             index == loadingPageIndex || 
-            index == finalOutputPageIndex) {
-            // Disable idle timer on capture, confirm, loading, and final pages
+            index == finalOutputPageIndex ||
+            index == outputPreviewPageIndex) {
+            // Disable idle timer on capture, confirm, loading, final, and output preview pages
             stopIdleTimer();
             qDebug() << "Idle timer disabled for page index:" << index;
         } else if (index == landingPageIndex || 
@@ -825,6 +862,12 @@ void BRBooth::showFinalOutputPage()
     // The capture page is always the immediate previous page, so we don't need to save it
     qDebug() << "DEBUG: showFinalOutputPage() called. Preserving lastVisitedPageIndex:" << lastVisitedPageIndex;
     ui->stackedWidget->setCurrentIndex(finalOutputPageIndex);
+}
+
+void BRBooth::showOutputPreviewPage()
+{
+    qDebug() << "DEBUG: showOutputPreviewPage() called";
+    ui->stackedWidget->setCurrentIndex(outputPreviewPageIndex);
 }
 
 

@@ -45,6 +45,7 @@
 #include <QFutureWatcher>
 #include "core/lighting_corrector.h"
 #include "core/system_monitor.h"
+#include "core/session_manager.h"
 
 // Fixed segmentation rectangle configuration
 // Adjust kFixedRectX and kFixedRectY to reposition the rectangle on screen.
@@ -120,6 +121,7 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     , m_useCUDA(false)
     , m_gpuUtilized(false)
     , m_systemMonitor(nullptr)
+    , m_sessionManager(nullptr)
     , m_cudaUtilized(false)
     , m_personDetectionWatcher(nullptr)
     , m_lastDetections()
@@ -317,6 +319,12 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     ui->videoLabel->show();
 
     connect(foreground, &Foreground::foregroundChanged, this, &Capture::updateForegroundOverlay);
+    
+    // Store initial foreground overlay path
+    if (!selectedOverlay.isEmpty()) {
+        m_foregroundOverlayPath = selectedOverlay;
+    }
+    
     QPixmap overlayPixmap(selectedOverlay);
     overlayImageLabel->setPixmap(overlayPixmap);
 
@@ -1258,6 +1266,9 @@ void Capture::updateRecordTimer()
 void Capture::updateForegroundOverlay(const QString &path)
 {
     qDebug() << "Foreground overlay updated to:" << path;
+    
+    // Store the foreground overlay path for compositing into saved images
+    m_foregroundOverlayPath = path;
 
     if (!overlayImageLabel) {
         qWarning() << "overlayImageLabel is null! Cannot update overlay.";
@@ -1268,6 +1279,7 @@ void Capture::updateForegroundOverlay(const QString &path)
     if (overlayPixmap.isNull()) {
         qWarning() << "Failed to load overlay image from path:" << path;
         overlayImageLabel->hide();
+        m_foregroundOverlayPath.clear(); // Clear path if loading failed
         return;
     }
     overlayImageLabel->setPixmap(overlayPixmap);
@@ -1955,14 +1967,45 @@ void Capture::startPostProcessing()
                 try {
                     QList<QPixmap> processedFrames = processRecordedVideoWithLighting(m_recordedFrames, m_adjustedRecordingFPS);
                     if (!processedFrames.isEmpty()) {
+                        // Auto-save processed video
+                        if (m_sessionManager) {
+                            qDebug() << "DYNAMIC: Saving processed video with" << processedFrames.size() << "frames";
+                            QString savedPath = m_sessionManager->saveVideo(processedFrames, m_adjustedRecordingFPS);
+                            if (!savedPath.isEmpty()) {
+                                qDebug() << "DYNAMIC: Auto-saved processed video to:" << savedPath;
+                            } else {
+                                qWarning() << "DYNAMIC: Failed to save processed video - savedPath is empty";
+                            }
+                        } else {
+                            qWarning() << "DYNAMIC: SessionManager is NULL - cannot save processed video!";
+                        }
                         emit videoRecordedWithComparison(processedFrames, m_originalRecordedFrames, m_adjustedRecordingFPS);
                     } else {
                         qWarning() << " Processed frames empty, using original frames";
+                        // Auto-save original video
+                        if (m_sessionManager) {
+                            qDebug() << "DYNAMIC: Saving original video with" << m_recordedFrames.size() << "frames";
+                            QString savedPath = m_sessionManager->saveVideo(m_recordedFrames, m_adjustedRecordingFPS);
+                            if (!savedPath.isEmpty()) {
+                                qDebug() << "DYNAMIC: Auto-saved original video to:" << savedPath;
+                            } else {
+                                qWarning() << "DYNAMIC: Failed to save original video - savedPath is empty";
+                            }
+                        } else {
+                            qWarning() << "DYNAMIC: SessionManager is NULL - cannot save original video!";
+                        }
                         emit videoRecorded(m_recordedFrames, m_adjustedRecordingFPS);
                     }
                     emit showFinalOutputPage();
                 } catch (const std::exception& e) {
                     qWarning() << " Synchronous processing failed:" << e.what() << "- using original frames";
+                    // Auto-save original video
+                    if (m_sessionManager) {
+                        QString savedPath = m_sessionManager->saveVideo(m_recordedFrames, m_adjustedRecordingFPS);
+                        if (!savedPath.isEmpty()) {
+                            qDebug() << "DYNAMIC: Auto-saved original video (fallback) to:" << savedPath;
+                        }
+                    }
                     emit videoRecorded(m_recordedFrames, m_adjustedRecordingFPS);
                     emit showFinalOutputPage();
                 }
@@ -2001,7 +2044,15 @@ void Capture::startPostProcessing()
             qDebug() << " Video processing started in background thread - UI will remain responsive";
             
         } else {
-            qDebug() << "No lighting correction needed - sending original frames to final output";
+            qDebug() << "No lighting correction needed - auto-saving and sending original frames to final output";
+            
+            // Auto-save original video
+            if (m_sessionManager) {
+                QString savedPath = m_sessionManager->saveVideo(m_recordedFrames, m_adjustedRecordingFPS);
+                if (!savedPath.isEmpty()) {
+                    qDebug() << "DYNAMIC: Auto-saved original video to:" << savedPath;
+                }
+            }
             
             // Send original frames to final output page
             emit videoRecorded(m_recordedFrames, m_adjustedRecordingFPS);
@@ -2012,12 +2063,24 @@ void Capture::startPostProcessing()
         }
     } catch (const std::exception& e) {
         qWarning() << " Exception in startPostProcessing:" << e.what();
-        // Fallback: send original frames
+        // Fallback: auto-save and send original frames
+        if (m_sessionManager) {
+            QString savedPath = m_sessionManager->saveVideo(m_recordedFrames, m_adjustedRecordingFPS);
+            if (!savedPath.isEmpty()) {
+                qDebug() << "DYNAMIC: Auto-saved original video (exception fallback) to:" << savedPath;
+            }
+        }
         emit videoRecorded(m_recordedFrames, m_adjustedRecordingFPS);
         emit showFinalOutputPage();
     } catch (...) {
         qWarning() << " Unknown exception in startPostProcessing";
-        // Fallback: send original frames
+        // Fallback: auto-save and send original frames
+        if (m_sessionManager) {
+            QString savedPath = m_sessionManager->saveVideo(m_recordedFrames, m_adjustedRecordingFPS);
+            if (!savedPath.isEmpty()) {
+                qDebug() << "DYNAMIC: Auto-saved original video (unknown exception fallback) to:" << savedPath;
+            }
+        }
         emit videoRecorded(m_recordedFrames, m_adjustedRecordingFPS);
         emit showFinalOutputPage();
     }
@@ -2144,7 +2207,49 @@ void Capture::performImageCapture()
             }
         }
 
-        m_capturedImage = scaledPixmap;
+        // Composite foreground overlay onto the captured image if available
+        QPixmap finalImage = scaledPixmap;
+        if (!m_foregroundOverlayPath.isEmpty()) {
+            qDebug() << "Foreground overlay path available for compositing:" << m_foregroundOverlayPath;
+            QPixmap overlayPixmap(m_foregroundOverlayPath);
+            if (!overlayPixmap.isNull()) {
+                qDebug() << "Foreground overlay loaded, size:" << overlayPixmap.size();
+                
+                // Scale overlay to match captured image size
+                QPixmap scaledOverlay = overlayPixmap.scaled(
+                    finalImage.size(),
+                    Qt::KeepAspectRatioByExpanding,
+                    Qt::SmoothTransformation
+                );
+                
+                // Center crop if overlay is larger than final image
+                if (scaledOverlay.size() != finalImage.size()) {
+                    int x = (scaledOverlay.width() - finalImage.width()) / 2;
+                    int y = (scaledOverlay.height() - finalImage.height()) / 2;
+                    scaledOverlay = scaledOverlay.copy(x, y, finalImage.width(), finalImage.height());
+                }
+                
+                // Ensure final image has alpha channel for proper compositing
+                if (finalImage.hasAlphaChannel() == false) {
+                    finalImage = finalImage.copy();
+                }
+                
+                // Composite overlay onto final image with transparency support
+                QPainter painter(&finalImage);
+                painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+                painter.setRenderHint(QPainter::Antialiasing);
+                painter.drawPixmap(0, 0, scaledOverlay);
+                painter.end();
+                
+                qDebug() << "Composited foreground overlay onto captured image, final size:" << finalImage.size();
+            } else {
+                qWarning() << "Failed to load foreground overlay for compositing:" << m_foregroundOverlayPath;
+            }
+        } else {
+            qDebug() << "No foreground overlay path set, skipping compositing";
+        }
+        
+        m_capturedImage = finalImage;
         
         // LOADING UI INTEGRATION: Show loading page with original frame background
         if (m_hasLightingComparison && !m_originalCapturedImage.empty()) {
@@ -2208,10 +2313,27 @@ void Capture::performImageCapture()
                 qDebug() << "STATIC: Processing progress 90%";
         });
         
-            // FINALLY: Send processed image to final output page (after processing simulation)
-            QTimer::singleShot(1800, [this, scaledOriginalPixmap]() {
+            // FINALLY: Auto-save and send processed image to final output (after processing simulation)
+            // Capture image by value to ensure it's available when timer fires
+            QPixmap imageToSave = m_capturedImage;
+            QTimer::singleShot(1800, [this, scaledOriginalPixmap, imageToSave]() {
             emit videoProcessingProgress(100);
-                qDebug() << "STATIC: Processing complete - sending to final output";
+                qDebug() << "STATIC: Processing complete - auto-saving and sending to final output";
+                qDebug() << "STATIC: Image to save size:" << imageToSave.size() << "isNull:" << imageToSave.isNull();
+                
+                // Auto-save the corrected image
+                if (m_sessionManager) {
+                    qDebug() << "STATIC: SessionManager available, saving image";
+                    QString savedPath = m_sessionManager->saveOutput(imageToSave, "png");
+                    if (!savedPath.isEmpty()) {
+                        qDebug() << "STATIC: Auto-saved corrected image to:" << savedPath;
+                    } else {
+                        qWarning() << "STATIC: Failed to save image - savedPath is empty";
+                    }
+                } else {
+                    qWarning() << "STATIC: SessionManager is NULL - cannot save image!";
+                }
+                
                 emit imageCapturedWithComparison(m_capturedImage, scaledOriginalPixmap);
                     emit showFinalOutputPage();
             });
@@ -2250,10 +2372,27 @@ void Capture::performImageCapture()
                 qDebug() << "STATIC: Processing progress 90%";
         });
         
-        // Send to final output page after processing simulation
-        QTimer::singleShot(1800, [this]() {
+        // Auto-save and send to final output after processing simulation
+        // Capture image by value to ensure it's available when timer fires
+        QPixmap imageToSave = m_capturedImage;
+        QTimer::singleShot(1800, [this, imageToSave]() {
             emit videoProcessingProgress(100);
-                qDebug() << "STATIC: Processing complete - sending single image to final output";
+                qDebug() << "STATIC: Processing complete - auto-saving and sending single image to final output";
+                qDebug() << "STATIC: Image to save size:" << imageToSave.size() << "isNull:" << imageToSave.isNull();
+            
+            // Auto-save the image
+            if (m_sessionManager) {
+                qDebug() << "STATIC: SessionManager available, saving image";
+                QString savedPath = m_sessionManager->saveOutput(imageToSave, "png");
+                if (!savedPath.isEmpty()) {
+                    qDebug() << "STATIC: Auto-saved image to:" << savedPath;
+                } else {
+                    qWarning() << "STATIC: Failed to save image - savedPath is empty";
+                }
+            } else {
+                qWarning() << "STATIC: SessionManager is NULL - cannot save image!";
+            }
+            
             emit imageCaptured(m_capturedImage);
             emit showFinalOutputPage();
         });
@@ -3017,6 +3156,12 @@ void Capture::setSystemMonitor(SystemMonitor* monitor)
     m_systemMonitor = monitor;
 }
 
+void Capture::setSessionManager(SessionManager* sessionManager)
+{
+    qDebug() << "Capture::setSessionManager() called with pointer:" << (void*)sessionManager;
+    m_sessionManager = sessionManager;
+}
+
 void Capture::togglePersonDetection()
 {
     // Toggle segmentation on/off
@@ -3193,7 +3338,13 @@ void Capture::onVideoProcessingFinished()
     // Get the processed frames from the future watcher
     if (!m_lightingWatcher) {
         qWarning() << "Video processing finished but watcher is null!";
-        // Fallback: send original frames
+        // Fallback: auto-save and send original frames
+        if (m_sessionManager) {
+            QString savedPath = m_sessionManager->saveVideo(m_recordedFrames, m_adjustedRecordingFPS);
+            if (!savedPath.isEmpty()) {
+                qDebug() << "DYNAMIC: Auto-saved original video (watcher null) to:" << savedPath;
+            }
+        }
         emit videoRecorded(m_recordedFrames, m_adjustedRecordingFPS);
         emit showFinalOutputPage();
         return;
@@ -3203,7 +3354,13 @@ void Capture::onVideoProcessingFinished()
     
     if (processedFrames.isEmpty()) {
         qWarning() << "Video processing returned empty frames - using original frames";
-        // Fallback: send original frames
+        // Fallback: auto-save and send original frames
+        if (m_sessionManager) {
+            QString savedPath = m_sessionManager->saveVideo(m_recordedFrames, m_adjustedRecordingFPS);
+            if (!savedPath.isEmpty()) {
+                qDebug() << "DYNAMIC: Auto-saved original video (empty frames) to:" << savedPath;
+            }
+        }
         emit videoRecorded(m_recordedFrames, m_adjustedRecordingFPS);
         emit showFinalOutputPage();
         return;
@@ -3212,6 +3369,14 @@ void Capture::onVideoProcessingFinished()
     qDebug() << "Video processing complete - sending" << processedFrames.size() << "processed frames to final output";
     
     // Send processed frames with comparison to final output page
+    // Auto-save the processed video
+    if (m_sessionManager) {
+        QString savedPath = m_sessionManager->saveVideo(processedFrames, m_adjustedRecordingFPS);
+        if (!savedPath.isEmpty()) {
+            qDebug() << "DYNAMIC: Auto-saved processed video to:" << savedPath;
+        }
+    }
+    
     emit videoRecordedWithComparison(processedFrames, m_originalRecordedFrames, m_adjustedRecordingFPS);
     
     // Show final output page
