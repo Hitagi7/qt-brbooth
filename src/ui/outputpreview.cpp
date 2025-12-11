@@ -278,7 +278,7 @@ void OutputPreview::createThumbnailButton(const QString &filePath, int index, in
         "    background-color: rgba(0, 0, 0, 180);"
         "    color: white;"
         "    font-weight: bold;"
-        "    font-size: 18px;"
+        "    font-size: 10px;"
         "    padding: 4px 8px;"
         "    border-radius: 4px;"
         "}"
