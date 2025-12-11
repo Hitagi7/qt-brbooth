@@ -93,16 +93,16 @@ OutputPreview::OutputPreview(QWidget *parent)
     fullscreenPlayer = new QMediaPlayer(this);
     fullscreenPlayer->setVideoOutput(fullscreenVideoWidget);
     
-    // Connect player to loop videos
+    // Connect player to loop videos - use QPointer to safely check if player still exists
     connect(fullscreenPlayer, &QMediaPlayer::mediaStatusChanged, this, [this](QMediaPlayer::MediaStatus status) {
-        if (status == QMediaPlayer::EndOfMedia) {
+        if (fullscreenPlayer && status == QMediaPlayer::EndOfMedia) {
             fullscreenPlayer->setPosition(0);
             fullscreenPlayer->play();
         }
     });
     
-    // Setup preview back button
-    previewBackButton = new QPushButton(this);
+    // Setup preview back button - create without parent since it's a top-level window
+    previewBackButton = new QPushButton(nullptr);
     QIcon backIcon(":/icons/Icons/normal.svg");
     if (!backIcon.isNull()) {
         previewBackButton->setIcon(backIcon);
@@ -127,7 +127,7 @@ OutputPreview::OutputPreview(QWidget *parent)
     previewBackButton->setAttribute(Qt::WA_NoSystemBackground, true);
     previewBackButton->hide();
     
-    Iconhover *previewBackButtonHover = new Iconhover(this);
+    Iconhover *previewBackButtonHover = new Iconhover(previewBackButton);
     previewBackButton->installEventFilter(previewBackButtonHover);
     connect(previewBackButton, &QPushButton::clicked, this, &OutputPreview::onPreviewBackClicked);
     
@@ -159,9 +159,20 @@ OutputPreview::OutputPreview(QWidget *parent)
 
 OutputPreview::~OutputPreview()
 {
+    // Hide and delete preview back button before other cleanup
+    if (previewBackButton) {
+        previewBackButton->hide();
+        previewBackButton->deleteLater();
+        previewBackButton = nullptr;
+    }
+    
+    // Stop and disconnect media player
     if (fullscreenPlayer) {
         fullscreenPlayer->stop();
+        fullscreenPlayer->setVideoOutput(nullptr); // Disconnect from video widget
+        fullscreenPlayer->setSource(QUrl()); // Clear media source
     }
+    
     delete ui;
 }
 
@@ -219,10 +230,12 @@ void OutputPreview::resizeEvent(QResizeEvent *event)
             }
         }
         
-        // Update back button position
-        QPoint originalBackButtonPos = ui->back->pos();
-        QPoint globalPos = this->mapToGlobal(originalBackButtonPos);
-        previewBackButton->move(globalPos);
+        // Update back button position - check if button still exists
+        if (previewBackButton && previewBackButton->isVisible() && ui->back) {
+            QPoint originalBackButtonPos = ui->back->pos();
+            QPoint globalPos = this->mapToGlobal(originalBackButtonPos);
+            previewBackButton->move(globalPos);
+        }
     }
 }
 
@@ -611,7 +624,10 @@ bool OutputPreview::eventFilter(QObject *obj, QEvent *event)
         }
         
         // Handle clicks on fullscreen preview widget to exit preview (but keep toggle mode ON)
-        if (m_isPreviewMode && (obj == fullscreenPreviewWidget || obj == fullscreenVideoWidget || obj == fullscreenImageLabel)) {
+        if (m_isPreviewMode && fullscreenPreviewWidget && 
+            (obj == fullscreenPreviewWidget || 
+             (fullscreenVideoWidget && obj == fullscreenVideoWidget) || 
+             (fullscreenImageLabel && obj == fullscreenImageLabel))) {
             qDebug() << "OutputPreview: Click on preview widget - exiting fullscreen preview";
             hideFullscreenPreview();
             return true;
@@ -896,17 +912,35 @@ void OutputPreview::hideFullscreenPreview()
     }
     
     // Hide preview widgets
-    fullscreenPreviewWidget->hide();
-    fullscreenVideoWidget->hide();
-    fullscreenImageLabel->hide();
-    previewBackButton->hide();
+    if (fullscreenPreviewWidget) {
+        fullscreenPreviewWidget->hide();
+    }
+    if (fullscreenVideoWidget) {
+        fullscreenVideoWidget->hide();
+    }
+    if (fullscreenImageLabel) {
+        fullscreenImageLabel->hide();
+    }
+    if (previewBackButton) {
+        previewBackButton->hide();
+    }
     
     // Show normal UI elements
-    ui->scrollArea->show();
-    ui->previewLabel->show();
-    ui->back->show();
-    ui->confirm->show();
-    ui->previewButton->show();
+    if (ui->scrollArea) {
+        ui->scrollArea->show();
+    }
+    if (ui->previewLabel) {
+        ui->previewLabel->show();
+    }
+    if (ui->back) {
+        ui->back->show();
+    }
+    if (ui->confirm) {
+        ui->confirm->show();
+    }
+    if (ui->previewButton) {
+        ui->previewButton->show();
+    }
     
     qDebug() << "OutputPreview: Fullscreen preview hidden";
 }
