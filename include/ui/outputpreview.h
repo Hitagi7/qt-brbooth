@@ -8,6 +8,9 @@
 #include <QMap>
 #include <QPixmap>
 #include <QGridLayout>
+#include <QVideoWidget>
+#include <QMediaPlayer>
+#include <QLabel>
 
 QT_BEGIN_NAMESPACE
 
@@ -43,10 +46,13 @@ signals:
 protected:
     bool eventFilter(QObject *obj, QEvent *event) override;
     void showEvent(QShowEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
 
 private slots:
     void on_back_clicked();
     void on_confirm_clicked();
+    void on_previewButton_toggled(bool checked);
+    void onPreviewBackClicked();
     void resetDebounce();
 
 private:
@@ -61,6 +67,16 @@ private:
     
     QTimer *debounceTimer;
     bool debounceActive;
+    
+    // Fullscreen preview members
+    QWidget *fullscreenPreviewWidget;
+    QVideoWidget *fullscreenVideoWidget;
+    QMediaPlayer *fullscreenPlayer;
+    QLabel *fullscreenImageLabel;
+    QPushButton *previewBackButton;
+    QString m_previewFilePath;
+    bool m_isPreviewMode;
+    bool m_previewToggleMode;  // Tracks if preview toggle is ON (clicking thumbnails shows preview)
 
     void applyHighlightStyle(QPushButton *button, bool highlight);
     void processThumbnailClick(QPushButton *button);
@@ -68,6 +84,9 @@ private:
     QPixmap generateThumbnail(const QString &filePath, const QSize &size);
     void clearThumbnails();
     void updateConfirmButtonState();
+    void showFullscreenPreview(const QString &filePath);
+    void hideFullscreenPreview();
+    bool isVideoFile(const QString &filePath);
 };
 
 #endif // OUTPUTPREVIEW_H

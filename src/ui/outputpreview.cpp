@@ -19,6 +19,11 @@
 #include <opencv2/opencv.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/videoio.hpp>
+#include <QVideoWidget>
+#include <QMediaPlayer>
+#include <QUrl>
+#include <QResizeEvent>
+#include <QApplication>
 
 OutputPreview::OutputPreview(QWidget *parent)
     : QWidget(parent)
@@ -27,6 +32,13 @@ OutputPreview::OutputPreview(QWidget *parent)
     , m_gridLayout(nullptr)
     , debounceTimer(nullptr)
     , debounceActive(false)
+    , fullscreenPreviewWidget(nullptr)
+    , fullscreenVideoWidget(nullptr)
+    , fullscreenPlayer(nullptr)
+    , fullscreenImageLabel(nullptr)
+    , previewBackButton(nullptr)
+    , m_isPreviewMode(false)
+    , m_previewToggleMode(false)
 {
     ui->setupUi(this);
 
@@ -39,18 +51,87 @@ OutputPreview::OutputPreview(QWidget *parent)
 
     connect(ui->back, &QPushButton::clicked, this, &OutputPreview::on_back_clicked);
     connect(ui->confirm, &QPushButton::clicked, this, &OutputPreview::on_confirm_clicked);
+    connect(ui->previewButton, &QPushButton::toggled, this, &OutputPreview::on_previewButton_toggled);
     
     // Initialize confirm button as disabled
     updateConfirmButtonState();
     
-    // Initialize confirm button as disabled
-    updateConfirmButtonState();
+    // Preview button is always enabled (it's a toggle)
+    ui->previewButton->setEnabled(true);
+    ui->previewButton->setChecked(false);
 
     // Setup debounce timer
     debounceTimer = new QTimer(this);
     debounceTimer->setSingleShot(true);
     debounceTimer->setInterval(400);
     connect(debounceTimer, &QTimer::timeout, this, &OutputPreview::resetDebounce);
+    
+    // Setup fullscreen preview widget
+    fullscreenPreviewWidget = new QWidget(this);
+    fullscreenPreviewWidget->setMinimumSize(QSize(640, 480));
+    fullscreenPreviewWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    fullscreenPreviewWidget->setAttribute(Qt::WA_StyledBackground, true);
+    fullscreenPreviewWidget->setStyleSheet("background-color: black;");
+    fullscreenPreviewWidget->hide();
+    
+    // Setup video widget for dynamic outputs
+    fullscreenVideoWidget = new QVideoWidget(fullscreenPreviewWidget);
+    fullscreenVideoWidget->setMinimumSize(QSize(640, 480));
+    fullscreenVideoWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    fullscreenVideoWidget->setAspectRatioMode(Qt::IgnoreAspectRatio);
+    fullscreenVideoWidget->hide();
+    
+    // Setup image label for static outputs
+    fullscreenImageLabel = new QLabel(fullscreenPreviewWidget);
+    fullscreenImageLabel->setMinimumSize(QSize(640, 480));
+    fullscreenImageLabel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    fullscreenImageLabel->setAlignment(Qt::AlignCenter);
+    fullscreenImageLabel->setScaledContents(true);
+    fullscreenImageLabel->hide();
+    
+    // Setup media player
+    fullscreenPlayer = new QMediaPlayer(this);
+    fullscreenPlayer->setVideoOutput(fullscreenVideoWidget);
+    
+    // Connect player to loop videos
+    connect(fullscreenPlayer, &QMediaPlayer::mediaStatusChanged, this, [this](QMediaPlayer::MediaStatus status) {
+        if (status == QMediaPlayer::EndOfMedia) {
+            fullscreenPlayer->setPosition(0);
+            fullscreenPlayer->play();
+        }
+    });
+    
+    // Setup preview back button
+    previewBackButton = new QPushButton(this);
+    QIcon backIcon(":/icons/Icons/normal.svg");
+    if (!backIcon.isNull()) {
+        previewBackButton->setIcon(backIcon);
+        previewBackButton->setIconSize(QSize(100, 100));
+    } else {
+        previewBackButton->setText("←");
+    }
+    previewBackButton->setMinimumSize(QSize(100, 80));
+    previewBackButton->setMaximumSize(QSize(200, 80));
+    previewBackButton->setText("");
+    previewBackButton->setFlat(true);
+    previewBackButton->setStyleSheet(
+        "QPushButton { "
+        "    background-color: transparent; "
+        "    border: none; "
+        "    padding: 0px; "
+        "    margin: 0px; "
+        "}"
+    );
+    previewBackButton->setWindowFlags(Qt::WindowStaysOnTopHint | Qt::FramelessWindowHint | Qt::Tool);
+    previewBackButton->hide();
+    
+    Iconhover *previewBackButtonHover = new Iconhover(this);
+    previewBackButton->installEventFilter(previewBackButtonHover);
+    connect(previewBackButton, &QPushButton::clicked, this, &OutputPreview::onPreviewBackClicked);
+    
+    // Install event filter for click detection
+    fullscreenPreviewWidget->installEventFilter(this);
+    this->installEventFilter(this);
 
     // Get grid layout from scroll area widget contents
     QWidget *scrollWidget = ui->scrollAreaWidgetContents;
@@ -76,6 +157,9 @@ OutputPreview::OutputPreview(QWidget *parent)
 
 OutputPreview::~OutputPreview()
 {
+    if (fullscreenPlayer) {
+        fullscreenPlayer->stop();
+    }
     delete ui;
 }
 
@@ -104,6 +188,39 @@ void OutputPreview::showEvent(QShowEvent *event)
         loadOutputThumbnails();
     } else {
         qWarning() << "OutputPreview: SessionManager not available in showEvent";
+    }
+}
+
+void OutputPreview::resizeEvent(QResizeEvent *event)
+{
+    QWidget::resizeEvent(event);
+    
+    // Update preview widget size if in preview mode
+    if (m_isPreviewMode && fullscreenPreviewWidget && fullscreenPreviewWidget->isVisible()) {
+        QRect widgetRect = this->geometry();
+        fullscreenPreviewWidget->setGeometry(widgetRect);
+        
+        if (fullscreenVideoWidget && fullscreenVideoWidget->isVisible()) {
+            fullscreenVideoWidget->setGeometry(fullscreenPreviewWidget->rect());
+        }
+        
+        if (fullscreenImageLabel && fullscreenImageLabel->isVisible()) {
+            fullscreenImageLabel->setGeometry(fullscreenPreviewWidget->rect());
+            // Update image pixmap to fit new size
+            if (!m_previewFilePath.isEmpty() && !isVideoFile(m_previewFilePath)) {
+                QPixmap pixmap(m_previewFilePath);
+                if (!pixmap.isNull()) {
+                    QSize labelSize = fullscreenImageLabel->size();
+                    QPixmap scaled = pixmap.scaled(labelSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+                    fullscreenImageLabel->setPixmap(scaled);
+                }
+            }
+        }
+        
+        // Update back button position
+        QPoint originalBackButtonPos = ui->back->pos();
+        QPoint globalPos = this->mapToGlobal(originalBackButtonPos);
+        previewBackButton->move(globalPos);
     }
 }
 
@@ -490,7 +607,15 @@ bool OutputPreview::eventFilter(QObject *obj, QEvent *event)
                 return true;
             }
         }
+        
+        // Handle clicks on fullscreen preview widget to exit preview (but keep toggle mode ON)
+        if (m_isPreviewMode && (obj == fullscreenPreviewWidget || obj == fullscreenVideoWidget || obj == fullscreenImageLabel)) {
+            qDebug() << "OutputPreview: Click on preview widget - exiting fullscreen preview";
+            hideFullscreenPreview();
+            return true;
+        }
     }
+    
     return QWidget::eventFilter(obj, event);
 }
 
@@ -501,6 +626,15 @@ void OutputPreview::processThumbnailClick(QPushButton *button)
     }
 
     QString filePath = m_buttonToFileMap[button];
+    
+    // If preview toggle mode is ON, show fullscreen preview (like dynamic page)
+    if (m_previewToggleMode) {
+        qDebug() << "OutputPreview: Preview toggle mode ON - showing fullscreen preview for:" << filePath;
+        showFullscreenPreview(filePath);
+        return;
+    }
+    
+    // Otherwise, toggle selection (normal behavior)
     // Normalize path for comparison (use QDir to handle path differences)
     QString normalizedPath = QDir::toNativeSeparators(QFileInfo(filePath).absoluteFilePath());
     
@@ -546,6 +680,9 @@ void OutputPreview::resetDebounce()
 
 void OutputPreview::resetPage()
 {
+    hideFullscreenPreview();
+    m_previewToggleMode = false;
+    ui->previewButton->setChecked(false);
     clearThumbnails();
     resetDebounce();
     debounceTimer->stop();
@@ -615,8 +752,9 @@ void OutputPreview::updateConfirmButtonState()
 {
     bool hasSelection = !m_selectedFiles.isEmpty();
     ui->confirm->setEnabled(hasSelection);
+    // Preview button is always enabled (it's a toggle)
     
-    // Style the button based on enabled state
+    // Style the confirm button based on enabled state
     // When disabled: light green background, light green border, lighter green on hover
     // When enabled: normal green background, black border, brighter green on hover
     QString styleSheet = QString(
@@ -650,4 +788,121 @@ void OutputPreview::updateConfirmButtonState()
     ui->confirm->setStyleSheet(styleSheet);
     
     qDebug() << "OutputPreview: Confirm button" << (hasSelection ? "enabled" : "disabled") << "with" << m_selectedFiles.size() << "selected files";
+}
+
+void OutputPreview::on_previewButton_toggled(bool checked)
+{
+    m_previewToggleMode = checked;
+    qDebug() << "OutputPreview: Preview toggle mode" << (checked ? "ON" : "OFF");
+    
+    // If turning OFF preview mode and we're in fullscreen preview, exit it
+    if (!checked && m_isPreviewMode) {
+        hideFullscreenPreview();
+    }
+}
+
+void OutputPreview::onPreviewBackClicked()
+{
+    qDebug() << "OutputPreview: Preview back button clicked";
+    hideFullscreenPreview();
+}
+
+bool OutputPreview::isVideoFile(const QString &filePath)
+{
+    QFileInfo fileInfo(filePath);
+    QString extension = fileInfo.suffix().toLower();
+    return (extension == "avi" || extension == "mp4");
+}
+
+void OutputPreview::showFullscreenPreview(const QString &filePath)
+{
+    if (!QFile::exists(filePath)) {
+        qWarning() << "OutputPreview: Preview file does not exist:" << filePath;
+        return;
+    }
+    
+    m_previewFilePath = filePath;
+    m_isPreviewMode = true;
+    
+    // Hide normal UI elements
+    ui->scrollArea->hide();
+    ui->previewLabel->hide();
+    ui->back->hide();
+    ui->confirm->hide();
+    ui->previewButton->hide();
+    
+    // Position and show preview widget
+    QRect widgetRect = this->geometry();
+    fullscreenPreviewWidget->setGeometry(widgetRect);
+    fullscreenPreviewWidget->show();
+    fullscreenPreviewWidget->raise();
+    
+    if (isVideoFile(filePath)) {
+        // Show video widget
+        fullscreenImageLabel->hide();
+        fullscreenVideoWidget->setGeometry(fullscreenPreviewWidget->rect());
+        fullscreenVideoWidget->show();
+        fullscreenVideoWidget->raise();
+        
+        // Load and play video
+        fullscreenPlayer->setSource(QUrl::fromLocalFile(filePath));
+        fullscreenPlayer->play();
+        qDebug() << "OutputPreview: Playing video:" << filePath;
+    } else {
+        // Show image label
+        fullscreenVideoWidget->hide();
+        if (fullscreenPlayer) {
+            fullscreenPlayer->stop();
+        }
+        
+        fullscreenImageLabel->setGeometry(fullscreenPreviewWidget->rect());
+        QPixmap pixmap(filePath);
+        if (!pixmap.isNull()) {
+            // Scale pixmap to fit label while maintaining aspect ratio
+            QSize labelSize = fullscreenImageLabel->size();
+            QPixmap scaled = pixmap.scaled(labelSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+            fullscreenImageLabel->setPixmap(scaled);
+            fullscreenImageLabel->show();
+            fullscreenImageLabel->raise();
+            qDebug() << "OutputPreview: Showing image:" << filePath;
+        } else {
+            qWarning() << "OutputPreview: Failed to load image:" << filePath;
+        }
+    }
+    
+    // Position and show preview back button
+    QPoint originalBackButtonPos = ui->back->pos();
+    QPoint globalPos = this->mapToGlobal(originalBackButtonPos);
+    previewBackButton->move(globalPos);
+    previewBackButton->show();
+    previewBackButton->raise();
+    previewBackButton->setAttribute(Qt::WA_AlwaysStackOnTop, true);
+    
+    qDebug() << "OutputPreview: Fullscreen preview shown for:" << filePath;
+}
+
+void OutputPreview::hideFullscreenPreview()
+{
+    m_isPreviewMode = false;
+    
+    // Stop video if playing
+    if (fullscreenPlayer) {
+        fullscreenPlayer->stop();
+        fullscreenPlayer->setSource(QUrl());
+    }
+    
+    // Hide preview widgets
+    fullscreenPreviewWidget->hide();
+    fullscreenVideoWidget->hide();
+    fullscreenImageLabel->hide();
+    previewBackButton->hide();
+    
+    // Show normal UI elements
+    ui->scrollArea->show();
+    ui->previewLabel->show();
+    ui->back->show();
+    ui->confirm->show();
+    ui->previewButton->show();
+    
+    qDebug() << "OutputPreview: Fullscreen preview hidden";
 }

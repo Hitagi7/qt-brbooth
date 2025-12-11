@@ -196,6 +196,64 @@
        </property>
       </spacer>
      </item>
+     <item>
+      <widget class="QPushButton" name="previewButton">
+       <property name="enabled">
+        <bool>true</bool>
+       </property>
+       <property name="checkable">
+        <bool>true</bool>
+       </property>
+       <property name="checked">
+        <bool>false</bool>
+       </property>
+       <property name="minimumSize">
+        <size>
+         <width>200</width>
+         <height>80</height>
+        </size>
+       </property>
+       <property name="maximumSize">
+        <size>
+         <width>200</width>
+         <height>80</height>
+        </size>
+       </property>
+       <property name="cursor">
+        <cursorShape>PointingHandCursor</cursorShape>
+       </property>
+       <property name="styleSheet">
+        <string notr="true">#previewButton {
+    background-color: #7FD97F;
+    color: white;
+    font-size: 24px;
+    font-weight: bold;
+    border-radius: 8px;
+    border: none;
+}
+
+#previewButton:hover {
+    background-color: #9FE99F;
+}
+
+#previewButton:pressed {
+    background-color: #7FD97F;
+}
+
+#previewButton:checked {
+    background-color: #0BC200;
+    border: none;
+}
+
+#previewButton:checked:hover {
+    background-color: #0DE600;
+}</string>
+       </property>
+       <property name="text">
+        <string>✓ PREVIEW</string>
+       </property>
+      </widget>
+     </item>
     </layout>
    </item>
    <item>
