@@ -223,8 +223,7 @@ Capture::AdaptiveGreenThresholds Capture::computeAdaptiveGreenThresholds() const
     return thresholds;
 }
 
-// AGGRESSIVE GREEN REMOVAL: Remove all green pixels including boundary pixels
-// FAST & ACCURATE: Works for both green AND teal/cyan backdrops
+//=================== Chroma Key Mask Creation ===================
 cv::Mat Capture::createGreenScreenPersonMask(const cv::Mat &frame) const
 {
     if (frame.empty()) return cv::Mat();
@@ -253,9 +252,9 @@ cv::Mat Capture::createGreenScreenPersonMask(const cv::Mat &frame) const
         cv::threshold(greenDominantR, greenOrTeal, 15, 255, cv::THRESH_BINARY);  // G > R
         
         cv::Mat greenDominatesBlue;
-        cv::threshold(greenDominantB, greenDominatesBlue, -10, 255, cv::THRESH_BINARY);  // G > B - 10 (allows G ≈ B)
+        cv::threshold(greenDominantB, greenDominatesBlue, m_greenBlueThreshold, 255, cv::THRESH_BINARY);  // G > B + threshold (allows G ≈ B)
         
-        // Combine: green/teal = (G > R) AND (G > B - 10)
+        // Combine: green/teal = (G > R) AND (G > B + threshold)
         cv::Mat greenMask;
         cv::bitwise_and(greenOrTeal, greenDominatesBlue, greenMask);
 
@@ -329,9 +328,9 @@ cv::cuda::GpuMat Capture::createGreenScreenPersonMaskGPU(const cv::cuda::GpuMat 
         cv::cuda::threshold(greenDominantR, greenOrTeal, 15, 255, cv::THRESH_BINARY);  // G > R
         
         cv::cuda::GpuMat greenDominatesBlue;
-        cv::cuda::threshold(greenDominantB, greenDominatesBlue, -10, 255, cv::THRESH_BINARY);  // G > B - 10 (allows G ≈ B)
+        cv::cuda::threshold(greenDominantB, greenDominatesBlue, m_greenBlueThreshold, 255, cv::THRESH_BINARY);  // G > B + threshold (allows G ≈ B)
         
-        // Combine: green/teal = (G > R) AND (G > B - 10)
+        // Combine: green/teal = (G > R) AND (G > B + threshold)
         cv::cuda::GpuMat greenMask;
         cv::cuda::bitwise_and(greenOrTeal, greenDominatesBlue, greenMask);
 

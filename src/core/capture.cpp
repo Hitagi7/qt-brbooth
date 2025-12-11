@@ -271,6 +271,9 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     // Morphological cleanup sizes (pixels)
     m_greenMaskOpen = 3;
     m_greenMaskClose = 7;
+    // ====== THRESHOLD SLIDER CONFIGURATION ======
+    // Range: -30 (most lenient) to +30 (strictest), mapped from slider 0-100
+    m_greenBlueThreshold = 0;
     // Temporal mask smoothing
     m_greenScreenMaskStableCount = 0;
 
@@ -393,6 +396,13 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     connect(ui->back, &QPushButton::clicked, this, &Capture::on_back_clicked);
     connect(ui->capture, &QPushButton::clicked, this, &Capture::on_capture_clicked);
     connect(ui->verticalSlider, &QSlider::valueChanged, this, &Capture::on_verticalSlider_valueChanged);
+    connect(ui->thresholdSlider, &QSlider::valueChanged, this, &Capture::on_thresholdSlider_valueChanged);
+    
+    // ====== THRESHOLD SLIDER DEFAULT VALUE ======
+    // Mapping: slider 0-100 → threshold -30 to +30
+    // Formula: threshold = -30 + (sliderValue / 100.0) * 60
+    // Example threshold -10: sliderValue = ((-10 + 30) / 60) * 100 = 33.33
+    ui->thresholdSlider->setValue(50);
 
     // Initialize and start performance timers (these are not QTimers, so they're thread-safe)
     loopTimer.start();
@@ -1304,6 +1314,38 @@ void Capture::on_verticalSlider_valueChanged(int value)
         }
     }
     // --- END SCALING FUNCTIONALITY ---
+}
+
+// ==================== THRESHOLD SLIDER FUNCTIONALITY ====================
+void Capture::on_thresholdSlider_valueChanged(int value)
+{
+    int tickInterval = ui->thresholdSlider->tickInterval();
+    if (tickInterval == 0)
+        return;
+    int snappedValue = qRound((double) value / tickInterval) * tickInterval;
+    snappedValue = qBound(ui->thresholdSlider->minimum(),
+                          snappedValue,
+                          ui->thresholdSlider->maximum());
+    if (value != snappedValue) {
+        ui->thresholdSlider->setValue(snappedValue);
+    }
+
+    // Map slider value (0-100) to threshold range (-30 to +30)
+    // Formula: threshold = -30 + (sliderValue / 100.0) * 60
+    int newThreshold = static_cast<int>(std::round(-30.0 + (snappedValue / 100.0) * 60.0));
+    
+    if (newThreshold != m_greenBlueThreshold) {
+        m_greenBlueThreshold = newThreshold;
+        qDebug() << "=== GREEN-BLUE THRESHOLD ===";
+        qDebug() << "Slider value:" << snappedValue << "/100";
+        qDebug() << "Threshold value:" << m_greenBlueThreshold;
+        qDebug() << "===========================";
+        
+        // Trigger a refresh of the camera feed to apply the new threshold
+        if (!m_originalCameraImage.isNull()) {
+            updateCameraFeed(m_originalCameraImage);
+        }
+    }
 }
 
 cv::Mat Capture::qImageToCvMat(const QImage &image)

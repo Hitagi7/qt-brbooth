@@ -252,6 +252,7 @@ private slots:
     void on_back_clicked();
     void on_capture_clicked();
     void on_verticalSlider_valueChanged(int value);
+    void on_thresholdSlider_valueChanged(int value);
 
     void updateForegroundOverlay(const QString &path);
     void setupStackedLayoutHybrid();
@@ -536,6 +537,7 @@ private:
     int m_greenValMin;   // HSV min value to be considered green
     int m_greenMaskOpen; // morph open kernel size
     int m_greenMaskClose;// morph close kernel size
+    int m_greenBlueThreshold; // Threshold for G-B comparison (default -10, range -30 to +30)
     
     //  GPU Green Screen Filter Cache (prevent memory allocation on every frame)
     cv::Ptr<cv::cuda::CannyEdgeDetector> m_greenScreenCannyDetector;
