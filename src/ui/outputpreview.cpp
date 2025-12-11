@@ -170,21 +170,20 @@ void OutputPreview::loadOutputThumbnails()
     // Use 3 columns like the background template selection
     const int columns = 3;
     const QSize thumbnailSize(425, 305); // Same size as background template buttons
-    const QSize imageSize(241, 141); // Actual image size within button
 
     qDebug() << "OutputPreview: Creating" << outputFiles.size() << "thumbnail buttons";
     
     for (int i = 0; i < outputFiles.size(); ++i) {
         qDebug() << "OutputPreview: Creating thumbnail button" << i << "for:" << outputFiles[i];
-        createThumbnailButton(outputFiles[i], i, outputFiles.size());
+        createThumbnailButton(outputFiles[i], i, outputFiles.size(), columns, thumbnailSize);
     }
     
     qDebug() << "OutputPreview: Created" << m_thumbnailButtons.size() << "thumbnail buttons";
     
     // Update scroll area widget contents size based on number of buttons
     if (m_gridLayout && ui->scrollAreaWidgetContents) {
-        int rows = (outputFiles.size() + 2) / 3; // Round up division for rows
-        int buttonHeight = 305;
+        int rows = (outputFiles.size() + columns - 1) / columns; // Round up division for rows
+        int buttonHeight = thumbnailSize.height();
         int spacing = 20;
         int totalHeight = rows * buttonHeight + (rows - 1) * spacing + 40; // Add padding
         
@@ -207,15 +206,15 @@ void OutputPreview::loadOutputThumbnails()
     }
 }
 
-void OutputPreview::createThumbnailButton(const QString &filePath, int index, int totalCount)
+void OutputPreview::createThumbnailButton(const QString &filePath, int index, int totalCount, int columns, const QSize &thumbnailSize)
 {
     if (!m_gridLayout) {
         qWarning() << "OutputPreview: Grid layout not available";
         return;
     }
 
-    // Generate thumbnail - scale to fill entire button (425x305) without black borders
-    QPixmap thumbnail = generateThumbnail(filePath, QSize(425, 305));
+    // Generate thumbnail - scale to fill entire button without black borders
+    QPixmap thumbnail = generateThumbnail(filePath, thumbnailSize);
     
     if (thumbnail.isNull()) {
         qWarning() << "OutputPreview: Failed to generate thumbnail for:" << filePath;
@@ -225,12 +224,12 @@ void OutputPreview::createThumbnailButton(const QString &filePath, int index, in
             return;
         }
         QPushButton *button = new QPushButton(scrollWidget);
-        button->setMinimumSize(425, 305);
-        button->setMaximumSize(425, 305);
+        button->setMinimumSize(thumbnailSize);
+        button->setMaximumSize(thumbnailSize);
         button->setText("Failed to load");
         button->setStyleSheet("QPushButton { border: 2px solid red; background-color: black; color: white; }");
-        int row = index / 3;
-        int col = index % 3;
+        int row = index / columns;
+        int col = index % columns;
         m_gridLayout->addWidget(button, row, col, Qt::AlignCenter);
         m_thumbnailButtons.append(button);
         m_buttonToFileMap[button] = filePath;
@@ -246,8 +245,8 @@ void OutputPreview::createThumbnailButton(const QString &filePath, int index, in
         return;
     }
     QPushButton *button = new QPushButton(scrollWidget);
-    button->setMinimumSize(425, 305);
-    button->setMaximumSize(425, 305);
+    button->setMinimumSize(thumbnailSize);
+    button->setMaximumSize(thumbnailSize);
     button->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
     button->setCursor(Qt::PointingHandCursor);
     button->setProperty("selected", false);
@@ -289,7 +288,7 @@ void OutputPreview::createThumbnailButton(const QString &filePath, int index, in
     typeLabel->setAttribute(Qt::WA_NoMousePropagation, true);
     typeLabel->lower(); // Place behind button border
     // Position at bottom-left of button
-    typeLabel->setGeometry(10, 305 - 30, 70, 25);
+    typeLabel->setGeometry(10, thumbnailSize.height() - 30, 70, 25);
     typeLabel->show();
     qDebug() << "OutputPreview: Added" << (isStatic ? "STATIC" : "DYNAMIC") << "label for:" << filePath;
 
@@ -322,10 +321,10 @@ void OutputPreview::createThumbnailButton(const QString &filePath, int index, in
     // Install event filter for click handling
     button->installEventFilter(this);
 
-    // Add to grid layout (3 columns)
+    // Add to grid layout
     // Special handling: if only 2 items, place 2nd in center using column stretch
     // Otherwise: 1st=left, 2nd=center, 3rd=right, 4th=left (below), etc.
-    int row = index / 3;
+    int row = index / columns;
     int col;
     
     if (totalCount == 2) {
@@ -342,7 +341,7 @@ void OutputPreview::createThumbnailButton(const QString &filePath, int index, in
         }
     } else {
         // Normal placement
-        col = index % 3;
+        col = index % columns;
         // Reset column stretch for normal layout (equal spacing)
         if (index == 0) {
             m_gridLayout->setColumnStretch(0, 0);

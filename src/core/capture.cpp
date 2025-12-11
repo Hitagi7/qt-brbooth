@@ -403,6 +403,37 @@ Capture::Capture(QWidget *parent, Foreground *fg, Camera *existingCameraWorker, 
     connect(ui->capture, &QPushButton::clicked, this, &Capture::on_capture_clicked);
     connect(ui->verticalSlider, &QSlider::valueChanged, this, &Capture::on_verticalSlider_valueChanged);
     connect(ui->thresholdSlider, &QSlider::valueChanged, this, &Capture::on_thresholdSlider_valueChanged);
+    // Ensure toggle button is enabled and clickable
+    if (ui->sliderToggleButton) {
+        ui->sliderToggleButton->setEnabled(true);
+        ui->sliderToggleButton->setVisible(true);
+        ui->sliderToggleButton->setFocusPolicy(Qt::StrongFocus);
+        ui->sliderToggleButton->setAttribute(Qt::WA_TransparentForMouseEvents, false);
+        ui->sliderToggleButton->setMouseTracking(false);
+        
+        // Try both connection methods to ensure it works
+        bool connected1 = connect(ui->sliderToggleButton, &QPushButton::clicked, this, &Capture::on_sliderToggleButton_clicked);
+        bool connected2 = connect(ui->sliderToggleButton, SIGNAL(clicked()), this, SLOT(on_sliderToggleButton_clicked()));
+        
+        qDebug() << "Slider toggle button connected - modern connect:" << connected1 << "old-style connect:" << connected2;
+        qDebug() << "Button pointer:" << (void*)ui->sliderToggleButton;
+        qDebug() << "Button enabled:" << ui->sliderToggleButton->isEnabled();
+        qDebug() << "Button visible:" << ui->sliderToggleButton->isVisible();
+    } else {
+        qWarning() << "Slider toggle button not found in UI!";
+    }
+    
+    // Initialize slider visibility: scaling visible, threshold hidden
+    ui->verticalSlider->setVisible(true);
+    ui->scalingLabel->setVisible(true);
+    ui->thresholdSlider->setVisible(false);
+    ui->thresholdLabel->setVisible(false);
+    if (ui->sliderToggleButton) {
+        ui->sliderToggleButton->setText("S");
+        ui->sliderToggleButton->raise(); // Ensure button is on top
+        ui->sliderToggleButton->setAttribute(Qt::WA_TransparentForMouseEvents, false); // Ensure it receives mouse events
+        qDebug() << "Slider toggle button initialized with text 'S'";
+    }
     
     // ====== THRESHOLD SLIDER DEFAULT VALUE ======
     // Mapping: slider 0-100 → threshold -30 to +30
@@ -863,6 +894,8 @@ void Capture::setupStackedLayoutHybrid()
         ui->capture->raise();
     if (ui->verticalSlider)
         ui->verticalSlider->raise();
+    if (ui->sliderToggleButton)
+        ui->sliderToggleButton->raise();
     if (countdownLabel)
         countdownLabel->raise();
 
@@ -1345,6 +1378,87 @@ void Capture::on_thresholdSlider_valueChanged(int value)
             updateCameraFeed(m_originalCameraImage);
         }
     }
+}
+
+// ==================== SLIDER TOGGLE BUTTON FUNCTIONALITY ====================
+void Capture::on_sliderToggleButton_clicked()
+{
+    qDebug() << "=== SLIDER TOGGLE BUTTON CLICKED ===";
+    
+    if (!ui->sliderToggleButton) {
+        qWarning() << "Toggle button pointer is null!";
+        return;
+    }
+    
+    // Toggle visibility between scaling and threshold sliders
+    bool scalingVisible = ui->verticalSlider && ui->verticalSlider->isVisible();
+    qDebug() << "Current state - scaling visible:" << scalingVisible;
+    qDebug() << "Button current text:" << ui->sliderToggleButton->text();
+    
+    if (scalingVisible) {
+        // Currently showing scaling, switch to threshold
+        qDebug() << "Hiding scaling slider, showing threshold slider";
+        if (ui->verticalSlider) ui->verticalSlider->setVisible(false);
+        if (ui->scalingLabel) ui->scalingLabel->setVisible(false);
+        if (ui->thresholdSlider) {
+            ui->thresholdSlider->setVisible(true);
+            ui->thresholdSlider->raise();
+        }
+        if (ui->thresholdLabel) {
+            ui->thresholdLabel->setVisible(true);
+            ui->thresholdLabel->raise();
+        }
+        ui->sliderToggleButton->setText("T");
+        ui->sliderToggleButton->raise();
+        qDebug() << "Switched to THRESHOLD slider - button text set to:" << ui->sliderToggleButton->text();
+    } else {
+        // Currently showing threshold, switch to scaling
+        qDebug() << "Hiding threshold slider, showing scaling slider";
+        if (ui->thresholdSlider) ui->thresholdSlider->setVisible(false);
+        if (ui->thresholdLabel) ui->thresholdLabel->setVisible(false);
+        if (ui->verticalSlider) {
+            ui->verticalSlider->setVisible(true);
+            ui->verticalSlider->raise();
+        }
+        if (ui->scalingLabel) {
+            ui->scalingLabel->setVisible(true);
+            ui->scalingLabel->raise();
+        }
+        ui->sliderToggleButton->setText("S");
+        ui->sliderToggleButton->raise();
+        qDebug() << "Switched to SCALING slider - button text set to:" << ui->sliderToggleButton->text();
+    }
+    
+    // Force update and repaint to ensure visibility changes take effect
+    ui->sliderToggleButton->update();
+    ui->sliderToggleButton->repaint();
+    if (ui->verticalSlider) {
+        ui->verticalSlider->update();
+        ui->verticalSlider->repaint();
+    }
+    if (ui->thresholdSlider) {
+        ui->thresholdSlider->update();
+        ui->thresholdSlider->repaint();
+    }
+    if (ui->scalingLabel) {
+        ui->scalingLabel->update();
+        ui->scalingLabel->repaint();
+    }
+    if (ui->thresholdLabel) {
+        ui->thresholdLabel->update();
+        ui->thresholdLabel->repaint();
+    }
+    
+    // Force parent widget to update
+    if (ui->overlayWidget) {
+        ui->overlayWidget->update();
+        ui->overlayWidget->repaint();
+    }
+    
+    qDebug() << "=== TOGGLE COMPLETE ===";
+    qDebug() << "Final button text:" << ui->sliderToggleButton->text();
+    qDebug() << "Scaling slider visible:" << (ui->verticalSlider ? ui->verticalSlider->isVisible() : false);
+    qDebug() << "Threshold slider visible:" << (ui->thresholdSlider ? ui->thresholdSlider->isVisible() : false);
 }
 
 cv::Mat Capture::qImageToCvMat(const QImage &image)

@@ -64,7 +64,7 @@ private:
 
     void applyHighlightStyle(QPushButton *button, bool highlight);
     void processThumbnailClick(QPushButton *button);
-    void createThumbnailButton(const QString &filePath, int index, int totalCount);
+    void createThumbnailButton(const QString &filePath, int index, int totalCount, int columns, const QSize &thumbnailSize);
     QPixmap generateThumbnail(const QString &filePath, const QSize &size);
     void clearThumbnails();
     void updateConfirmButtonState();

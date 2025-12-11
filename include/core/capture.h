@@ -255,6 +255,7 @@ private slots:
     void on_capture_clicked();
     void on_verticalSlider_valueChanged(int value);
     void on_thresholdSlider_valueChanged(int value);
+    void on_sliderToggleButton_clicked();
 
     void updateForegroundOverlay(const QString &path);
     void setupStackedLayoutHybrid();
