@@ -451,8 +451,8 @@ void OutputPreview::createThumbnailButton(const QString &filePath, int index, in
     checkmarkLabel->setText("✓");
     checkmarkLabel->setStyleSheet(
         "QLabel {"
-        "    background-color: rgba(11, 194, 0, 180);"
-        "    color: white;"
+        "    background-color: rgba(120, 120, 120, 100);"
+        "    color: green;"
         "    font-weight: bold;"
         "    font-size: 150px;"
         "    border-radius: 8px;"
