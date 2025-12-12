@@ -443,12 +443,30 @@ void OutputPreview::createThumbnailButton(const QString &filePath, int index, in
         "    border: 5px solid #FFC20F;"
         "    border-radius: 8px;"
         "}"
-        "QPushButton[selected=\"true\"] {"
-        "    border: 5px solid #0BC200;"
-        "    border-radius: 8px;"
-        "}"
     ).arg(normalizedPath);
     button->setStyleSheet(styleSheet);
+    
+    // Create checkmark overlay label (initially hidden)
+    QLabel *checkmarkLabel = new QLabel(button);
+    checkmarkLabel->setText("✓");
+    checkmarkLabel->setStyleSheet(
+        "QLabel {"
+        "    background-color: rgba(11, 194, 0, 180);"
+        "    color: white;"
+        "    font-weight: bold;"
+        "    font-size: 150px;"
+        "    border-radius: 8px;"
+        "}"
+    );
+    checkmarkLabel->setAlignment(Qt::AlignCenter);
+    checkmarkLabel->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+    checkmarkLabel->setAttribute(Qt::WA_NoMousePropagation, true);
+    checkmarkLabel->setGeometry(0, 0, thumbnailSize.width(), thumbnailSize.height());
+    checkmarkLabel->hide(); // Initially hidden
+    checkmarkLabel->raise(); // Ensure it's on top
+    
+    // Store checkmark label mapping
+    m_buttonToCheckmarkMap[button] = checkmarkLabel;
 
     // Install event filter for click handling
     button->installEventFilter(this);
@@ -583,6 +601,14 @@ void OutputPreview::clearThumbnails()
     // Clear selection
     m_selectedFiles.clear();
     m_buttonToFileMap.clear();
+    
+    // Clean up checkmark labels
+    for (QLabel *checkmarkLabel : m_buttonToCheckmarkMap.values()) {
+        if (checkmarkLabel) {
+            checkmarkLabel->deleteLater();
+        }
+    }
+    m_buttonToCheckmarkMap.clear();
 
     // Remove all buttons from layout and delete them
     if (m_gridLayout) {
@@ -682,9 +708,20 @@ void OutputPreview::applyHighlightStyle(QPushButton *button, bool highlight)
 {
     if (button) {
         button->setProperty("selected", highlight);
-        // Force style repolish to apply the selected property change
-        button->style()->unpolish(button);
-        button->style()->polish(button);
+        
+        // Show/hide checkmark overlay
+        if (m_buttonToCheckmarkMap.contains(button)) {
+            QLabel *checkmarkLabel = m_buttonToCheckmarkMap[button];
+            if (checkmarkLabel) {
+                if (highlight) {
+                    checkmarkLabel->show();
+                    checkmarkLabel->raise();
+                } else {
+                    checkmarkLabel->hide();
+                }
+            }
+        }
+        
         button->update();
         button->repaint();
         qDebug() << "OutputPreview: Applied highlight" << highlight << "to button, selected property:" << button->property("selected");

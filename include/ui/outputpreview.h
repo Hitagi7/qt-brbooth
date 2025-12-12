@@ -63,6 +63,7 @@ private:
     QList<QPushButton*> m_thumbnailButtons;
     QList<QString> m_selectedFiles;
     QMap<QPushButton*, QString> m_buttonToFileMap;
+    QMap<QPushButton*, QLabel*> m_buttonToCheckmarkMap; // Map buttons to their checkmark overlays
     QList<QString> m_tempThumbnailFiles; // Store temp file paths for cleanup
     
     QTimer *debounceTimer;
